@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Student PII. Nothing derived from a real roster belongs in this repo.
+# Roster CSVs handed to scripts/import_roster.py:
+*.csv
+!test/fixtures/*.csv
+# Generated SQL from scripts/import_roster.py:
+local/
+seed_*.sql
+roster_*.sql
+
+# Spreadsheets and exports of any kind
+*.xlsx
+*.xls
+*.numbers
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local tool settings, machine-specific by definition
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Test scratch
+.pglite/
+coverage/

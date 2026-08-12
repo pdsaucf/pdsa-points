@@ -1,0 +1,6 @@
+First Name,Last Name,Email,Notes
+Ada,Testwood,ada@example.test,fictional
+Barnaby,Fixture,,fictional
+Cressida,Boundary,CRESSIDA@example.test,fictional
+Ada,Testwood,ada@example.test,duplicate by email
+Barnaby,Fixture,,duplicate by name

@@ -1,0 +1,129 @@
+// Test database harness.
+//
+// Boots an in-memory PGlite (real Postgres compiled to wasm, no Docker),
+// installs the Supabase stand-ins, applies every migration in supabase/migrations
+// in filename order, and hands back a small wrapper for running queries as a
+// particular role and user.
+
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { PGlite } from '@electric-sql/pglite';
+import { citext } from '@electric-sql/pglite/contrib/citext';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = join(HERE, '..', '..');
+const MIGRATIONS = join(REPO, 'supabase', 'migrations');
+
+// Every extension migration 01 asks for is available in PGlite, so the real
+// migration file applies unmodified and nothing is substituted or weakened.
+const EXTENSIONS = { citext, pg_trgm, pgcrypto };
+
+export async function migrationFiles() {
+  const names = await readdir(MIGRATIONS);
+  return names.filter((n) => n.endsWith('.sql')).sort();
+}
+
+export async function freshDb() {
+  const pg = await new PGlite({ extensions: EXTENSIONS });
+
+  await pg.exec(await readFile(join(HERE, 'supabase_stub.sql'), 'utf8'));
+
+  for (const name of await migrationFiles()) {
+    const sql = await readFile(join(MIGRATIONS, name), 'utf8');
+    try {
+      await pg.exec(sql);
+    } catch (err) {
+      throw new Error(`migration ${name} failed: ${err.message}`);
+    }
+  }
+
+  return wrap(pg);
+}
+
+function wrap(pg) {
+  const api = {
+    raw: pg,
+
+    // Parameterised query. Returns rows.
+    async q(sql, params = []) {
+      const res = await pg.query(sql, params);
+      return res.rows;
+    },
+
+    async one(sql, params = []) {
+      const rows = await api.q(sql, params);
+      if (rows.length !== 1) {
+        throw new Error(`expected exactly 1 row, got ${rows.length}: ${sql}`);
+      }
+      return rows[0];
+    },
+
+    async val(sql, params = []) {
+      const row = await api.one(sql, params);
+      return Object.values(row)[0];
+    },
+
+    // Multi-statement script, no parameters.
+    async exec(sql) {
+      return pg.exec(sql);
+    },
+
+    // Become a database role, optionally with a signed-in user id, the way
+    // PostgREST does on every request.
+    async as(role, userId = null) {
+      await pg.exec('reset role');
+      await pg.query('select set_config($1, $2, false)', [
+        'request.jwt.claim.sub',
+        userId ?? '',
+      ]);
+      await pg.exec(`set role ${role}`);
+    },
+
+    // Back to the owner: full rights, RLS bypassed, no auth.uid().
+    async asOwner() {
+      await pg.exec('reset role');
+      await pg.query('select set_config($1, $2, false)', ['request.jwt.claim.sub', '']);
+    },
+
+    // Runs fn as the given role and always restores owner rights afterwards.
+    async withRole(role, userId, fn) {
+      await api.as(role, userId);
+      try {
+        return await fn();
+      } finally {
+        await api.asOwner();
+      }
+    },
+
+    // Asserts that a statement fails, and returns the error for inspection.
+    async expectError(sql, params = []) {
+      try {
+        await api.q(sql, params);
+      } catch (err) {
+        return err;
+      }
+      throw new Error(`expected an error but the statement succeeded: ${sql}`);
+    },
+
+    // The same, for a multi-statement script. A prepared statement cannot
+    // hold more than one command, so these have to go through exec.
+    async expectExecError(sql) {
+      try {
+        await pg.exec(sql);
+      } catch (err) {
+        return err;
+      }
+      throw new Error('expected an error but the script succeeded');
+    },
+
+    async close() {
+      await pg.close();
+    },
+  };
+
+  return api;
+}
