@@ -77,7 +77,48 @@ test('get_checkin_context refuses an unknown token and a closed window', async (
   await db.asOwner();
 
   assert.equal(unknown.code, 'PDS01');
-  assert.equal(closed.code, 'PDS02');
+  assert.equal(closed.code, 'PDS10');
+});
+
+test('too early and too late are distinct codes, not one code and two sentences', async () => {
+  // The check-in page shows different screens for these, because they need
+  // different things from the member: wait and come back, against find an
+  // officer. That distinction used to live in the message text, so rewording a
+  // sentence would silently show the wrong screen and no test would fail.
+  //
+  // This test is the contract. The messages below are deliberately NOT
+  // asserted on: they are copy and should stay freely rewritable.
+  await db.exec(`
+    insert into events (id, academic_year_id, title, occurred_on, checkin_token,
+                        checkin_opens_at, checkin_closes_at)
+    values ('22222222-0000-4000-a000-0000000000e9', '${YEAR_2026}',
+            'Test Not Open Yet', current_date, 'tok-early',
+            now() + interval '2 hours', now() + interval '4 hours');
+  `);
+
+  await db.as('anon');
+  const early = await db.expectError(`select get_checkin_context('tok-early')`);
+  const late = await db.expectError(`select get_checkin_context('tok-closed')`);
+
+  // submit_checkin resolves the window separately, with a grace period, so it
+  // has to agree on both codes independently.
+  const earlySubmit = await db.expectError(
+    `select submit_checkin('tok-early', $1, null, null, null, '[]'::jsonb)`,
+    [MEMBERS.ada],
+  );
+  const lateSubmit = await db.expectError(
+    `select submit_checkin('tok-closed', $1, null, null, null, '[]'::jsonb)`,
+    [MEMBERS.ada],
+  );
+  await db.asOwner();
+
+  assert.equal(early.code, 'PDS02', 'too early');
+  assert.equal(late.code, 'PDS10', 'too late');
+  assert.equal(earlySubmit.code, 'PDS02');
+  assert.equal(lateSubmit.code, 'PDS10');
+  assert.notEqual(early.code, late.code);
+
+  await db.exec(`delete from events where id = '22222222-0000-4000-a000-0000000000e9'`);
 });
 
 test('an event that collects hours says so, and names the unit', async () => {

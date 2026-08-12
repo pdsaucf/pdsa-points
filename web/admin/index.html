@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Review | PDSA Points</title>
+    <meta name="description" content="Officer review queue for PDSA UCF points." />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0b1f33" />
+    <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="../assets/css/admin.css" />
+  </head>
+  <body>
+    <!-- 1. Working out whether anybody is signed in. Never shown for long. -->
+    <section id="view-boot" class="view view-centred" aria-busy="true">
+      <p class="spinner" aria-hidden="true"></p>
+      <p class="muted">Checking sign-in…</p>
+    </section>
+
+    <!-- 2. Sign in -->
+    <main id="view-signin" class="view view-narrow" hidden>
+      <h1 class="brand-mark">PDSA Points</h1>
+      <form id="signin-form" class="panel" novalidate>
+        <h2 class="panel-title">Officer sign-in</h2>
+        <p class="muted small">We email you a sign-in link. There is no password.</p>
+        <label class="label" for="signin-email">Your email</label>
+        <input
+          id="signin-email"
+          class="input"
+          type="email"
+          inputmode="email"
+          autocomplete="email"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="send"
+          placeholder="you@ucf.edu"
+          required
+        />
+        <p id="signin-message" class="notice" role="alert" hidden>
+          <span id="signin-message-title" class="notice-title"></span>
+          <span id="signin-message-body" class="notice-body"></span>
+        </p>
+        <button id="signin-submit" type="submit" class="button button-primary full">
+          <span id="signin-submit-label">Email me a sign-in link</span>
+        </button>
+        <p class="muted small">
+          Accounts are created by an admin. If no link arrives, ask one of them.
+        </p>
+      </form>
+    </main>
+
+    <!-- 3. Signed in, but this account is not allowed in here -->
+    <main id="view-denied" class="view view-narrow" hidden>
+      <h1 class="brand-mark">PDSA Points</h1>
+      <div class="panel">
+        <h2 class="panel-title">This account cannot open the review queue</h2>
+        <p id="denied-body" class="body"></p>
+        <p class="muted small">Members see their own points in the member portal.</p>
+        <button id="denied-signout" type="button" class="button full">Sign out</button>
+      </div>
+    </main>
+
+    <!-- 4. The product -->
+    <div id="view-app" hidden>
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="brand">PDSA Points</span>
+          <label class="visually-hidden" for="year-select">Academic year</label>
+          <select id="year-select" class="select select-quiet"></select>
+        </div>
+
+        <nav class="tabs" aria-label="Sections">
+          <button id="tab-review" type="button" class="tab" aria-selected="true" aria-controls="panel-review">
+            Review <span id="tab-review-count" class="pill">0</span>
+          </button>
+          <button id="tab-claims" type="button" class="tab" aria-selected="false" aria-controls="panel-claims">
+            Account claims <span id="tab-claims-count" class="pill">0</span>
+          </button>
+        </nav>
+
+        <div class="topbar-right">
+          <span id="who" class="muted small"></span>
+          <button id="signout" type="button" class="button button-quiet">Sign out</button>
+        </div>
+      </header>
+
+      <!-- A refusal that applies to the whole screen: expired session, no
+           connection, a write that came back refused. -->
+      <div id="screen-message" class="notice notice-block" role="alert" hidden>
+        <p id="screen-message-title" class="notice-title"></p>
+        <p id="screen-message-body" class="notice-body"></p>
+        <button id="screen-message-action" type="button" class="button" hidden></button>
+      </div>
+
+      <main id="panel-review" class="panel-view">
+        <div class="toolbar">
+          <div class="toolbar-field">
+            <label class="label" for="event-select">Event</label>
+            <select id="event-select" class="select"></select>
+          </div>
+          <p id="pending-count" class="count" aria-live="polite"></p>
+          <button id="refresh" type="button" class="button">Refresh</button>
+        </div>
+
+        <section id="loading-review" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading the queue…</p>
+        </section>
+
+        <section id="empty-review" class="empty" hidden>
+          <p class="empty-tick" aria-hidden="true">✓</p>
+          <h2 class="empty-title">Nothing waiting</h2>
+          <p id="empty-review-body" class="muted"></p>
+        </section>
+
+        <section id="zone-flagged" class="zone" hidden aria-labelledby="flagged-title">
+          <h2 id="flagged-title" class="zone-title zone-title-warn">
+            <span class="zone-mark" aria-hidden="true">!</span>
+            Needs review
+            <span id="flagged-count" class="zone-count"></span>
+          </h2>
+          <div id="flagged-list" class="flagged-list"></div>
+        </section>
+
+        <section id="zone-routine" class="zone" hidden aria-labelledby="routine-title">
+          <h2 id="routine-title" class="zone-title">
+            <span class="zone-mark zone-mark-ok" aria-hidden="true">✓</span>
+            Routine
+            <span id="routine-count" class="zone-count"></span>
+            <span class="zone-note">on the roster · inside the window · photo attached</span>
+          </h2>
+          <div id="routine-grid" class="grid"></div>
+          <div class="zone-footer">
+            <button id="show-all" type="button" class="button" hidden></button>
+            <button id="approve-all" type="button" class="button button-primary"></button>
+          </div>
+        </section>
+
+        <p class="shortcuts">
+          Click a photo to enlarge · <kbd>J</kbd> and <kbd>K</kbd> move ·
+          <kbd>A</kbd> approve · <kbd>R</kbd> decline · <kbd>Esc</kbd> closes
+        </p>
+      </main>
+
+      <main id="panel-claims" class="panel-view" hidden>
+        <section id="loading-claims" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading claims…</p>
+        </section>
+
+        <section id="empty-claims" class="empty" hidden>
+          <p class="empty-tick" aria-hidden="true">✓</p>
+          <h2 class="empty-title">No account claims</h2>
+          <p class="muted">
+            A claim appears when a member signs in with an email that is not on their
+            roster row.
+          </p>
+        </section>
+
+        <div id="claims-list" class="flagged-list"></div>
+      </main>
+    </div>
+
+    <!-- Rejection always captures a reason. -->
+    <!--
+      novalidate on both dialogs, so the message an officer reads is the one
+      written for this screen rather than the browser's own bubble. `required`
+      stays for the semantics it carries to a screen reader.
+    -->
+    <dialog id="reject-dialog" class="dialog">
+      <form id="reject-form" method="dialog" novalidate>
+        <h2 id="reject-title" class="dialog-title">Decline check-in</h2>
+        <p class="muted small">The member sees this reason on their own records screen.</p>
+        <div id="reject-presets" class="chips"></div>
+        <label class="label" for="reject-note">Reason</label>
+        <input
+          id="reject-note"
+          class="input"
+          type="text"
+          maxlength="200"
+          autocomplete="off"
+          placeholder="Was not at this event"
+          required
+        />
+        <p id="reject-error" class="field-error" hidden>Type a reason, or pick one above.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="reject-confirm" type="submit" class="button button-danger">Decline</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Add as new member, for somebody genuinely not on the roster. -->
+    <dialog id="new-member-dialog" class="dialog">
+      <form id="new-member-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Add new member</h2>
+        <p class="muted small">
+          Creates the member, adds them to this year, and links this check-in without
+          approving it.
+        </p>
+        <label class="label" for="new-first">First name</label>
+        <input id="new-first" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="new-last">Last name</label>
+        <input id="new-last" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="new-email">Email (optional)</label>
+        <input id="new-email" class="input" type="email" autocomplete="off" spellcheck="false" />
+        <p id="new-member-error" class="field-error" hidden>
+          First and last name are both required.
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-primary">Add and link</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- The photo, large. Also the side by side when two events share one. -->
+    <dialog id="photo-dialog" class="dialog dialog-photo" aria-label="Photo">
+      <div id="photo-dialog-body" class="lightbox"></div>
+      <div class="dialog-actions">
+        <p id="photo-dialog-hint" class="muted small"></p>
+        <button type="button" class="button" data-close>Close</button>
+      </div>
+    </dialog>
+
+    <p id="live" class="visually-hidden" aria-live="polite" role="status"></p>
+
+    <noscript>
+      <p class="body">
+        The review queue needs JavaScript. Turn it on and reload this page.
+      </p>
+    </noscript>
+
+    <script type="module">
+      import { start } from '../src/admin.js';
+      start();
+    </script>
+  </body>
+</html>

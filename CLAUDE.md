@@ -46,6 +46,65 @@ font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 Use `font-variant-numeric: tabular-nums` wherever digits line up in columns, which is
 most of this product.
 
+### UI copy style
+
+**Never imitate Claude or chatbot prose in UI copy. This should sound like software,
+not like an assistant explaining itself.**
+
+Before adding or changing any user-facing text, apply this test:
+
+> Does the user need this sentence to understand the state or make the next decision?
+
+If not, cut it. When uncertain, default to less copy.
+
+Order information as: **what happened**, then **why it was flagged** only if the reason
+is not obvious, then **what to do**. Then stop.
+
+**Structure**
+
+- Headings name the state or issue. They are not sentences about a person.
+  Write `Duplicate photo`, not `Marcus Bell sent the same photo as another event`.
+- Names, event titles, dates and times go in metadata or subtext, not inside the
+  heading: `Marcus Bell · Aug 10 Soap Carving · 3:10 PM`.
+- Descriptions are one sentence, ideally under 15 words. Omit them entirely when the
+  heading and metadata already say it.
+- Buttons are 1 to 3 words.
+- Never repeat information already visible elsewhere in the same component.
+- Never add prose to make a card feel more complete.
+
+**Do not**
+
+- Narrate application logic, or explain what a button obviously does.
+- Speculate about why somebody did something unless it changes the decision.
+- Chain causes with "so", "therefore", "rather than", "which means".
+- Use several sentences where a status line works.
+- Sound conversational, apologetic or legalistic.
+
+**Established terms, used consistently**
+
+`Approve` · `Decline` · `Edit` · `Remove` · `Link member` · `Compare photos` ·
+`Try again` · `Late check-in` · `Duplicate photo` · `Previously declined` ·
+`Member not matched` · `Needs review`
+
+Avoid conversational labels such as `Approve anyway`, `Turn it down` or
+`Yes, continue`. Use `Approve anyway` only where overriding a specific rule genuinely
+needs the emphasis.
+
+**Concise is not lossy.** Keep whatever is needed to tell members apart, identify the
+event, show the check-in time, state the actual validation failure, surface a previous
+decline reason, and identify a conflict or duplicate. Restructure those facts into
+heading, metadata and a short description; do not delete them.
+
+If a message can lose a sentence without changing the officer's decision, remove that
+sentence.
+
+```
+Late check-in
+Grace Okonkwo · Aug 9 Give Kids A Smile · 7:40 PM
+Check-in closed at 7:35 PM.
+[ Approve ]  [ Decline ]
+```
+
 ## Architectural invariants
 
 Breaking any of these reintroduces a problem the design exists to solve:

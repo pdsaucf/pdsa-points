@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Check in | PDSA UCF</title>
+    <meta name="description" content="Check in to a PDSA UCF event." />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0b1f33" />
+    <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="../assets/css/checkin.css" />
+  </head>
+  <body>
+    <main id="app" class="app">
+      <!-- 1. Loading -->
+      <section id="view-loading" class="view view-centred" aria-busy="true">
+        <p class="spinner" aria-hidden="true"></p>
+        <p class="muted">Loading this event…</p>
+        <p id="loading-note" class="muted small" hidden></p>
+      </section>
+
+      <!-- 2. Refused: bad token, not open yet, closed, misconfigured -->
+      <section id="view-blocked" class="view view-centred" hidden>
+        <h1 id="blocked-title" class="title"></h1>
+        <p id="blocked-body" class="body"></p>
+        <button id="blocked-retry" type="button" class="button button-secondary" hidden>
+          Try again
+        </button>
+      </section>
+
+      <!-- 3. The form -->
+      <form id="view-form" class="view" novalidate hidden>
+        <header class="event">
+          <h1 id="event-title" class="title"></h1>
+          <p id="event-meta" class="muted"></p>
+          <p id="event-closes" class="muted small" hidden></p>
+        </header>
+
+        <!-- Identity, one of three states: searching, chosen, or self declared -->
+        <section id="search-block" class="field">
+          <label class="label" for="name-input">Your name</label>
+          <input
+            id="name-input"
+            class="input"
+            type="text"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="results"
+            aria-autocomplete="list"
+            aria-describedby="results-hint"
+            autocomplete="off"
+            autocapitalize="words"
+            autocorrect="off"
+            spellcheck="false"
+            enterkeyhint="search"
+            placeholder="Start typing"
+          />
+          <div class="results-well">
+            <ul id="results" class="results" role="listbox" aria-label="Matching names"></ul>
+            <p id="results-hint" class="muted small hint"></p>
+          </div>
+          <button id="no-name-button" type="button" class="button button-secondary full">
+            My name is not listed
+          </button>
+        </section>
+
+        <section id="chosen-block" class="field chosen" hidden>
+          <p class="label">Checking in as</p>
+          <p id="chosen-name" class="chosen-name"></p>
+          <button id="change-name" type="button" class="button button-quiet">Change</button>
+        </section>
+
+        <!--
+          The roster starts empty, so this is a normal way in and not a penalty
+          box. Hence one line saying the credit is the same, and nothing else.
+        -->
+        <section id="claimed-block" class="field" hidden>
+          <h2 class="label">Your name and email</h2>
+          <p class="muted small">
+            An officer matches this to the roster after the event, and your credit is the
+            same.
+          </p>
+          <label class="label" for="claimed-name">Full name</label>
+          <input
+            id="claimed-name"
+            class="input"
+            type="text"
+            autocomplete="name"
+            autocapitalize="words"
+            enterkeyhint="next"
+          />
+          <label class="label" for="claimed-email">Email</label>
+          <input
+            id="claimed-email"
+            class="input"
+            type="email"
+            inputmode="email"
+            autocomplete="email"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            enterkeyhint="done"
+          />
+          <button id="claimed-back" type="button" class="button button-quiet">
+            Back to search
+          </button>
+        </section>
+
+        <!-- The number, when the event has a category that reads one -->
+        <section id="value-block" class="field" hidden>
+          <label id="value-label" class="label" for="value-input"></label>
+          <input
+            id="value-input"
+            class="input input-number"
+            type="number"
+            inputmode="decimal"
+            step="any"
+            min="0"
+            enterkeyhint="done"
+          />
+        </section>
+
+        <!-- The photo, when the event asks for one -->
+        <section id="photo-block" class="field" hidden>
+          <p id="photo-prompt" class="label"></p>
+          <p id="photo-optional" class="muted small" hidden>Optional.</p>
+          <img id="photo-preview" class="preview" alt="Your photo" hidden />
+          <input
+            id="photo-input"
+            class="visually-hidden"
+            type="file"
+            accept="image/*"
+            data-kind="other_photo"
+          />
+          <label class="button button-secondary full" for="photo-input">
+            <span id="photo-take-label">Take photo</span>
+          </label>
+          <button id="photo-retake" type="button" class="button button-quiet" hidden>
+            Retake photo
+          </button>
+          <p id="photo-status" class="status" hidden></p>
+        </section>
+
+        <div id="form-message" class="message" role="alert" hidden>
+          <p id="form-message-title" class="message-title"></p>
+          <p id="form-message-body" class="message-body"></p>
+          <button id="form-message-retake" type="button" class="button button-quiet" hidden>
+            Retake photo
+          </button>
+          <button id="form-message-skip" type="button" class="button button-quiet" hidden>
+            Check in without photo
+          </button>
+        </div>
+
+        <button id="submit-button" type="submit" class="button button-primary full submit">
+          <span id="submit-label">Check in</span>
+        </button>
+      </form>
+
+      <!-- 4. Done -->
+      <section id="view-done" class="view view-centred" hidden>
+        <p class="tick" aria-hidden="true">✓</p>
+        <h1 id="done-title" class="title"></h1>
+        <div id="done-body" class="body"></div>
+      </section>
+
+      <noscript>
+        <p class="body">
+          This page needs JavaScript. Turn it on and scan the QR code again, or ask an
+          officer to check you in.
+        </p>
+      </noscript>
+    </main>
+
+    <p id="live" class="visually-hidden" aria-live="polite" role="status"></p>
+
+    <script type="module">
+      import { start } from '../src/checkin.js';
+      start();
+    </script>
+  </body>
+</html>

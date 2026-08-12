@@ -1,0 +1,64 @@
+# Publishes the check-in page to GitHub Pages.
+#
+# GitHub Pages can only serve the repository root or /docs, and the page lives
+# in web/. Publishing it as an artifact is what makes web/ the site root, so
+# web/c/index.html is served at /c/ and the QR code URL works with no rewrite
+# rules and no hash router. See web/README.md.
+#
+# CUSTOM DOMAIN: points.pdsaucf.com is set in the repository's Pages settings,
+# which an Actions deploy honours on its own. There is deliberately no CNAME
+# file added to web/ here, since that is the frontend's directory and two
+# sources of truth for the domain is how it ends up wrong.
+name: Deploy check-in page
+
+on:
+  push:
+    branches: [main]
+    # Only when the page itself changes. A migration or a test does not alter
+    # a single byte of what is served, so redeploying on those would be noise.
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  # So an officer can redeploy from the Actions tab without pushing anything,
+  # which is the fastest fix on the evening of an event.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one that is already running: a
+# half-applied Pages deploy is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      # NOTE: this workflow deliberately runs NO tests.
+      #
+      # The check-in page is static, has no build step and no dependencies, so
+      # what is in the repository is exactly what gets served. Gating the
+      # deploy on the SQL suite in test/ would mean a failing database test
+      # blocks a fix to a page that is already live and in front of members,
+      # which is the wrong tradeoff at 6pm before a GBM.
+      #
+      # The suites still run, they are just not in this path: `npm test` at the
+      # repository root for the database, and `npm run check` inside web/ for
+      # the page. Run them in a pull request workflow, not here.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

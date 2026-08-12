@@ -41,6 +41,7 @@ alter table app_settings                 enable row level security;
 alter table audit_log                    enable row level security;
 alter table evidence_upload_grants       enable row level security;
 alter table rpc_call_counters            enable row level security;
+alter table checkin_client_nonces        enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Baseline privileges
@@ -268,29 +269,44 @@ create policy settings_read  on app_settings for select to authenticated using (
 create policy settings_write on app_settings for all    to authenticated
   using (fn_is_admin()) with check (fn_is_admin());
 
--- evidence_upload_grants and rpc_call_counters are RLS-enabled with no
--- policies and no grants at all. Nothing outside the SECURITY DEFINER RPCs
--- that own them can see or touch them.
+-- Officers can read upload grants, because v_orphaned_uploads is a
+-- security_invoker view over this table and the storage screen has to be able
+-- to show what is being held. Nothing below officer can see it, and nobody can
+-- write it outside the SECURITY DEFINER RPCs that own it.
+grant select on evidence_upload_grants to authenticated;
+create policy upload_grants_read on evidence_upload_grants for select to authenticated
+  using (fn_is_officer());
+
+-- checkin_client_nonces and rpc_call_counters are RLS-enabled with no policies
+-- and no grants at all. They are limiter bookkeeping, they authorize nothing,
+-- and nothing outside the SECURITY DEFINER functions that own them can see or
+-- touch them.
 
 -- ---------------------------------------------------------------------------
 -- Function privileges
 -- ---------------------------------------------------------------------------
 
 -- The anonymous check-in surface. This is everything anon can do.
-grant execute on function get_checkin_context(text)                          to anon, authenticated;
-grant execute on function search_members(text, text)                         to anon, authenticated;
-grant execute on function create_evidence_upload(text, uuid, evidence_kind_t) to anon, authenticated;
-grant execute on function submit_checkin(text, uuid, text, text, numeric, jsonb) to anon, authenticated;
+grant execute on function get_checkin_context(text)                                to anon, authenticated;
+grant execute on function search_members(text, text, text)                         to anon, authenticated;
+grant execute on function create_evidence_upload(text, uuid, evidence_kind_t, text) to anon, authenticated;
+grant execute on function submit_checkin(text, uuid, text, text, numeric, jsonb, text) to anon, authenticated;
 
 -- Consulted by the storage insert policy, which anon must be able to satisfy
 -- when uploading a photo it was granted a path for.
 grant execute on function fn_upload_grant_is_live(text, text) to anon, authenticated;
+
+-- Deliberately NOT granted to anon or authenticated: fn_checkin_nonce_bucket,
+-- fn_rate_limit_check and fn_rate_limit_checkin. They are called from inside
+-- the SECURITY DEFINER RPCs above, which run as the owner, so no caller needs
+-- to reach them directly and none should be able to.
 
 -- Officer operations.
 grant execute on function review_records(uuid[], text, text)   to authenticated;
 grant execute on function resolve_unmatched(uuid, uuid, jsonb) to authenticated;
 grant execute on function merge_members(uuid, uuid)            to authenticated;
 grant execute on function purge_evidence(int)                  to authenticated;
+grant execute on function purge_orphaned_uploads()             to authenticated;
 
 -- Reading progress. The evaluator carries its own authorization check, so a
 -- member calling it directly for somebody else's id is refused rather than
@@ -311,5 +327,5 @@ grant execute on function fn_normalise_name(text)                  to authentica
 -- The views. Each is security_invoker, so these grants hand out the view, not
 -- an exemption from the policies above.
 grant select on v_attendance_credit, v_member_category_totals,
-                v_member_status, v_config_warnings
+                v_member_status, v_config_warnings, v_orphaned_uploads
   to authenticated;

@@ -467,13 +467,145 @@ RPCs:
 
 | RPC | Does | Guards |
 |---|---|---|
-| `get_checkin_context(token)` | returns event title, date, what the form must collect | 404s on unknown/rotated token; refuses outside the check-in window |
-| `search_members(token, q)` | id + display name only, ≤ 10 rows | valid open token, `length(q) >= 3`, rate-limited; never returns emails or the full roster |
-| `create_evidence_upload(token, member_id, kind)` | signed one-shot Storage upload URL | validates the event actually requires that evidence kind |
-| `submit_checkin(token, member_id \| claimed_name, value, evidence[])` | inserts the record and computes its triage flags | forces `status = 'pending'`, enforces the unique index, validates required evidence is present |
+| `get_checkin_context(token)` | returns event title, date, what the form must collect, **and a `client_nonce`** | 404s on unknown/rotated token; refuses outside the check-in window; nonce minting is rate-limited per token |
+| `search_members(token, q, client_nonce)` | id + display name only, ≤ 10 rows | valid open token, `length(q) >= 3`, rate-limited per client and per event; never returns emails or the full roster |
+| `create_evidence_upload(token, member_id, kind, client_nonce)` | one-shot upload grant for a single object path | validates the event actually requires that evidence kind; rate-limited; caps outstanding unconsumed grants per member and per event |
+| `submit_checkin(token, member_id \| claimed_name, value, evidence[], client_nonce)` | inserts the record and computes its triage flags | forces `status = 'pending'`, enforces the unique index, validates required evidence is present, separately caps unmatched submissions |
 
 Anonymous clients can never choose their own `status`. That is the whole point of
 routing through RPCs instead of an insert policy.
+
+### The client nonce
+
+A rate limit keyed on the check-in token is a limit shared by *everybody at the
+event*, because the token is printed on the QR code they all scanned. One browser
+stuck in a retry loop would spend the whole crowd's allowance. Worse, a single
+number cannot do both jobs: the largest event in the 2025-26 data had **167
+attendees** (second largest 155), and any ceiling low enough to bother an attacker
+turns away most of that room.
+
+So `get_checkin_context` hands each page load an opaque random **`client_nonce`**,
+and `search_members` / `submit_checkin` / `create_evidence_upload` accept it. The
+limiter keys on `token || nonce` when one is presented and falls back to the token
+alone when it is not. A runaway client then burns its own allowance.
+
+Three properties keep this from being a security hole:
+
+- **It authorizes nothing.** Every RPC still validates the token, the window, the
+  member and the evidence exactly as before. No code path reads the nonce table to
+  decide whether an action is permitted. It selects a counter bucket, full stop.
+- **It is not trusted input.** A nonce is honoured only if this database issued it,
+  for this event, and it has not expired. Anything else silently falls back to the
+  shared bucket. Without that check an attacker would send a fresh random string
+  per request and have no limit at all, which is worse than what it replaced.
+- **It is bounded.** Minting is itself rate-limited per token, so the number of
+  buckets one event can have is capped.
+
+### Rate limits and ceilings
+
+Every ceiling is a row in `app_settings`, so raising one is a settings edit rather
+than a migration. Each is sized by what it actually protects:
+
+| Setting | Default | Reasoning |
+|---|---|---|
+| `checkin_nonce_max_per_min` | 600 | ~3.5x the 167-attendee peak, and caps bucket minting |
+| `search_members_max_per_nonce_per_min` | 60 | one person typing their own name |
+| `search_members_max_per_event_per_min` | 20000 | **anti-runaway backstop only.** Names-only exposure the design already accepts; 167 x 10 searches is 1,670, so this is an order of magnitude clear. Do not harden downward: it locks out the crowd and protects almost nothing |
+| `submit_checkin_max_per_nonce_per_min` | 10 | one real submission plus retries |
+| `submit_checkin_max_per_event_per_min` | 1500 | ~9x peak; being turned away here means losing credit for an event you attended |
+| `submit_unmatched_max_per_nonce_per_min` | 3 | one submission plus a retry |
+| `submit_unmatched_max_per_event_per_min` | 1000 | ~6x peak, see below |
+| `evidence_upload_max_per_nonce_per_min` | 6 | |
+| `evidence_upload_max_per_event_per_min` | 600 | |
+| `evidence_grants_outstanding_per_member` | 3 | retaking a blurry photo. Per **person**, not per member row: unmatched attendees are separated by client nonce, see below |
+| `evidence_grants_outstanding_per_event` | 1200 | backstop only. 167 attendees x 3 each is 501, so it must sit above that |
+
+**Why unmatched submissions get their own ceiling.** A matched member cannot
+flood: `one_live_record_per_member_event` allows exactly one live row per event.
+An unmatched submission has no such bound, since every call is a new row with a
+typed-in name.
+
+It is layered rather than simply lowered, because **the empty roster is the launch
+condition, not an edge case**. The database ships with zero members, so if nobody
+runs `import_roster.py` before the first event then every attendee is unmatched;
+and even with a roster loaded, the first GBM of the year is a recruiting event
+where much of the room is genuinely new. A single low ceiling would have to choose
+between admitting that room and bounding a flooder, and it cannot do both.
+
+Worst case, since a flooder can mint fresh nonces:
+
+```
+    600 nonces/min          (checkin_nonce_max_per_min)
+  x   3 unmatched each      (submit_unmatched_max_per_nonce_per_min)
+  = 1,800 attempted
+  bounded by 1,000          (submit_unmatched_max_per_event_per_min)
+  and by     1,500          (submit_checkin_max_per_event_per_min, all submissions)
+  => 1,000 junk rows per minute
+```
+
+Those rows are all `pending` and flagged `unmatched_name`. They are a nuisance in
+the review queue, never credit, and an officer can reject them in bulk. That is
+the better failure than turning away a room full of new recruits at the launch
+event.
+
+**The empty roster is also surfaced, not just tolerated.** `v_config_warnings`
+raises `event_without_enrolled_members` for any published event that is open now,
+or happening within a week, while nobody is enrolled in its academic year. Check-in
+would otherwise still appear to work while quietly routing the entire event into
+the unmatched queue.
+
+**Why `create_evidence_upload` is capped by outstanding grants and not only by
+rate.** A grant is a licence to write up to 8 MB into a 1 GB bucket. A rate limit
+alone does not bound the total: a patient caller collects one grant a second all
+day and redeems them whenever it likes.
+
+**Why that cap is keyed on the client nonce for unmatched attendees.** Keyed on
+`member_id` alone it works for somebody on the roster and collapses for everybody
+else, because every unmatched attendee shares a null `member_id` and would share
+one allowance of three between the entire room. On an empty roster that is the
+entire room: the fourth person to start a photo is refused, falls through to the
+client's skip path, and files `missing_evidence` instead, so the evidence
+requirement quietly stops working at exactly the event it exists for. Unmatched
+callers are therefore separated by `evidence_upload_grants.client_nonce`, which is
+only ever written from a nonce this database issued. A caller with no valid nonce
+shares a bucket with the other such callers, which cannot be better than the old
+shared behaviour and cannot be bypassed by inventing a nonce.
+
+### One pattern, three times
+
+Three separate defects have now had the same root cause: **a cap sized on the
+assumption that unmatched attendees are rare.** They are not, because an empty
+roster is the shipping state and the first event of the year is a recruiting
+event. The instances were the per-event unmatched submission ceiling, the absence
+of a per-client one, and the outstanding-grant cap collapsing on a null
+`member_id`. A fourth, `evidence_grants_outstanding_per_event` at 400, sat below
+the worst legitimate case (167 x 3 = 501) and was found by audit rather than by an
+incident.
+
+Anything keyed on `member_id`, or sized from "how many people will not be on the
+roster", should be checked against a room of 167 where **none** of them are.
+
+`rpc_call_counters.call_count` counts requests **admitted**, never attempted. The
+limiter checks before incrementing, because incrementing first and then raising
+rolls the increment back with the transaction, leaving the counter stuck at the
+ceiling and unable to distinguish a busy event from an attack. Counting refused
+requests durably would need an autonomous transaction; the API gateway logs are
+the right place for that question.
+
+### Abandoned uploads
+
+Uploading a photo and submitting the check-in are two steps, and a member can do
+the first without the second. The object is then in the bucket with no
+`attendance_evidence` row pointing at it, so `purge_evidence()` cannot see it: that
+function scans `attendance_evidence`.
+
+`v_orphaned_uploads` finds them (expired, unconsumed grants with no evidence row,
+and whether the object actually exists), `v_config_warnings` raises a banner while
+any are present, and `purge_orphaned_uploads()` returns the object paths for the
+caller to delete and stamps a `purge_runs` row. The grant row is marked
+`reclaimed_at` rather than deleted, because it is the only record that anything was
+written to that path. Deleting it would make a leftover object invisible forever,
+which is the bug being fixed. Nothing here runs on a timer.
 
 Officer-side operations are RPCs too, so each one is a single audited transaction
 rather than a sequence of table writes a UI could half-finish:
@@ -483,7 +615,8 @@ rather than a sequence of table writes a UI could half-finish:
 | `review_records(ids[], decision, note)` | approve or reject in bulk, stamping reviewer and time |
 | `resolve_unmatched(record_id, member_id \| new_member)` | links a claimed name to a real member, or creates one, then clears the flag |
 | `merge_members(from_id, into_id)` | moves every record to the survivor, drops per-event collisions, tombstones `merged_into_id`, writes `member_merges` |
-| `purge_evidence(retention_months)` | deletes eligible photos, writes one `purge_runs` row |
+| `purge_evidence(retention_months)` | marks eligible photos purged, returns their object paths, writes one `purge_runs` row |
+| `purge_orphaned_uploads()` | reclaims uploads that were granted and never submitted, returns their object paths, writes one `purge_runs` row |
 
 **Open privacy question:** typing three letters into a public page returns matching
 member names. That's inherent to "identify yourself by name without logging in", and

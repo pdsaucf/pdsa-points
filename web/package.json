@@ -1,0 +1,17 @@
+{
+  "name": "pdsa-points-web",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Static frontend for the PDSA points system: member check-in and the officer review queue. No build step, no dependencies, no framework.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "mock": "node mock/server.mjs",
+    "verify": "node mock/verify.mjs",
+    "verify:admin": "node mock/verify-admin.mjs",
+    "lint:no-em-dash": "bash -c 'grep -rn $'\\''\\xe2\\x80\\x94'\\'' . --exclude-dir=node_modules && { echo \"em dash found\"; exit 1; } || echo \"no em dashes\"'",
+    "check": "npm run lint:no-em-dash && npm run verify && npm run verify:admin"
+  }
+}

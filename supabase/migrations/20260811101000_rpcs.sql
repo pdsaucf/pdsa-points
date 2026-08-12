@@ -8,9 +8,9 @@
 -- transaction rather than a sequence of table writes that a half-finished UI
 -- could leave inconsistent.
 --
--- Error codes, so a client can tell these apart without string matching:
+-- Error codes, so a client can tell these apart WITHOUT string matching:
 --   PDS01  unknown, rotated or unpublished check-in token
---   PDS02  check-in is not open (too early, or past the grace period)
+--   PDS02  check-in has not opened yet (too early)
 --   PDS03  bad argument (search too short, missing required value, ...)
 --   PDS04  required evidence missing or an upload grant is not valid
 --   PDS05  already checked in to this event
@@ -18,6 +18,17 @@
 --   PDS07  caller lacks the required role
 --   PDS08  unknown requirement set
 --   PDS09  rate limited
+--   PDS10  check-in has closed (too late, past any grace period)
+--
+-- PDS02 AND PDS10 ARE DELIBERATELY SEPARATE CODES. They were one code, and
+-- the page had to read the message text to tell them apart, which meant
+-- rewording a sentence here would silently show the wrong screen with no test
+-- failing anywhere. They need different screens because they need different
+-- actions from the member: "come back at five" against "find an officer".
+--
+-- Every message below is copy for a person holding a phone, so treat it as
+-- freely rewritable. The CODE is the contract. If you ever need a further
+-- distinction, add another code rather than another sentence.
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
@@ -48,7 +59,7 @@ begin
       raise exception 'Check-in for this event has not opened yet.' using errcode = 'PDS02';
     end if;
     if v_event.checkin_closes_at is not null and now() > v_event.checkin_closes_at then
-      raise exception 'Check-in for this event has closed.' using errcode = 'PDS02';
+      raise exception 'Check-in for this event has closed.' using errcode = 'PDS10';
     end if;
   else
     -- submit_checkin() is more forgiving than get_checkin_context(): somebody
@@ -61,7 +72,7 @@ begin
     end if;
     if v_event.checkin_closes_at is not null
        and now() > v_event.checkin_closes_at + make_interval(mins => v_grace) then
-      raise exception 'Check-in for this event has closed.' using errcode = 'PDS02';
+      raise exception 'Check-in for this event has closed.' using errcode = 'PDS10';
     end if;
   end if;
 
@@ -79,17 +90,39 @@ $$;
 create or replace function get_checkin_context(p_token text)
 returns jsonb
 language plpgsql
-stable
+volatile                       -- it now mints a nonce, so it writes
 security definer
 set search_path = public, extensions, pg_temp
 as $$
 declare
   v_event events;
   v_out   jsonb;
+  v_nonce text;
 begin
   v_event := fn_checkin_event(p_token, true);
 
+  -- Minting is bounded per token per minute, so the number of rate-limit
+  -- buckets one event can have is itself capped. Without this, a caller could
+  -- mint a fresh bucket per request and have no effective limit at all.
+  perform fn_rate_limit_check(
+    'nonce:' || p_token,
+    fn_setting_int('checkin_nonce_max_per_min', 600)
+  );
+
+  insert into checkin_client_nonces (event_id, expires_at)
+  values (v_event.id,
+          now() + make_interval(mins => fn_setting_int('checkin_nonce_ttl_minutes', 240)))
+  returning nonce into v_nonce;
+
+  -- Cheap opportunistic cleanup of nonces nobody can use any more.
+  delete from checkin_client_nonces where expires_at < now() - interval '1 day';
+
   select jsonb_build_object(
+    -- Opaque, expiring, and worth nothing on its own. The client sends it back
+    -- with search_members() and submit_checkin() so those calls are counted
+    -- against this browser rather than against everybody at the event. It
+    -- authorizes nothing: see the note in migration 08.
+    'client_nonce', v_nonce,
     'event', jsonb_build_object(
       'id',          v_event.id,
       'title',       v_event.title,
@@ -143,16 +176,21 @@ $$;
 -- only, at most ten rows, and never an email address or the full roster.
 -- ---------------------------------------------------------------------------
 
-create or replace function search_members(p_token text, p_q text)
+create or replace function search_members(
+  p_token        text,
+  p_q            text,
+  p_client_nonce text default null
+)
 returns table (id uuid, display_name text)
 language plpgsql
-stable
+volatile                       -- the limiter writes a counter row
 security definer
 set search_path = public, extensions, pg_temp
 as $$
 declare
-  v_event events;
-  v_q     text := btrim(coalesce(p_q, ''));
+  v_event  events;
+  v_q      text := btrim(coalesce(p_q, ''));
+  v_bucket text;
 begin
   v_event := fn_checkin_event(p_token, true);
 
@@ -160,9 +198,18 @@ begin
     raise exception 'Type at least three letters of your name.' using errcode = 'PDS03';
   end if;
 
-  perform fn_rate_limit_hit(
-    'search_members:' || p_token,
-    fn_setting_int('search_members_max_per_min', 60)
+  v_bucket := fn_checkin_nonce_bucket(v_event.id, p_client_nonce);
+
+  -- The per-event ceiling here is a runaway backstop and nothing more. This
+  -- endpoint returns names only, which the design already accepts as the price
+  -- of identifying yourself without logging in, so throttling it protects
+  -- almost nothing while a number anywhere near the crowd size would lock 167
+  -- people out of their own check-in. The per-client ceiling is what actually
+  -- constrains one misbehaving browser.
+  perform fn_rate_limit_checkin(
+    'search_members', p_token, v_bucket,
+    fn_setting_int('search_members_max_per_nonce_per_min', 60),
+    fn_setting_int('search_members_max_per_event_per_min', 20000)
   );
 
   return query
@@ -190,9 +237,10 @@ $$;
 -- ---------------------------------------------------------------------------
 
 create or replace function create_evidence_upload(
-  p_token     text,
-  p_member_id uuid,
-  p_kind      evidence_kind_t
+  p_token        text,
+  p_member_id    uuid,
+  p_kind         evidence_kind_t,
+  p_client_nonce text default null
 ) returns jsonb
 language plpgsql
 volatile
@@ -200,9 +248,12 @@ security definer
 set search_path = public, extensions, pg_temp
 as $$
 declare
-  v_event  events;
-  v_grant  evidence_upload_grants;
-  v_path   text;
+  v_event       events;
+  v_grant       evidence_upload_grants;
+  v_path        text;
+  v_bucket      text;
+  v_grant_nonce text;
+  v_outstanding int;
 begin
   v_event := fn_checkin_event(p_token, true);
 
@@ -220,11 +271,86 @@ begin
     raise exception 'Unknown member.' using errcode = 'PDS03';
   end if;
 
+  v_bucket := fn_checkin_nonce_bucket(v_event.id, p_client_nonce);
+
+  -- Only a nonce this database issued, for this event, still live. Anything
+  -- else is recorded as null, so a caller cannot mint themselves a private
+  -- allowance by sending a fresh string each time.
+  v_grant_nonce := case when v_bucket <> '' then p_client_nonce else null end;
+
+  -- This is the storage exhaustion vector, so it is bounded twice over: by
+  -- rate, and by how many grants may be outstanding at once. A grant is a
+  -- licence to write up to 8 MB into a 1 GB bucket, and a rate limit alone
+  -- does not bound the total: a patient caller can collect one grant a second
+  -- all day and redeem them whenever it likes.
+  perform fn_rate_limit_checkin(
+    'create_evidence_upload', p_token, v_bucket,
+    fn_setting_int('evidence_upload_max_per_nonce_per_min', 6),
+    fn_setting_int('evidence_upload_max_per_event_per_min', 600)
+  );
+
+  -- Outstanding means issued, still live, and neither consumed by a submission
+  -- nor reclaimed by an operator. One person retaking a blurry photo needs two
+  -- or three; nobody legitimately needs more at one moment.
+  --
+  -- "One person" is the hard part. Keying this on member_id alone works for
+  -- somebody on the roster and collapses completely for anybody who is not,
+  -- because every unmatched attendee shares a null member_id and would share
+  -- one allowance of three between the entire room. On an empty roster, which
+  -- is how this system ships, that is the entire room. The fourth person to
+  -- start a photo would be refused, fall through to the client's skip path,
+  -- and file missing_evidence instead, so the evidence requirement would
+  -- quietly stop working at exactly the event it exists for.
+  --
+  -- So unmatched callers are separated by their client nonce instead. A caller
+  -- with no valid nonce shares a bucket with the other such callers, which is
+  -- the honest fallback: it cannot be better than the shared case, and it
+  -- cannot be bypassed by inventing a nonce, because v_grant_nonce is only
+  -- ever set from one this database issued.
+  if p_member_id is not null then
+    select count(*) into v_outstanding
+    from evidence_upload_grants g
+    where g.event_id = v_event.id
+      and g.member_id = p_member_id
+      and g.consumed_at is null
+      and g.reclaimed_at is null
+      and g.expires_at > now();
+  else
+    select count(*) into v_outstanding
+    from evidence_upload_grants g
+    where g.event_id = v_event.id
+      and g.member_id is null
+      and g.client_nonce is not distinct from v_grant_nonce
+      and g.consumed_at is null
+      and g.reclaimed_at is null
+      and g.expires_at > now();
+  end if;
+
+  if v_outstanding >= fn_setting_int('evidence_grants_outstanding_per_member', 3) then
+    raise exception
+      'There are already several photo uploads pending for you at this event. Finish or abandon one before starting another.'
+      using errcode = 'PDS04';
+  end if;
+
+  select count(*) into v_outstanding
+  from evidence_upload_grants g
+  where g.event_id = v_event.id
+    and g.consumed_at is null
+    and g.reclaimed_at is null
+    and g.expires_at > now();
+
+  if v_outstanding >= fn_setting_int('evidence_grants_outstanding_per_event', 400) then
+    raise exception 'Too many photo uploads are pending for this event. Please try again shortly.'
+      using errcode = 'PDS04';
+  end if;
+
   v_path := v_event.academic_year_id::text || '/' || v_event.id::text || '/'
             || p_kind::text || '/' || encode(gen_random_bytes(16), 'hex') || '.jpg';
 
-  insert into evidence_upload_grants (event_id, member_id, kind, object_path, expires_at)
-  values (v_event.id, p_member_id, p_kind, v_path, now() + interval '30 minutes')
+  insert into evidence_upload_grants (event_id, member_id, client_nonce, kind,
+                                      object_path, expires_at)
+  values (v_event.id, p_member_id, v_grant_nonce, p_kind, v_path,
+          now() + make_interval(mins => fn_setting_int('evidence_grant_ttl_minutes', 30)))
   returning * into v_grant;
 
   return jsonb_build_object(
@@ -255,7 +381,8 @@ create or replace function submit_checkin(
   p_claimed_name  text    default null,
   p_claimed_email text    default null,
   p_value         numeric default null,
-  p_evidence      jsonb   default '[]'::jsonb
+  p_evidence      jsonb   default '[]'::jsonb,
+  p_client_nonce  text    default null
 ) returns jsonb
 language plpgsql
 volatile
@@ -273,12 +400,20 @@ declare
   v_grant        evidence_upload_grants;
   v_given_kinds  evidence_kind_t[] := '{}';
   v_missing      int;
+  v_bucket       text;
 begin
   v_event := fn_checkin_event(p_token, false);
 
-  perform fn_rate_limit_hit(
-    'submit_checkin:' || p_token,
-    fn_setting_int('submit_checkin_max_per_min', 120)
+  v_bucket := fn_checkin_nonce_bucket(v_event.id, p_client_nonce);
+
+  -- This endpoint writes rows, so the per-client ceiling is tight: one real
+  -- submission plus retries. The per-event ceiling is far above the 167-person
+  -- peak in the historical data, because a member turned away here loses
+  -- credit for an event they actually attended.
+  perform fn_rate_limit_checkin(
+    'submit_checkin', p_token, v_bucket,
+    fn_setting_int('submit_checkin_max_per_nonce_per_min', 10),
+    fn_setting_int('submit_checkin_max_per_event_per_min', 1500)
   );
 
   -- ---- who is this -------------------------------------------------------
@@ -293,6 +428,25 @@ begin
     raise exception 'Pick your name from the list, or tell us your full name.'
       using errcode = 'PDS03';
   else
+    -- The unmatched path is the only unbounded write in this function, so it
+    -- gets its own ceiling on top of the submission ceiling above.
+    --
+    -- A matched member cannot flood: one_live_record_per_member_event allows
+    -- them exactly one live row per event, so a repeat is refused by the index.
+    -- An unmatched submission has no such bound, since every call is a brand
+    -- new row carrying a typed-in name.
+    --
+    -- Layered, not merely lowered. A single number here would have to choose
+    -- between admitting a 167-person recruiting event where most of the room
+    -- is legitimately new, and bounding a flooder. It cannot do both, and the
+    -- empty-roster launch makes the first case the common one. See the
+    -- arithmetic and the worst case in migration 08.
+    perform fn_rate_limit_checkin(
+      'submit_unmatched', p_token, v_bucket,
+      fn_setting_int('submit_unmatched_max_per_nonce_per_min', 3),
+      fn_setting_int('submit_unmatched_max_per_event_per_min', 1000)
+    );
+
     v_flags := v_flags || 'unmatched_name'::text;
   end if;
 
@@ -729,6 +883,90 @@ begin
     'bytes_freed',    v_bytes,
     'event_ids',      to_jsonb(v_events),
     'object_paths',   to_jsonb(v_paths)
+  );
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 10.9 purge_orphaned_uploads()
+-- ---------------------------------------------------------------------------
+-- Reclaims abandoned uploads.
+--
+-- Uploading a photo and submitting the check-in are two separate steps, and a
+-- member can do the first without the second: they get a grant, the browser
+-- PUTs the image, and then they close the tab, lose signal, or wander off. The
+-- object is in the bucket, but no attendance_evidence row was ever created for
+-- it, so purge_evidence() cannot see it. It scans attendance_evidence, and
+-- nothing points at that object. Left alone, those bytes accumulate in a 1 GB
+-- bucket with no way for an operator to even learn they exist.
+--
+-- This is the path that finds them. It is the same bargain as purge_evidence:
+-- the database identifies what is eligible and an operator presses the button.
+-- Nothing here runs on a timer, per invariant 7.
+--
+-- The grant row is stamped rather than deleted, because it is the only record
+-- that anything was ever written to that path. Deleting it would make a
+-- leftover object permanently invisible, which is the bug being fixed.
+-- ---------------------------------------------------------------------------
+
+create or replace function purge_orphaned_uploads()
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_run_id      uuid;
+  v_count       int    := 0;
+  v_with_object int    := 0;
+  v_paths       text[] := '{}';
+  v_events      uuid[] := '{}';
+begin
+  perform fn_assert_officer();
+
+  create temporary table _orphans on commit drop as
+  select g.id, g.object_path, g.event_id,
+         exists (
+           select 1 from storage.objects o
+           where o.bucket_id = g.bucket_id and o.name = g.object_path
+         ) as object_exists
+  from evidence_upload_grants g
+  where g.consumed_at  is null
+    and g.reclaimed_at is null
+    and g.expires_at   < now()
+    and not exists (
+      select 1 from attendance_evidence ae where ae.object_path = g.object_path
+    );
+
+  select count(*), count(*) filter (where object_exists),
+         coalesce(array_agg(object_path) filter (where object_exists), '{}'),
+         coalesce(array_agg(distinct event_id), '{}')
+    into v_count, v_with_object, v_paths, v_events
+  from _orphans;
+
+  insert into purge_runs (performed_by, kind, retention_months,
+                          evidence_count, bytes_freed, event_ids)
+  values (auth.uid(), 'orphaned_uploads', null, v_with_object, 0, v_events)
+  returning id into v_run_id;
+
+  update evidence_upload_grants g
+  set reclaimed_at = now(), purge_run_id = v_run_id
+  where g.id in (select id from _orphans);
+
+  drop table _orphans;
+
+  perform fn_audit('purge_orphaned_uploads', 'purge_run', v_run_id,
+                   jsonb_build_object('grants_reclaimed', v_count,
+                                      'objects_to_delete', v_with_object));
+
+  return jsonb_build_object(
+    'purge_run_id',      v_run_id,
+    'grants_reclaimed',  v_count,
+    -- Only these actually exist in the bucket. The rest were grants nobody
+    -- ever uploaded against, so there is nothing to delete for them.
+    'objects_to_delete', v_with_object,
+    'object_paths',      to_jsonb(v_paths)
   );
 end
 $$;

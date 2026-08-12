@@ -7,6 +7,31 @@ This repository currently contains **P0: the database**. There is no frontend
 yet. What exists is the schema, the requirements engine, the RPC surface, row
 level security, and a test suite that proves all of it works.
 
+## Before your first event
+
+**The system ships with an empty roster.** Load one first:
+
+```bash
+python3 scripts/import_roster.py roster.csv --year 2026-2027 --out local/roster.sql
+# then apply local/roster.sql to the database
+```
+
+If you do not, check-in still works, but **every attendee will arrive as an
+unmatched name**. Each one lands in the review queue for an officer to link to a
+person by hand, one at a time, after the event. At a 167-person GBM that is your
+whole evening.
+
+The dashboard warns you about this: `v_config_warnings` raises
+`event_without_enrolled_members` for any published event that is open or
+happening within a week while nobody is enrolled in its academic year. The
+warning exists so you find out beforehand rather than afterwards.
+
+Some unmatched submissions are normal and expected regardless, especially at a
+recruiting event, and the limits are sized to admit a full room of them. See
+[Check-in rate limits](#check-in-rate-limits-and-the-client-nonce) below.
+
+Full instructions are in [Loading a roster](#loading-a-roster).
+
 Design docs, signed off before implementation:
 
 - [docs/00-spreadsheet-findings.md](docs/00-spreadsheet-findings.md)
@@ -156,10 +181,67 @@ keyed on `profiles.member_id`, which stays null until an officer approves an
 account claim, so an unclaimed account sees nothing.
 
 RPC errors carry distinct SQLSTATE codes so a client can tell them apart
-without matching on message text: `PDS01` bad token, `PDS02` check-in not open,
-`PDS03` bad argument, `PDS04` evidence problem, `PDS05` already checked in,
-`PDS06` cannot approve an unmatched record, `PDS07` wrong role, `PDS08` unknown
-requirement set, `PDS09` rate limited.
+**without matching on message text**: `PDS01` bad token, `PDS02` check-in has not
+opened yet, `PDS03` bad argument, `PDS04` evidence problem, `PDS05` already
+checked in, `PDS06` cannot approve an unmatched record, `PDS07` wrong role,
+`PDS08` unknown requirement set, `PDS09` rate limited, `PDS10` check-in has
+closed.
+
+`PDS02` and `PDS10` are separate codes on purpose. They were one code, which
+forced the page to read the message text to decide which of two screens to show,
+so rewording a sentence would have silently shown the wrong one with no test
+failing. The message text is copy and is meant to be rewritten freely; the code
+is the contract. If a further distinction is ever needed, add a code rather than
+a sentence.
+
+### Check-in rate limits, and the client nonce
+
+The largest event in the historical data had **167 attendees**, who all scan the
+same QR code within a few minutes. A rate limit keyed on that shared token
+cannot both admit them and deter abuse: whatever number admits the crowd is
+useless against an attacker, and whatever number stops an attacker locks out the
+crowd.
+
+So `get_checkin_context` issues each page load an opaque, expiring
+`client_nonce`, and the other three RPCs accept it. Limits are keyed per client
+first and per event second. The nonce **authorizes nothing**: it is honoured
+only if this database issued it for this event and it has not expired, anything
+else falls back to the shared bucket, and minting is itself capped.
+
+Every ceiling is a row in `app_settings`, so raising one is a settings edit and
+not a migration. The reasoning behind each default, and the arithmetic it comes
+from, is in the comment block above them in the ops-tables migration and in
+[docs/01-data-model.md](docs/01-data-model.md) section 8. Two are worth knowing
+about:
+
+- The event-wide `search_members` ceiling is an **anti-runaway backstop, not a
+  security control**, and is deliberately an order of magnitude above peak.
+  Hardening it downward locks real attendees out of their own check-in and
+  protects almost nothing, since the endpoint returns names only.
+- **Unmatched submissions** get their own ceiling on top of the submission one,
+  because a matched member can only ever create one live row per event (a unique
+  index says so) while an unmatched one has no such bound. It is layered the same
+  way: tight per client, generous per event. Do not lower the event number on the
+  theory that unmatched submissions are rare, because on an empty roster or at a
+  recruiting event they are the *majority* of the room.
+
+Two regression tests hold this down, and they cover different paths:
+
+- `test/burst.test.mjs`: 167 attendees **who are on the roster** each complete an
+  autocomplete and a submission inside one simulated minute.
+- `test/burst_unmatched.test.mjs`: 167 attendees at an event with an **empty
+  roster**, every one going through "I don't see my name".
+
+Every one of them must succeed in both.
+
+### Abandoned uploads
+
+Uploading a photo and submitting the check-in are separate steps, so a member can
+do the first and not the second, leaving an object nothing points at.
+`purge_evidence()` cannot see those (it scans `attendance_evidence`), so
+`v_orphaned_uploads` finds them, `v_config_warnings` raises a banner, and
+`purge_orphaned_uploads()` returns their paths for an operator to delete. Like
+every other purge here, it is a button and not a timer.
 
 ## Photo storage
 

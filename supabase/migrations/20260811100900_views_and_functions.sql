@@ -380,6 +380,36 @@ comment on view v_member_status is
 -- The anti-drift banner. Every row here is a way the spreadsheet went wrong.
 -- ---------------------------------------------------------------------------
 
+-- Abandoned uploads: a grant that expired without ever being submitted, whose
+-- object may still be sitting in the bucket with nothing pointing at it.
+-- purge_evidence() cannot see these, because it scans attendance_evidence and
+-- no such row was ever created. purge_orphaned_uploads() reclaims them.
+create view v_orphaned_uploads with (security_invoker = true) as
+  select g.id            as grant_id,
+         g.event_id,
+         e.title         as event_title,
+         g.member_id,
+         g.kind,
+         g.bucket_id,
+         g.object_path,
+         g.created_at,
+         g.expires_at,
+         exists (
+           select 1 from storage.objects o
+           where o.bucket_id = g.bucket_id and o.name = g.object_path
+         ) as object_exists
+  from evidence_upload_grants g
+  join events e on e.id = g.event_id
+  where g.consumed_at  is null
+    and g.reclaimed_at is null
+    and g.expires_at   < now()
+    and not exists (
+      select 1 from attendance_evidence ae where ae.object_path = g.object_path
+    );
+
+comment on view v_orphaned_uploads is
+  'Uploads that were granted and never submitted. Storage the system is holding but nothing references. Reclaimed by purge_orphaned_uploads(), never on a timer.';
+
 create view v_config_warnings with (security_invoker = true) as
   -- An active category that no published rule measures. This is the shape of
   -- "we added a category and forgot to give it a requirement".
@@ -454,4 +484,45 @@ create view v_config_warnings with (security_invoker = true) as
   join requirement_sets rs on rs.id = n.requirement_set_id
   where n.type = 'group'
     and rs.status = 'published'
-    and not exists (select 1 from requirement_nodes k where k.parent_id = n.id);
+    and not exists (select 1 from requirement_nodes k where k.parent_id = n.id)
+
+  union all
+
+  -- An event about to happen against an empty roster. The system ships with
+  -- no members, so this is the state it starts in, and the failure it causes
+  -- is silent: check-in still works, but every attendee falls through "I don't
+  -- see my name" and lands in the review queue as an unmatched row for an
+  -- officer to resolve by hand, one at a time, afterwards.
+  --
+  -- Telling them beforehand costs one banner. Discovering it afterwards costs
+  -- an evening.
+  select 'event_without_enrolled_members', 'error', 'event', e.id, e.title,
+         'Nobody is enrolled in this events academic year, so every attendee will '
+         || 'check in as an unmatched name. Load the roster with scripts/import_roster.py '
+         || 'before the event.'
+  from events e
+  where e.is_published
+    and (
+      -- check-in is open now
+      (e.checkin_opens_at is not null and e.checkin_opens_at <= now()
+        and (e.checkin_closes_at is null or e.checkin_closes_at >= now()))
+      -- or the event is coming up soon, including one with no window set yet
+      or e.occurred_on between current_date and current_date + 7
+    )
+    and not exists (
+      select 1 from member_enrollments me
+      where me.academic_year_id = e.academic_year_id and me.status = 'active'
+    )
+
+  union all
+
+  -- Storage being consumed by uploads nothing points at. One aggregate row
+  -- rather than one per object, because the operator action is a single
+  -- button and the per-object detail lives in v_orphaned_uploads.
+  select 'orphaned_uploads', 'warning', 'storage', null,
+         count(*)::text || ' abandoned upload(s)',
+         'Photos were uploaded but never submitted, so no attendance record points at them. '
+         || 'Run purge_orphaned_uploads() to reclaim them.'
+  from v_orphaned_uploads
+  where object_exists
+  having count(*) > 0;
