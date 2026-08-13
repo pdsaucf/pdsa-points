@@ -641,13 +641,34 @@ kbd {
 
 /* Somebody who already has a check-in for this event. Shown rather than
    hidden: "she is already checked in" is often the fact that identifies the
-   person standing in front of the officer as the other one. */
+   person standing in front of the officer as the other one.
+
+   It has to read as unavailable BEFORE the subtext is read, because an officer
+   going through a queue scans the names and presses one. A sunken fill was not
+   enough on its own: against the pale accent-soft of a live suggestion it came
+   out at a contrast ratio of 1.02, so the only real signal was a 1px border,
+   and a chip that is still filled and still full strength still looks like a
+   button. So the fill is dropped entirely and the whole control is stepped
+   back, which is the difference that survives a glance.
+
+   The text colour goes UP to compensate for the opacity rather than staying
+   muted. Muted ink at 65% lands near 3:1 on this background, and the officer
+   has to be able to read which of the two Cattos this is. */
 .suggestion[data-clash='true'] {
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-color: var(--line);
+  color: var(--ink);
+  background: transparent;
+  border-color: var(--line-strong);
   border-style: dashed;
   cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.suggestion[data-clash='true'] .suggestion-name {
+  font-weight: 500;
+}
+
+.suggestion[data-clash='true'] .suggestion-why {
+  color: var(--ink);
 }
 
 .no-suggestions {
@@ -810,6 +831,320 @@ kbd {
   color: var(--ink-muted);
   font-size: 0.8125rem;
   list-style: none;
+}
+
+/* --------------------------------------------------------------------------- */
+/* The requirements editor                                                      */
+/* --------------------------------------------------------------------------- */
+/* The tree is expressed as indentation and nothing else. There is no box around
+   a group, no connector line and no colour coding by depth: a rule an officer
+   reads out loud is a sentence, and a sentence that has been drawn as a graph
+   stops reading like one. The only decoration is the left pad, one step per
+   level, and the row that carries a problem. */
+
+.rule-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.rule-header-main {
+  min-width: 12rem;
+}
+
+.rule-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.rule-status {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.rule-note {
+  margin: 0 0 1rem;
+}
+
+.rule-problems {
+  margin: 0 0 1rem;
+}
+
+.rule-sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  padding: 0.75rem 0.875rem;
+  font-size: 1rem;
+  font-weight: 600;
+  background: var(--surface-sunken);
+  border-radius: 10px;
+}
+
+.rule-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.rule-row {
+  --step: 1.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  padding-left: calc(0.75rem + var(--depth, 0) * var(--step));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.rule-row-group {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.rule-row[data-problem='true'] {
+  border-color: var(--warn);
+  border-left: 4px solid var(--warn);
+}
+
+.rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1 1 26rem;
+  min-width: 0;
+}
+
+.rule-label {
+  min-width: 9rem;
+  max-width: 14rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.rule-number {
+  width: 4.5rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+
+.rule-number-small {
+  width: 3.5rem;
+}
+
+.rule-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rule-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+
+.rule-count {
+  min-width: 3.5rem;
+  color: var(--ok);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.rule-actions .select-quiet {
+  min-height: 2.25rem;
+  font-size: 0.8125rem;
+}
+
+.rule-footer {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.rule-empty {
+  padding: 1rem 0;
+}
+
+/* The categories a requirement adds up. First class rather than hidden behind
+   an edit screen: "at least 1 from Journal Club, Media Speaking" is the whole
+   compound editorial rule, and adding a fourth source has to be one gesture. */
+
+.chip-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.25rem 0.15rem 0.55rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+}
+
+.category-chip[data-archived='true'] {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn);
+  border-style: dashed;
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  background: var(--surface);
+}
+
+.chip-add {
+  min-height: 2rem;
+  font-size: 0.8125rem;
+}
+
+.preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.preview-line {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.publish-preview {
+  margin: 0;
+  font-weight: 600;
+}
+
+.problem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problem-list-inline {
+  flex-basis: 100%;
+  margin-top: 0.25rem;
+}
+
+.problem {
+  color: var(--warn);
+  font-size: 0.8125rem;
+}
+
+.problem-title {
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Categories                                                                   */
+/* --------------------------------------------------------------------------- */
+
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.category-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.category-row-retired {
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-style: dashed;
+}
+
+.category-name {
+  min-width: 9rem;
+  font-weight: 600;
+}
+
+.category-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+}
+
+.toolbar-field-narrow {
+  min-width: 9rem;
 }
 
 /* --------------------------------------------------------------------------- */

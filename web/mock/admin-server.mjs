@@ -58,6 +58,10 @@ export function adminState() {
     enrollments: db.member_enrollments,
     claims: db.member_claims,
     profiles: db.profiles,
+    categories: db.categories,
+    requirementSets: db.requirement_sets,
+    requirementNodes: db.requirement_nodes,
+    requirementNodeCategories: db.requirement_node_categories,
   };
 }
 
@@ -232,6 +236,32 @@ const RELATIONS = {
       to: 'id',
     },
   },
+  requirement_sets: {
+    requirement_nodes: {
+      table: 'requirement_nodes',
+      kind: 'many',
+      from: 'id',
+      to: 'requirement_set_id',
+    },
+  },
+  requirement_nodes: {
+    requirement_node_categories: {
+      table: 'requirement_node_categories',
+      kind: 'many',
+      from: 'id',
+      to: 'node_id',
+    },
+    requirement_sets: {
+      table: 'requirement_sets',
+      kind: 'one',
+      from: 'requirement_set_id',
+      to: 'id',
+    },
+  },
+  requirement_node_categories: {
+    requirement_nodes: { table: 'requirement_nodes', kind: 'one', from: 'node_id', to: 'id' },
+    categories: { table: 'categories', kind: 'one', from: 'category_id', to: 'id' },
+  },
 };
 
 function parseSelect(spec) {
@@ -330,6 +360,11 @@ function visibleRows(table, auth) {
     case 'categories':
     case 'events':
     case 'event_categories':
+    // "Everyone signed in can read the rules they are being judged by", which
+    // is req_sets_read and its two siblings in migration 11.
+    case 'requirement_sets':
+    case 'requirement_nodes':
+    case 'requirement_node_categories':
       return rows;
 
     case 'profiles':
@@ -464,33 +499,139 @@ function runSelect(table, params, auth) {
 // Writes
 // ---------------------------------------------------------------------------
 
-/** Who may write what. The insert and update halves of the policies in migration 11. */
+const setOf = (setId) => db.requirement_sets.find((row) => row.id === setId) ?? null;
+const setOfNode = (nodeId) => {
+  const node = db.requirement_nodes.find((row) => row.id === nodeId);
+  return node ? setOf(node.requirement_set_id) : null;
+};
+const isDraft = (set) => Boolean(set) && set.status === 'draft';
+
+/**
+ * Who may write what, per row. The insert and update halves of the policies in
+ * migration 11.
+ *
+ * Per row rather than per table, because the requirements policies are: an
+ * admin may write anything, an officer may write a DRAFT and nothing else.
+ * That distinction is the whole published/draft lifecycle, and a stand-in that
+ * only looked at the caller's role would let an officer edit a published set
+ * here and be refused in production.
+ */
 const WRITE_POLICY = {
   member_enrollments: (auth) => isOfficer(auth),
   attendance_records: (auth) => isOfficer(auth),
   members: (auth) => isOfficer(auth),
   member_claims: (auth) => isOfficer(auth),
   profiles: (auth) => isAdmin(auth),
+  categories: (auth) => isOfficer(auth),
+  requirement_sets: (auth, row) =>
+    isAdmin(auth) || (isOfficer(auth) && isDraft(row ?? { status: 'draft' })),
+  requirement_nodes: (auth, row) =>
+    isAdmin(auth) || (isOfficer(auth) && isDraft(setOf(row?.requirement_set_id))),
+  requirement_node_categories: (auth, row) =>
+    isAdmin(auth) || (isOfficer(auth) && isDraft(setOfNode(row?.node_id))),
+};
+
+const uuid = (prefix) => `${prefix}${randomBytes(6).toString('hex')}`;
+
+/** The defaults each table's columns carry, for a row the client did not fill in. */
+const INSERT_DEFAULTS = {
+  categories: (row) => ({
+    id: uuid('c9000000-0000-4000-a000-'),
+    unit: 'event_count',
+    unit_label: null,
+    counts_toward_point_total: true,
+    sort_order: 0,
+    created_at: new Date().toISOString(),
+    archived_at: null,
+    ...row,
+  }),
+  requirement_sets: (row) => ({
+    id: uuid('d9000000-0000-4000-a000-'),
+    name: 'Honorary Member',
+    version: 1,
+    status: 'draft',
+    root_node_id: null,
+    published_at: null,
+    created_at: new Date().toISOString(),
+    ...row,
+  }),
+  requirement_nodes: (row) => ({
+    id: uuid('f9000000-0000-4000-a000-'),
+    parent_id: null,
+    sort_order: 0,
+    min_children_passing: null,
+    min_value: null,
+    term_id: null,
+    ...row,
+  }),
+  requirement_node_categories: (row) => ({ ...row }),
 };
 
 function runInsert(table, payload, auth) {
   const allowed = WRITE_POLICY[table];
-  if (!allowed || !allowed(auth)) {
-    return {
-      error: {
-        status: 403,
-        body: {
-          code: '42501',
-          message: `new row violates row-level security policy for table "${table}"`,
-        },
-      },
-    };
-  }
-
   const incoming = Array.isArray(payload) ? payload : [payload];
+
+  const refuse = () => ({
+    error: {
+      status: 403,
+      body: {
+        code: '42501',
+        message: `new row violates row-level security policy for table "${table}"`,
+      },
+    },
+  });
+
+  if (!allowed || incoming.some((row) => !allowed(auth, row))) return refuse();
+
   const written = [];
 
   for (const row of incoming) {
+    if (INSERT_DEFAULTS[table]) {
+      // The check constraint on requirement_nodes: a requirement carries a
+      // number and no child count, a group carries a child count and no number.
+      if (table === 'requirement_nodes') {
+        const bad =
+          (row.type === 'threshold' && (row.min_value === null || row.min_value === undefined)) ||
+          (row.type === 'group' && row.min_value !== null && row.min_value !== undefined);
+        if (bad) {
+          return {
+            error: {
+              status: 400,
+              body: {
+                code: '23514',
+                message: 'new row violates check constraint on "requirement_nodes"',
+              },
+            },
+          };
+        }
+      }
+      if (table === 'categories' && db.categories.some((c) => c.slug === row.slug)) {
+        return {
+          error: {
+            status: 409,
+            body: {
+              code: '23505',
+              message: 'duplicate key value violates unique constraint "categories_slug_key"',
+            },
+          },
+        };
+      }
+      if (table === 'requirement_node_categories') {
+        const existing = db.requirement_node_categories.find(
+          (link) => link.node_id === row.node_id && link.category_id === row.category_id,
+        );
+        if (existing) {
+          written.push(existing);
+          continue;
+        }
+      }
+
+      const created = INSERT_DEFAULTS[table](row);
+      db[table].push(created);
+      written.push(created);
+      continue;
+    }
+
     if (table === 'member_enrollments') {
       const existing = db.member_enrollments.find(
         (e) => e.member_id === row.member_id && e.academic_year_id === row.academic_year_id,
@@ -542,11 +683,30 @@ function runPatch(table, params, payload, auth) {
   }
 
   const allowed = WRITE_POLICY[table];
-  if (!allowed || !allowed(auth)) {
+
+  // A WITH CHECK violation is different from a USING one: it raises. An officer
+  // moving a set out of draft is refused loudly, which is what stops a published
+  // set being edited by anybody but an admin.
+  if (table === 'requirement_sets' && payload?.status && payload.status !== 'draft' && !isAdmin(auth)) {
+    return {
+      error: {
+        status: 403,
+        body: {
+          code: '42501',
+          message: 'new row violates row-level security policy for table "requirement_sets"',
+        },
+      },
+    };
+  }
+
+  targets = allowed ? targets.filter((row) => allowed(auth, row)) : [];
+  if (!targets.length) {
     // THE IMPORTANT CASE. PostgREST does not raise here: the USING clause
     // simply matches no row, so the answer is 200 with an empty array. A
     // client that reads that as success reports a write that never happened,
-    // which is exactly the officer-versus-admin distinction in claims.js.
+    // which is exactly the officer-versus-admin distinction in claims.js, and
+    // is also what an officer's edit to a PUBLISHED requirement set comes back
+    // as.
     record({ fn: `patch.${table}`, actor: auth.userId, outcome: 'refused by policy', matched: 0 });
     return { rows: [] };
   }
@@ -579,6 +739,67 @@ function runPatch(table, params, payload, auth) {
     payload,
   });
   return { rows: targets.map((row) => ({ ...row })) };
+}
+
+/**
+ * DELETE, which only the requirements editor uses.
+ *
+ * `on delete cascade` on requirement_nodes.parent_id is reproduced here: taking
+ * out a group takes out everything inside it. A mock that left the children
+ * behind would show a tree the database could never hold.
+ */
+function runDelete(table, params, auth) {
+  const rows = visibleRows(table, auth);
+  if (!rows) {
+    return { error: { status: 404, body: { code: 'PGRST205', message: `Unknown table ${table}` } } };
+  }
+
+  const filters = ownFilters(
+    Object.fromEntries(
+      [...params.entries()].filter(([key]) => !['select', 'order', 'limit'].includes(key)),
+    ),
+  );
+
+  let targets = rows;
+  for (const [column, test] of Object.entries(filters)) {
+    targets = targets.filter((row) => matches(row, column, test));
+  }
+
+  const allowed = WRITE_POLICY[table];
+  targets = allowed ? targets.filter((row) => allowed(auth, row)) : [];
+  if (!targets.length) {
+    record({ fn: `delete.${table}`, actor: auth.userId, outcome: 'refused by policy', matched: 0 });
+    return { rows: [] };
+  }
+
+  const removed = targets.map((row) => ({ ...row }));
+  const gone = new Set(targets);
+
+  if (table === 'requirement_nodes') {
+    const ids = new Set(targets.map((row) => row.id));
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const node of db.requirement_nodes) {
+        if (node.parent_id && ids.has(node.parent_id) && !ids.has(node.id)) {
+          ids.add(node.id);
+          grew = true;
+        }
+      }
+    }
+    db.requirement_nodes = db.requirement_nodes.filter((node) => !ids.has(node.id));
+    db.requirement_node_categories = db.requirement_node_categories.filter(
+      (link) => !ids.has(link.node_id),
+    );
+    for (const set of db.requirement_sets) {
+      if (ids.has(set.root_node_id)) set.root_node_id = null;
+    }
+  } else {
+    db[table] = db[table].filter((row) => !gone.has(row));
+  }
+
+  record({ fn: `delete.${table}`, actor: auth.userId, matched: removed.length });
+  return { rows: removed };
 }
 
 export function handleRest(req, res, url, body, helpers, anonKey) {
@@ -614,6 +835,8 @@ export function handleRest(req, res, url, body, helpers, anonKey) {
     result = runInsert(table, body, auth);
   } else if (req.method === 'PATCH') {
     result = runPatch(table, url.searchParams, body, auth);
+  } else if (req.method === 'DELETE') {
+    result = runDelete(table, url.searchParams, auth);
   } else {
     json(res, 405, { message: 'Method not allowed' });
     return;
@@ -833,7 +1056,306 @@ export const ADMIN_RPC = {
 
     json(res, 200, memberId);
   },
+
+  // -------------------------------------------------------------------------
+  // The requirements engine
+  // -------------------------------------------------------------------------
+  // These four are the contract the editor is written against. The evaluator
+  // below is a second implementation of fn_member_requirement_status(), in
+  // JavaScript, which is exactly what it is for: if the editor and the database
+  // disagree about what a rule means, one of the two is wrong, and a mock that
+  // simply echoed a number back would never say so.
+
+  /** clone_requirement_set(p_set_id uuid) returns uuid */
+  clone_requirement_set(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const source = setOf(body.p_set_id);
+    if (!source) {
+      pds(res, 'PDS08', 'Unknown requirement set.');
+      return;
+    }
+
+    const version =
+      db.requirement_sets
+        .filter((row) => row.academic_year_id === source.academic_year_id && row.name === source.name)
+        .reduce((max, row) => Math.max(max, Number(row.version) || 0), 0) + 1;
+
+    const clone = {
+      id: uuid('d9000000-0000-4000-a000-'),
+      academic_year_id: source.academic_year_id,
+      name: source.name,
+      version,
+      status: 'draft',
+      root_node_id: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+    };
+    db.requirement_sets.push(clone);
+
+    const remap = new Map();
+    const originals = db.requirement_nodes.filter((row) => row.requirement_set_id === source.id);
+    for (const node of originals) remap.set(node.id, uuid('f9000000-0000-4000-a000-'));
+
+    for (const node of originals) {
+      db.requirement_nodes.push({
+        ...node,
+        id: remap.get(node.id),
+        requirement_set_id: clone.id,
+        parent_id: node.parent_id ? remap.get(node.parent_id) ?? null : null,
+      });
+      for (const link of db.requirement_node_categories.filter((row) => row.node_id === node.id)) {
+        db.requirement_node_categories.push({
+          node_id: remap.get(node.id),
+          category_id: link.category_id,
+        });
+      }
+    }
+
+    clone.root_node_id = source.root_node_id ? remap.get(source.root_node_id) ?? null : null;
+
+    audit(auth, 'clone_requirement_set', 'requirement_set', clone.id, {
+      from: source.id,
+      version,
+    });
+    record({ fn: 'clone_requirement_set', actor: auth.userId, from: source.id, to: clone.id });
+    json(res, 200, clone.id);
+  },
+
+  /** publish_requirement_set(p_set_id uuid) returns jsonb */
+  publish_requirement_set(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    // Only an admin publishes. An officer builds the draft and asks.
+    if (!isAdmin(auth)) {
+      record({ fn: 'publish_requirement_set', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'Publishing a requirement set requires an admin account.');
+      return;
+    }
+
+    const set = setOf(body.p_set_id);
+    if (!set) {
+      pds(res, 'PDS08', 'Unknown requirement set.');
+      return;
+    }
+    if (set.status !== 'draft') {
+      pds(res, 'PDS03', 'That version is already published.');
+      return;
+    }
+
+    // one_published_set_per_year_name: the one that was live is archived, not
+    // overwritten, so last year's members keep the numbers they were judged by.
+    const previous = db.requirement_sets.find(
+      (row) =>
+        row.academic_year_id === set.academic_year_id &&
+        row.name === set.name &&
+        row.status === 'published',
+    );
+    if (previous) previous.status = 'archived';
+
+    set.status = 'published';
+    set.published_at = new Date().toISOString();
+
+    audit(auth, 'publish_requirement_set', 'requirement_set', set.id, {
+      version: set.version,
+      archived_set_id: previous?.id ?? null,
+    });
+    record({ fn: 'publish_requirement_set', actor: auth.userId, setId: set.id });
+
+    json(res, 200, {
+      version: set.version,
+      published_at: set.published_at,
+      archived_set_id: previous?.id ?? null,
+    });
+  },
+
+  /** validate_requirement_set(p_set_id uuid) returns table (code, node_id, message) */
+  validate_requirement_set(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isStaff(auth)) {
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const set = setOf(body.p_set_id);
+    if (!set) {
+      pds(res, 'PDS08', 'Unknown requirement set.');
+      return;
+    }
+
+    const nodes = db.requirement_nodes.filter((row) => row.requirement_set_id === set.id);
+    const childrenOf = (id) => nodes.filter((row) => row.parent_id === id);
+    const categoriesOf = (id) =>
+      db.requirement_node_categories
+        .filter((link) => link.node_id === id)
+        .map((link) => db.categories.find((c) => c.id === link.category_id))
+        .filter(Boolean);
+
+    const problems = [];
+    const say = (code, nodeId, message) => problems.push({ code, node_id: nodeId, message });
+
+    if (!nodes.length || !set.root_node_id) {
+      say('set_without_root', null, 'This set has no requirements in it.');
+    }
+
+    for (const node of nodes) {
+      if (!String(node.label ?? '').trim()) {
+        say('label_missing', node.id, 'This requirement has no name.');
+      }
+      if (node.type === 'threshold') {
+        const categories = categoriesOf(node.id);
+        if (!categories.length) {
+          say('threshold_without_category', node.id, 'This requirement measures no categories.');
+        }
+        for (const category of categories) {
+          if (category.archived_at) {
+            say(
+              'rule_on_archived_category',
+              node.id,
+              `Requirement node measures category "${category.name}", which is archived.`,
+            );
+          }
+        }
+        const units = new Set(categories.map((category) => category.unit));
+        if (units.size > 1) {
+          say('mixed_units', node.id, 'This requirement adds up more than one kind of unit.');
+        }
+      } else {
+        const children = childrenOf(node.id);
+        if (!children.length) {
+          say('empty_group_node', node.id, 'Group node has no children, so it passes for everybody.');
+        } else if (
+          node.min_children_passing !== null &&
+          node.min_children_passing !== undefined &&
+          node.min_children_passing > children.length
+        ) {
+          say(
+            'min_children_exceeds_children',
+            node.id,
+            'This group asks for more than it contains.',
+          );
+        }
+      }
+    }
+
+    record({ fn: 'validate_requirement_set', actor: auth.userId, setId: set.id, count: problems.length });
+    json(res, 200, problems);
+  },
+
+  /** preview_requirement_set(p_set_id uuid) returns table (node_id, label, passing, total) */
+  preview_requirement_set(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isStaff(auth)) {
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const set = setOf(body.p_set_id);
+    if (!set) {
+      pds(res, 'PDS08', 'Unknown requirement set.');
+      return;
+    }
+
+    const nodes = db.requirement_nodes.filter((row) => row.requirement_set_id === set.id);
+    const childrenOf = (id) =>
+      nodes
+        .filter((row) => row.parent_id === id)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const categoryIdsOf = (id) =>
+      db.requirement_node_categories
+        .filter((link) => link.node_id === id)
+        .map((link) => link.category_id);
+
+    const members = db.member_enrollments
+      .filter((row) => row.academic_year_id === set.academic_year_id)
+      .map((row) => row.member_id);
+
+    const credit = creditByMember(set.academic_year_id);
+    const passing = new Map(nodes.map((node) => [node.id, 0]));
+
+    for (const memberId of members) {
+      const totals = credit.get(memberId) ?? new Map();
+      const verdict = (node) => {
+        if (node.type === 'threshold') {
+          const sum = categoryIdsOf(node.id).reduce(
+            (running, categoryId) => running + (totals.get(categoryId) ?? 0),
+            0,
+          );
+          return sum >= Number(node.min_value ?? 0);
+        }
+        const children = childrenOf(node.id);
+        const passed = children.filter((child) => walk(child)).length;
+        const needed =
+          node.min_children_passing === null || node.min_children_passing === undefined
+            ? children.length
+            : node.min_children_passing;
+        return passed >= needed;
+      };
+      // Deepest first, so a group sees its children's verdicts, exactly as
+      // fn_member_requirement_status() does.
+      const walk = (node) => {
+        const passed = verdict(node);
+        if (passed) passing.set(node.id, (passing.get(node.id) ?? 0) + 1);
+        return passed;
+      };
+      const root = nodes.find((node) => node.id === set.root_node_id) ?? nodes.find((n) => !n.parent_id);
+      if (root) walk(root);
+    }
+
+    record({ fn: 'preview_requirement_set', actor: auth.userId, setId: set.id });
+    json(
+      res,
+      200,
+      nodes.map((node) => ({
+        node_id: node.id,
+        label: node.label,
+        passing: passing.get(node.id) ?? 0,
+        total: members.length,
+      })),
+    );
+  },
 };
+
+/**
+ * v_member_category_totals, in the mock: approved credit per member per
+ * category for one year. `fixed` events carry their own credit, and the one
+ * event that reads a number off the check-in form carries whatever the member
+ * typed, which is how Volunteering hours arrive.
+ */
+function creditByMember(yearId) {
+  const eventById = new Map(db.events.map((event) => [event.id, event]));
+  const linksByEvent = new Map();
+  for (const link of db.event_categories) {
+    if (!linksByEvent.has(link.event_id)) linksByEvent.set(link.event_id, []);
+    linksByEvent.get(link.event_id).push(link);
+  }
+
+  const out = new Map();
+  for (const row of db.attendance_records) {
+    if (row.status !== 'approved' || !row.member_id) continue;
+    const event = eventById.get(row.event_id);
+    if (!event || event.academic_year_id !== yearId) continue;
+
+    for (const link of linksByEvent.get(event.id) ?? []) {
+      const credit =
+        link.credit_mode === 'fixed'
+          ? Number(link.fixed_credit ?? 0)
+          : Number(row.submitted_value ?? 0);
+      if (!out.has(row.member_id)) out.set(row.member_id, new Map());
+      const totals = out.get(row.member_id);
+      totals.set(link.category_id, (totals.get(link.category_id) ?? 0) + credit);
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Signed photo URLs

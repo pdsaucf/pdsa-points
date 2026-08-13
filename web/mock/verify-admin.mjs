@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { IDS, UNKNOWN_EMAIL } from './admin-fixtures.mjs';
+import { declarations, rule } from './css-rules.mjs';
 
 const PORT = 8798;
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -784,6 +785,82 @@ await check('confirming a claim never changes the role on the account', () => {
   // Writing role here would lock an officer out of this very screen the first
   // time one of them claimed their own roster row.
   assert.doesNotMatch(claimsSource, /role:\s*['"]member['"]/);
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\na suggestion that cannot be pressed looks like one\n');
+// ---------------------------------------------------------------------------
+//
+// The suggestion for somebody who already checked in is `disabled`, which the
+// DOM and a screen reader both get right. It looked wrong: measured in the
+// browser, its fill came out at a contrast ratio of 1.02 against a live
+// suggestion's, so the only difference was a 1px border on a chip that was
+// otherwise the same size, the same fill and full strength. An officer scanning
+// a queue presses it and nothing happens.
+//
+// WHAT THIS CHECKS. That the disabled state is carried on more than one visual
+// axis, so no single edit can flatten it back into looking pressable. Node has
+// no layout engine and this package has no dependencies, so this reads the
+// stylesheet rather than the rendered pixels: it is a check on the rule, not a
+// measurement of contrast. See web/README.md.
+
+const liveSuggestion = declarations(rule(adminCss, '.suggestion'));
+const deadSuggestion = declarations(rule(adminCss, ".suggestion[data-clash='true']"));
+
+await check('the disabled suggestion is not merely disabled in the DOM', () => {
+  assert.ok(deadSuggestion.size, "no .suggestion[data-clash='true'] rule in admin.css");
+
+  // Every axis below is one an officer can see without reading the subtext.
+  const differs = (prop) =>
+    deadSuggestion.has(prop) && deadSuggestion.get(prop) !== liveSuggestion.get(prop);
+
+  const axes = ['background', 'border-color', 'border-style', 'opacity', 'color'].filter(differs);
+  assert.ok(
+    axes.length >= 3,
+    `a disabled suggestion differs from a live one on ${axes.length} visual axis/axes ` +
+      `(${axes.join(', ') || 'none'}), which is not enough to read at a glance`,
+  );
+
+  // Stepped back rather than merely recoloured. This is the axis the browser
+  // pass found missing: it rendered at full strength.
+  const opacity = deadSuggestion.has('opacity') ? Number(deadSuggestion.get('opacity')) : 1;
+  assert.ok(
+    opacity < 1,
+    `a disabled suggestion renders at full strength (opacity ${deadSuggestion.get('opacity') ?? 'not set'})`,
+  );
+
+  // Not filled like the pressable one, whose fill is what makes it read as a
+  // button. Two pale fills was the original failure, so equality is not enough.
+  assert.notEqual(
+    deadSuggestion.get('background'),
+    liveSuggestion.get('background'),
+    'a disabled suggestion is filled like a pressable one',
+  );
+});
+
+await check('and it stays legible while it is stepped back', () => {
+  // Reducing opacity composites the text towards the background. The name is
+  // the one thing the officer still has to read here, because it is what tells
+  // the two Cattos apart, so the colour is raised to pay for the opacity
+  // rather than left muted.
+  assert.equal(
+    deadSuggestion.get('color'),
+    'var(--ink)',
+    'a disabled suggestion uses muted ink AND reduced opacity, which stacks',
+  );
+  const why = declarations(rule(adminCss, ".suggestion[data-clash='true'] .suggestion-why"));
+  assert.equal(why.get('color'), 'var(--ink)', 'the reason is muted twice over');
+});
+
+await check('the reason is still on the card, and still reaches a screen reader', () => {
+  // Removing the subtext would leave the officer with a greyed chip and no
+  // reason. The label is what a screen reader announces alongside `disabled`.
+  assert.match(reviewSource, /'Already checked in'/, 'the subtext was dropped');
+  assert.match(
+    reviewSource,
+    /already checked in to this event/,
+    'the accessible name no longer says why it cannot be pressed',
+  );
 });
 
 // ---------------------------------------------------------------------------

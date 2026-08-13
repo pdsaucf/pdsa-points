@@ -33,10 +33,22 @@ export const ACCOUNTS = {
 // Somebody with no account at all, for the "no profile row" branch of the guard.
 export const UNKNOWN_EMAIL = 'stranger@example.com';
 
+// Slugs and ids match supabase/migrations/20260811101300_seed_2026_2027.sql, so
+// a rule copied off this mock is the same rule the seed describes. Volunteering
+// is the one that does not count toward the point total, which is the verified
+// behaviour of the old Total column (docs/00-spreadsheet-findings.md).
 const CATEGORIES = [
-  { id: 'c0000000-0000-4000-a000-000000000001', slug: 'gbms', name: 'GBMs', unit: 'event_count', unit_label: null, sort_order: 1 },
-  { id: 'c0000000-0000-4000-a000-000000000002', slug: 'volunteering', name: 'Volunteering', unit: 'hours', unit_label: 'hour', sort_order: 2 },
-  { id: 'c0000000-0000-4000-a000-000000000005', slug: 'socials', name: 'Socials', unit: 'event_count', unit_label: null, sort_order: 3 },
+  { id: 'c0000000-0000-4000-a000-000000000001', slug: 'gbms', name: 'GBMs', unit: 'event_count', unit_label: null, sort_order: 10, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-000000000002', slug: 'volunteering', name: 'Volunteering', unit: 'hours', unit_label: 'hour', sort_order: 20, counts_toward_point_total: false },
+  { id: 'c0000000-0000-4000-a000-000000000005', slug: 'socials', name: 'Socials', unit: 'event_count', unit_label: null, sort_order: 30, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-000000000009', slug: 'tabling', name: 'Tabling', unit: 'event_count', unit_label: null, sort_order: 40, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-00000000000a', slug: 'journal-club', name: 'Journal Club', unit: 'event_count', unit_label: null, sort_order: 50, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-00000000000c', slug: 'media-speaking', name: 'Media Speaking', unit: 'event_count', unit_label: null, sort_order: 60, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-00000000000b', slug: 'pdsa-post', name: 'PDSA Post', unit: 'event_count', unit_label: null, sort_order: 70, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-00000000000d', slug: 'media-writing', name: 'Media Writing', unit: 'event_count', unit_label: null, sort_order: 80, counts_toward_point_total: true },
+  // Already retired. It is what the dead "President Workshops" tab in the old
+  // spreadsheet became: nothing measures it, and nothing may delete it either.
+  { id: 'c0000000-0000-4000-a000-0000000000ff', slug: 'president-workshops', name: 'President Workshops', unit: 'event_count', unit_label: null, sort_order: 90, counts_toward_point_total: true, archived_at: '2026-06-01T00:00:00.000Z' },
 ];
 
 const EVENTS = [
@@ -122,6 +134,31 @@ const LAST_NAMES = [
   'Pereira', 'Dubois', 'Mbeki',
 ];
 
+/*
+  Members who clear every requirement except GBMs.
+
+  WHY THEY EXIST. Everyone else's credit follows a single strength dial, so the
+  GBMs cut, the Socials cut and the Tabling cut all land on exactly the same
+  people: nobody is held back by GBMs alone. A preview built on that roster
+  reads the same number whatever the GBMs threshold is set to, which makes
+  "lowering a threshold lets more members through" unfalsifiable. It cannot go
+  red when the preview is broken, because it cannot go green when it works.
+
+  These six sit between the two values the check uses. They fail at 9 and pass
+  at 3, and they pass everything else, so the GBMs threshold is the only thing
+  between them and Honorary. Names are deliberately nothing like "Abby Cato" or
+  "Tobias Renner": those two are ranked against the whole roster in
+  verify-admin.mjs, and a near miss here would change what that screen offers.
+*/
+const NEARLY = [
+  ['Wren', 'Vasquez'],
+  ['Kojo', 'Boateng'],
+  ['Margit', 'Halvorsen'],
+  ['Sunil', 'Bhattacharya'],
+  ['Ilse', 'Vandenberg'],
+  ['Pemba', 'Dorjee'],
+];
+
 function buildMembers() {
   const members = NAMED.map(([id, first, last, email]) => ({
     id,
@@ -155,10 +192,45 @@ function buildMembers() {
     });
   }
 
+  NEARLY.forEach(([first, last], i) => {
+    members.push({
+      id: `m2000000-0000-4000-a000-${String(i + 1).padStart(12, '0')}`,
+      first_name: first,
+      last_name: last,
+      preferred_name: null,
+      email: `${first.toLowerCase()}.${last.toLowerCase()}@knights.ucf.edu`,
+      ucf_nid: null,
+      display_name: `${first} ${last}`,
+      notes: null,
+      merged_into_id: null,
+      created_at: '2026-08-01T12:00:00.000Z',
+      archived_at: null,
+    });
+  });
+
   return members;
 }
 
 const DUPLICATE_HASH = 'sha256-shared-between-two-events-0000000000000000';
+
+// The rules. Two published sets: this year's, which is what "Edit as draft"
+// clones, and last year's, which is what "Copy from" copies.
+const SET_CURRENT = 'd0000000-0000-4000-a000-000000000001';
+const SET_PAST = 'd0000000-0000-4000-a000-000000000002';
+
+const NODES = {
+  root: 'f0000000-0000-4000-a000-000000000000',
+  gbms: 'f0000000-0000-4000-a000-000000000001',
+  volunteering: 'f0000000-0000-4000-a000-000000000002',
+  socials: 'f0000000-0000-4000-a000-000000000003',
+  tabling: 'f0000000-0000-4000-a000-000000000004',
+  editorial: 'f0000000-0000-4000-a000-000000000005',
+  speaking: 'f0000000-0000-4000-a000-000000000006',
+  writing: 'f0000000-0000-4000-a000-000000000007',
+  pastRoot: 'f1000000-0000-4000-a000-000000000000',
+  pastGbms: 'f1000000-0000-4000-a000-000000000001',
+  pastSocials: 'f1000000-0000-4000-a000-000000000002',
+};
 
 /**
  * Rebuilt from scratch on every /__mock/reset, so one check cannot leave state
@@ -356,6 +428,176 @@ export function buildDatabase() {
     addEvidence(record.id, 'shirt_photo');
   });
 
+  // ---- credit already earned, so the preview has something to count --------
+  //
+  // The requirements screen is worth nothing without real numbers behind it:
+  // "45 of 355 would qualify" is the safety rail, and a mock with no approved
+  // history would show 0 of 55 whatever anybody typed, which would let a broken
+  // preview pass unnoticed.
+  //
+  // Most members get a strength from their position on the roster, and their
+  // credit follows it, because a member who comes to everything comes to
+  // everything.
+  //
+  // One dial is not enough on its own. It makes every threshold cut the roster
+  // in the same place, so no single threshold is ever the one holding anybody
+  // back, and moving one alone cannot move the count. The NEARLY cohort breaks
+  // that: strong everywhere, short on GBMs, and nowhere near the dial.
+
+  const historyEvents = [];
+  const addHistory = (title, categoryId, index, mode = 'fixed') => {
+    const id = `h0000000-0000-4000-a000-${String(historyEvents.length + 1).padStart(12, '0')}`;
+    historyEvents.push({
+      id,
+      academic_year_id: YEAR_CURRENT,
+      title: `${title} ${index}`,
+      occurred_on: '2026-08-05',
+      location: null,
+      is_published: true,
+      category_id: categoryId,
+      credit_mode: mode,
+    });
+    return id;
+  };
+
+  const CAT = Object.fromEntries(CATEGORIES.map((c) => [c.slug, c.id]));
+
+  const gbmEvents = Array.from({ length: 12 }, (_, i) => addHistory('GBM', CAT.gbms, i + 1));
+  const socialEvents = Array.from({ length: 9 }, (_, i) => addHistory('Social', CAT.socials, i + 1));
+  const tablingEvents = Array.from({ length: 3 }, (_, i) => addHistory('Tabling', CAT.tabling, i + 1));
+  const volunteeringEvent = addHistory('Volunteering', CAT.volunteering, 1, 'from_submission');
+  const journalEvent = addHistory('Journal Club', CAT['journal-club'], 1);
+  const speakingEvent = addHistory('Media Speaking', CAT['media-speaking'], 1);
+  const postEvent = addHistory('PDSA Post', CAT['pdsa-post'], 1);
+  const writingEvent = addHistory('Media Writing', CAT['media-writing'], 1);
+
+  let historySeq = 0;
+  const approve = (memberId, eventId, value = null) => {
+    historySeq += 1;
+    attendance.push({
+      id: `r2000000-0000-4000-a000-${String(historySeq).padStart(12, '0')}`,
+      event_id: eventId,
+      member_id: memberId,
+      claimed_name: null,
+      claimed_email: null,
+      status: 'approved',
+      source: 'self_checkin',
+      submitted_value: value,
+      flags: [],
+      submitted_at: '2026-08-05T18:00:00.000Z',
+      created_at: '2026-08-05T18:00:00.000Z',
+      reviewed_by: USERS.officer,
+      reviewed_at: '2026-08-05T20:00:00.000Z',
+      review_note: null,
+    });
+  };
+
+  members.forEach((member, index) => {
+    if (member.id === notEnrolled.id) return;
+    if (member.id.startsWith('m2000000')) return; // the NEARLY cohort, below
+    const strength = index % 10;
+
+    for (let n = 0; n < strength + 3; n += 1) approve(member.id, gbmEvents[n]);
+    for (let n = 0; n < strength; n += 1) approve(member.id, socialEvents[n]);
+    for (let n = 0; n < Math.floor(strength / 3); n += 1) approve(member.id, tablingEvents[n]);
+    if (strength > 0) approve(member.id, volunteeringEvent, strength * 5);
+    if (strength >= 4) approve(member.id, journalEvent);
+    if (strength === 3) approve(member.id, speakingEvent);
+    if (strength >= 7) approve(member.id, postEvent);
+    if (strength >= 5 && strength < 7) approve(member.id, writingEvent);
+  });
+
+  /*
+    The NEARLY cohort. Every number here is chosen against a threshold in the
+    published set below, so changing one without the other makes them pointless
+    rather than merely different:
+
+      GBMs          5   under the 9 the rule asks for, over the 3 it is lowered
+                        to. This is the straddle, and the only one.
+      Socials       6   exactly the 6 the rule asks for.
+      Tabling       2   exactly the 2 the rule asks for.
+      Volunteering 30   over the 25 the rule asks for.
+      Journal Club  1   carries Speaking, which asks for 1.
+      PDSA Post     1   carries Writing, which asks for 1.
+  */
+  for (const member of members.filter((m) => m.id.startsWith('m2000000'))) {
+    for (let n = 0; n < 5; n += 1) approve(member.id, gbmEvents[n]);
+    for (let n = 0; n < 6; n += 1) approve(member.id, socialEvents[n]);
+    for (let n = 0; n < 2; n += 1) approve(member.id, tablingEvents[n]);
+    approve(member.id, volunteeringEvent, 30);
+    approve(member.id, journalEvent);
+    approve(member.id, postEvent);
+  }
+
+  // ---- the rules themselves -----------------------------------------------
+
+  const sets = [
+    {
+      id: SET_CURRENT,
+      academic_year_id: YEAR_CURRENT,
+      name: 'Honorary Member',
+      version: 1,
+      status: 'published',
+      root_node_id: NODES.root,
+      published_at: '2026-08-01T12:00:00.000Z',
+      created_at: '2026-08-01T12:00:00.000Z',
+    },
+    {
+      id: SET_PAST,
+      academic_year_id: YEAR_PAST,
+      name: 'Honorary Member',
+      version: 1,
+      status: 'published',
+      root_node_id: NODES.pastRoot,
+      published_at: '2025-08-01T12:00:00.000Z',
+      created_at: '2025-08-01T12:00:00.000Z',
+    },
+  ];
+
+  const nodes = [];
+  const nodeCategories = [];
+  const addNode = (id, setId, parentId, type, label, order, extra = {}) => {
+    nodes.push({
+      id,
+      requirement_set_id: setId,
+      parent_id: parentId,
+      type,
+      label,
+      sort_order: order,
+      min_children_passing: null,
+      min_value: null,
+      term_id: null,
+      ...extra,
+    });
+    return id;
+  };
+  const measures = (nodeId, ...categoryIds) => {
+    for (const categoryId of categoryIds) nodeCategories.push({ node_id: nodeId, category_id: categoryId });
+  };
+
+  addNode(NODES.root, SET_CURRENT, null, 'group', 'Honorary Member', 0);
+  addNode(NODES.gbms, SET_CURRENT, NODES.root, 'threshold', 'GBMs', 10, { min_value: 9 });
+  measures(NODES.gbms, CAT.gbms);
+  addNode(NODES.volunteering, SET_CURRENT, NODES.root, 'threshold', 'Volunteering', 20, { min_value: 25 });
+  measures(NODES.volunteering, CAT.volunteering);
+  addNode(NODES.socials, SET_CURRENT, NODES.root, 'threshold', 'Socials', 30, { min_value: 6 });
+  measures(NODES.socials, CAT.socials);
+  addNode(NODES.tabling, SET_CURRENT, NODES.root, 'threshold', 'Tabling', 40, { min_value: 2 });
+  measures(NODES.tabling, CAT.tabling);
+  addNode(NODES.editorial, SET_CURRENT, NODES.root, 'group', 'Editorial Points', 50);
+  // The compound editorial rule: two categories under one requirement.
+  addNode(NODES.speaking, SET_CURRENT, NODES.editorial, 'threshold', 'Speaking', 10, { min_value: 1 });
+  measures(NODES.speaking, CAT['journal-club'], CAT['media-speaking']);
+  addNode(NODES.writing, SET_CURRENT, NODES.editorial, 'threshold', 'Writing', 20, { min_value: 1 });
+  measures(NODES.writing, CAT['pdsa-post'], CAT['media-writing']);
+
+  // Last year, deliberately shorter, so a copy of it is visibly a copy.
+  addNode(NODES.pastRoot, SET_PAST, null, 'group', 'Honorary Member', 0);
+  addNode(NODES.pastGbms, SET_PAST, NODES.pastRoot, 'threshold', 'GBMs', 10, { min_value: 8 });
+  measures(NODES.pastGbms, CAT.gbms);
+  addNode(NODES.pastSocials, SET_PAST, NODES.pastRoot, 'threshold', 'Socials', 20, { min_value: 5 });
+  measures(NODES.pastSocials, CAT.socials);
+
   // ---- accounts and claims ------------------------------------------------
 
   const profiles = [
@@ -400,9 +642,23 @@ export function buildDatabase() {
       { id: YEAR_PAST, label: '2025-2026', starts_on: '2025-08-01', ends_on: '2026-05-31', is_current: false },
     ],
     terms: [],
-    categories: CATEGORIES.map((c) => ({ ...c, counts_toward_point_total: true, archived_at: null })),
-    events: EVENTS.map((e) => ({ ...e })),
-    event_categories: EVENT_CATEGORIES.map((ec) => ({ ...ec })),
+    categories: CATEGORIES.map((c) => ({ archived_at: null, ...c })),
+    events: [
+      ...EVENTS.map((e) => ({ ...e })),
+      ...historyEvents.map(({ category_id, credit_mode, ...event }) => event),
+    ],
+    event_categories: [
+      ...EVENT_CATEGORIES.map((ec) => ({ ...ec })),
+      ...historyEvents.map((event) => ({
+        event_id: event.id,
+        category_id: event.category_id,
+        credit_mode: event.credit_mode,
+        fixed_credit: 1,
+      })),
+    ],
+    requirement_sets: sets,
+    requirement_nodes: nodes,
+    requirement_node_categories: nodeCategories,
     members,
     member_enrollments: enrollments,
     profiles,
@@ -429,4 +685,14 @@ export const IDS = {
   RECORD_PREVIOUSLY_REJECTED: 'r0000000-0000-4000-a000-000000000008',
   CLAIM_WITH_NAME: 'k0000000-0000-4000-a000-000000000001',
   CLAIM_WITHOUT_NAME: 'k0000000-0000-4000-a000-000000000002',
+
+  SET_CURRENT,
+  SET_PAST,
+  NODES,
+  CATEGORY_GBMS: 'c0000000-0000-4000-a000-000000000001',
+  CATEGORY_VOLUNTEERING: 'c0000000-0000-4000-a000-000000000002',
+  CATEGORY_SOCIALS: 'c0000000-0000-4000-a000-000000000005',
+  CATEGORY_JOURNAL_CLUB: 'c0000000-0000-4000-a000-00000000000a',
+  CATEGORY_MEDIA_SPEAKING: 'c0000000-0000-4000-a000-00000000000c',
+  CATEGORY_RETIRED: 'c0000000-0000-4000-a000-0000000000ff',
 };

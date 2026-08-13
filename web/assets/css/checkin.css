@@ -325,7 +325,46 @@ body {
 }
 
 .submit {
-  margin-top: 0.25rem;
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   The action bar
+
+   On a 320x568 screen a photo event runs to about 708px, which puts Check in
+   roughly 110px below the fold. The button is the whole point of the page, and
+   somebody holding up the queue one handed should not have to scroll to find
+   it, so on a screen shorter than the form it sticks to the bottom edge.
+
+   STICKY RATHER THAN FIXED, DELIBERATELY. A sticky element keeps its box in
+   the flow, so it reserves its own space and can never sit on top of the field
+   above it. That matters most with the keyboard up, which is exactly when
+   somebody is typing their name into the field directly above this bar. A
+   fixed bar would need a matching bottom padding somewhere else to avoid that,
+   and the two would drift apart the first time either changed.
+
+   The bleed and the opaque background are what let content scroll underneath
+   it without showing through the gap beside the button's rounded corners.
+   --------------------------------------------------------------------------- */
+.actions {
+  margin: 0.25rem 0 0;
+}
+
+/*
+  Taller than the form: nothing to solve, so the bar stays in the flow exactly
+  where it was. 375x812 and up are untouched by everything below.
+*/
+@media (max-height: 46rem) {
+  .actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    /* Out to the screen edges, past the 1rem gutter on .app. */
+    margin: 0.25rem -1rem 0;
+    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
 }
 
 /* A ring that clears the control on both schemes, and never only a colour

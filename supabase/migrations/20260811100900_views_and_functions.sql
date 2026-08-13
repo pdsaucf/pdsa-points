@@ -171,6 +171,20 @@ create view v_member_category_totals with (security_invoker = true) as
 -- recursive CTE, then the levels are walked from the leaves upward, carrying
 -- the verdicts in a jsonb map. That keeps the function usable from inside a
 -- lateral join over every member without leaving per-call state behind.
+--
+-- Two things here are defences, not decoration.
+--
+-- Every child lookup is scoped to this set. A group's target is its child
+-- count, and requirement_nodes.parent_id can address any row in the table, so
+-- without the scope a node in some officer's half-built draft could raise the
+-- published set's target and fail everybody. Migration 07 has a trigger that
+-- refuses to create such a link at all; this makes the arithmetic ignore one
+-- even if it exists.
+--
+-- A set with nodes but no top-level node raises instead of returning nothing.
+-- That state means the tree loops or points outside itself, and the honest
+-- answer is an error: returning zero rows makes v_member_status quietly report
+-- that nobody in the club is honorary.
 -- ---------------------------------------------------------------------------
 
 create or replace function fn_member_requirement_status(
@@ -252,6 +266,13 @@ begin
   ) d;
 
   if v_max_depth is null then
+    if exists (
+      select 1 from requirement_nodes n where n.requirement_set_id = p_requirement_set_id
+    ) then
+      raise exception
+        'Requirement set % has requirements but no top level one, so its tree is broken.',
+        p_requirement_set_id using errcode = 'PDS11';
+    end if;
     return;   -- an empty set evaluates to no rows
   end if;
 
@@ -269,7 +290,9 @@ begin
       )
       select n.id,
              n.min_children_passing,
-             (select count(*) from requirement_nodes k where k.parent_id = n.id) as child_count
+             (select count(*) from requirement_nodes k
+               where k.parent_id = n.id
+                 and k.requirement_set_id = p_requirement_set_id) as child_count
       from requirement_nodes n
       join tree on tree.id = n.id
       where n.requirement_set_id = p_requirement_set_id
@@ -285,7 +308,8 @@ begin
                )
           into v_children_passed
         from requirement_nodes k
-        where k.parent_id = r.id;
+        where k.parent_id = r.id
+          and k.requirement_set_id = p_requirement_set_id;
 
         v_target := coalesce(r.min_children_passing, r.child_count);
 
@@ -318,6 +342,12 @@ comment on function fn_member_requirement_status(uuid, uuid) is
 -- 9.4 The published set for a year
 -- ---------------------------------------------------------------------------
 
+-- Archived sets are the record of what earlier members were judged against, so
+-- this deliberately reads only 'published'. The unique index in migration 07
+-- allows one published set per year, and publish_requirement_set() archives the
+-- outgoing one in the same transaction, so this can return at most one row.
+-- The ordering is kept as a tiebreak that can no longer be reached, because a
+-- function that silently picks a row is worse than one that cannot.
 create or replace function fn_published_requirement_set(p_academic_year_id uuid)
 returns uuid
 language sql
@@ -328,7 +358,7 @@ as $$
   from requirement_sets rs
   where rs.academic_year_id = p_academic_year_id
     and rs.status = 'published'
-  order by rs.version desc
+  order by rs.published_at desc nulls last, rs.version desc
   limit 1
 $$;
 

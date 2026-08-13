@@ -77,6 +77,12 @@
           <button id="tab-claims" type="button" class="tab" aria-selected="false" aria-controls="panel-claims">
             Account claims <span id="tab-claims-count" class="pill">0</span>
           </button>
+          <button id="tab-requirements" type="button" class="tab" aria-selected="false" aria-controls="panel-requirements">
+            Requirements
+          </button>
+          <button id="tab-categories" type="button" class="tab" aria-selected="false" aria-controls="panel-categories">
+            Categories
+          </button>
         </nav>
 
         <div class="topbar-right">
@@ -160,6 +166,107 @@
 
         <div id="claims-list" class="flagged-list"></div>
       </main>
+
+      <!--
+        The requirements editor. The whole product exists so this screen can
+        change the rules without a deploy, which is why it reads as sentences
+        and why every number on it is an input rather than a constant.
+
+        The words "node", "threshold" and "schema" appear nowhere below, and
+        mock/verify-requirements.mjs holds that line.
+      -->
+      <main id="panel-requirements" class="panel-view" hidden>
+        <section id="loading-requirements" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading requirements…</p>
+        </section>
+
+        <div id="requirements-header" class="rule-header" hidden>
+          <div class="rule-header-main">
+            <h2 id="set-status" class="rule-status"></h2>
+            <p id="set-meta" class="muted small"></p>
+          </div>
+          <div class="rule-header-actions">
+            <label class="visually-hidden" for="set-select">Version</label>
+            <select id="set-select" class="select select-quiet" hidden></select>
+            <label class="visually-hidden" for="copy-from">Copy from</label>
+            <select id="copy-from" class="select select-quiet" hidden></select>
+            <button id="copy-from-run" type="button" class="button" hidden>Copy</button>
+            <button id="edit-as-draft" type="button" class="button" hidden>Edit as draft</button>
+            <button id="publish" type="button" class="button button-primary" hidden>Publish</button>
+          </div>
+        </div>
+
+        <p id="publish-note" class="muted small rule-note" hidden></p>
+
+        <div id="set-problems" class="notice notice-block rule-problems" hidden>
+          <p id="set-problems-title" class="notice-title"></p>
+          <ul id="set-problems-list" class="problem-list"></ul>
+        </div>
+
+        <div id="requirements-body" hidden>
+          <p id="root-sentence" class="rule-sentence"></p>
+          <div id="rule-tree" class="rule-tree"></div>
+          <div id="rule-footer" class="rule-footer">
+            <button id="add-requirement" type="button" class="button">Add requirement</button>
+            <button id="add-group" type="button" class="button">Add group</button>
+          </div>
+
+          <div class="preview-bar">
+            <p id="preview-line" class="preview-line" aria-live="polite"></p>
+            <p id="save-state" class="muted small" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <section id="empty-requirements" class="empty" hidden>
+          <h2 class="empty-title">No requirements for this year</h2>
+          <p class="muted">Nobody can qualify until a set is published.</p>
+          <button id="start-draft" type="button" class="button button-primary">Start a draft</button>
+        </section>
+      </main>
+
+      <!--
+        Categories are what requirements measure. They archive and never
+        delete, so every reference from a rule or an event stays resolvable
+        (invariant 4).
+      -->
+      <main id="panel-categories" class="panel-view" hidden>
+        <form id="category-form" class="toolbar" novalidate>
+          <div class="toolbar-field">
+            <label class="label" for="category-name">New category</label>
+            <input
+              id="category-name"
+              class="input"
+              type="text"
+              maxlength="60"
+              autocomplete="off"
+              placeholder="Journal Club"
+            />
+          </div>
+          <div class="toolbar-field toolbar-field-narrow">
+            <label class="label" for="category-unit">Measured in</label>
+            <select id="category-unit" class="select">
+              <option value="event_count">Events</option>
+              <option value="hours">Hours</option>
+              <option value="points">Points</option>
+            </select>
+          </div>
+          <button id="category-add" type="submit" class="button button-primary">Add</button>
+        </form>
+        <p id="category-error" class="field-error" hidden></p>
+
+        <section id="loading-categories" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading categories…</p>
+        </section>
+
+        <div id="category-list" class="category-list"></div>
+
+        <section id="retired-zone" class="zone" hidden>
+          <h2 class="zone-title">Retired</h2>
+          <div id="category-retired" class="category-list"></div>
+        </section>
+      </main>
     </div>
 
     <!-- Rejection always captures a reason. -->
@@ -211,6 +318,36 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button type="submit" class="button button-primary">Add and link</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      Publishing freezes the version that is live now and starts judging every
+      member against this one, so it is confirmed rather than done on a click.
+    -->
+    <dialog id="publish-dialog" class="dialog">
+      <form id="publish-form" method="dialog" novalidate>
+        <h2 id="publish-title" class="dialog-title"></h2>
+        <p id="publish-meta" class="muted small"></p>
+        <p id="publish-preview" class="publish-preview"></p>
+        <ul id="publish-problems" class="problem-list" hidden></ul>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="publish-confirm" type="submit" class="button button-primary">Publish</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Retiring a category a rule still measures needs the officer to see it. -->
+    <dialog id="retire-dialog" class="dialog">
+      <form id="retire-form" method="dialog" novalidate>
+        <h2 id="retire-title" class="dialog-title"></h2>
+        <p id="retire-meta" class="muted small"></p>
+        <ul id="retire-uses" class="problem-list"></ul>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="retire-confirm" type="submit" class="button button-danger">Retire</button>
         </div>
       </form>
     </dialog>

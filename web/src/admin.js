@@ -31,10 +31,16 @@ import { select } from './rest.js';
 import { describeOfficer, describeSignIn } from './officer-errors.js';
 import { createReview } from './review.js';
 import { createClaims } from './claims.js';
+import { createRequirements } from './requirements.js';
+import { createCategories } from './categories.js';
 import { $, h, announce, setHidden } from './ui.js';
 
 const REVIEWING_ROLES = ['officer', 'admin'];
 const READING_ROLES = ['officer', 'admin', 'viewer'];
+
+// The four panels, in tab order. Each one is mounted once and reloaded when the
+// year changes, so switching tabs costs nothing.
+const TABS = ['review', 'claims', 'requirements', 'categories'];
 
 const el = {};
 const app = {
@@ -44,6 +50,8 @@ const app = {
   year: null,
   review: null,
   claims: null,
+  requirements: null,
+  categories: null,
   tab: 'review',
 };
 
@@ -290,9 +298,18 @@ function context() {
     get year() {
       return app.year;
     },
+    // The requirements screen copies a set from another year, and names the
+    // year a category's rules live in, so it needs the whole calendar.
+    get years() {
+      return app.years;
+    },
     userId: app.profile.user_id,
     role: app.profile.role,
     canReview: REVIEWING_ROLES.includes(app.profile.role),
+    // Publishing a requirement set is the one action an officer is refused.
+    // req_sets_write in migration 11 admits an officer for drafts only, so the
+    // screen says so rather than offering a button the database will turn down.
+    canPublish: app.profile.role === 'admin',
     fail,
     note,
     clearMessage,
@@ -303,10 +320,10 @@ function context() {
 
 function selectTab(tab) {
   app.tab = tab;
-  el.tabReview.setAttribute('aria-selected', String(tab === 'review'));
-  el.tabClaims.setAttribute('aria-selected', String(tab === 'claims'));
-  setHidden(el.panelReview, tab !== 'review');
-  setHidden(el.panelClaims, tab !== 'claims');
+  for (const name of TABS) {
+    el.tabs[name].setAttribute('aria-selected', String(tab === name));
+    setHidden(el.panels[name], tab !== name);
+  }
   clearMessage();
 }
 
@@ -328,9 +345,13 @@ function startApp() {
   const ctx = context();
   app.review = createReview(ctx);
   app.claims = createClaims(ctx);
+  app.requirements = createRequirements(ctx);
+  app.categories = createCategories(ctx);
 
   app.review.mount();
   app.claims.mount();
+  app.requirements.mount();
+  app.categories.mount();
 }
 
 // ---------------------------------------------------------------------------
@@ -356,12 +377,20 @@ function cacheElements() {
     deniedSignout: $('denied-signout'),
 
     yearSelect: $('year-select'),
-    tabReview: $('tab-review'),
-    tabClaims: $('tab-claims'),
+    tabs: {
+      review: $('tab-review'),
+      claims: $('tab-claims'),
+      requirements: $('tab-requirements'),
+      categories: $('tab-categories'),
+    },
+    panels: {
+      review: $('panel-review'),
+      claims: $('panel-claims'),
+      requirements: $('panel-requirements'),
+      categories: $('panel-categories'),
+    },
     tabReviewCount: $('tab-review-count'),
     tabClaimsCount: $('tab-claims-count'),
-    panelReview: $('panel-review'),
-    panelClaims: $('panel-claims'),
     who: $('who'),
     signout: $('signout'),
 
@@ -381,8 +410,9 @@ function wire() {
   el.signinForm.addEventListener('submit', onSignInSubmit);
   el.deniedSignout.addEventListener('click', endSession);
   el.signout.addEventListener('click', endSession);
-  el.tabReview.addEventListener('click', () => selectTab('review'));
-  el.tabClaims.addEventListener('click', () => selectTab('claims'));
+  for (const name of TABS) {
+    el.tabs[name].addEventListener('click', () => selectTab(name));
+  }
 
   el.yearSelect.addEventListener('change', () => {
     const year = app.years.find((y) => y.id === el.yearSelect.value);
@@ -390,6 +420,9 @@ function wire() {
     app.year = year;
     clearMessage();
     app.review?.reload();
+    // Requirements are scoped to the year in the top bar, so this is the one
+    // control that decides which rules are on screen.
+    app.requirements?.reload();
   });
 }
 

@@ -17,6 +17,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { atRule, declarations, rule } from './css-rules.mjs';
 
 const PORT = 8799;
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -324,6 +325,65 @@ await check('a PDS code arriving as HTTP 500 is shown at once, not retried', asy
 const { violations } = await api('/__mock/audit');
 await check('no unexpected nonce violations were recorded in the last run', () => {
   assert.deepEqual(violations, []);
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nCheck in stays on screen\n');
+// ---------------------------------------------------------------------------
+//
+// Measured at 320x568 on a photo event, the submit button used to sit at
+// bottom: 676px against a 568px viewport: 108px below the fold, on the
+// narrowest common phone, at the event type that needs a photo. It is the only
+// thing on the page that does anything.
+//
+// WHAT THESE CHECK, AND WHAT THEY DO NOT. Node has no layout engine and this
+// package has no dependencies, so nothing here measures a rendered box. They
+// assert the mechanism the fix is built on: the button lives in the action bar,
+// and the action bar sticks to the bottom of a short viewport. That catches the
+// ways this regresses in practice (the bar loses its stickiness, the button is
+// moved back out of it) without catching a case where the geometry drifts for
+// some third reason. See web/README.md.
+
+const checkinCss = await readFile(`${WEB_ROOT}assets/css/checkin.css`, 'utf8');
+const checkinHtml = await readFile(`${WEB_ROOT}c/index.html`, 'utf8');
+const shortScreen = atRule(checkinCss, /max-height/);
+
+await check('the submit button is inside the action bar', () => {
+  const bar = /<div class="actions">([\s\S]*?)<\/div>/.exec(checkinHtml);
+  assert.ok(bar, 'there is no action bar in c/index.html');
+  assert.match(bar[1], /id="submit-button"/, 'the submit button was moved out of the action bar');
+});
+
+await check('on a screen shorter than the form, the action bar sticks to the bottom', () => {
+  assert.ok(shortScreen, 'no max-height media query in checkin.css');
+  const decls = declarations(rule(checkinCss, '.actions', { scope: shortScreen }));
+  assert.equal(decls.get('position'), 'sticky', '.actions does not stick on a short screen');
+  assert.equal(decls.get('bottom'), '0', '.actions sticks, but not to the bottom edge');
+  // Pinned over content it has to be opaque, or the page shows through beside
+  // the button's rounded corners.
+  assert.ok(decls.get('background'), '.actions is see through while pinned');
+});
+
+await check('the action bar reserves its own space rather than floating over the form', () => {
+  // The keyboard comes up exactly when somebody is typing their name into the
+  // field above this bar. `fixed` is out of flow and would sit on top of it;
+  // `sticky` keeps its box, so it cannot cover anything. This is the whole
+  // reason the bar is sticky, so it is asserted rather than left as a comment.
+  const decls = declarations(rule(checkinCss, '.actions', { scope: shortScreen }));
+  assert.notEqual(decls.get('position'), 'fixed', 'a fixed bar covers the field above it');
+  assert.match(
+    decls.get('padding') ?? '',
+    /safe-area-inset-bottom/,
+    'the bar ignores the home indicator inset',
+  );
+});
+
+await check('a taller screen is left alone', () => {
+  // 375x812 measured fine before any of this and must stay untouched, so the
+  // sticky behaviour is confined to the media query rather than applied to
+  // .actions everywhere.
+  const always = declarations(rule(checkinCss, '.actions'));
+  assert.ok(!always.has('position'), '.actions sticks at every size, not just short ones');
 });
 
 server.close();

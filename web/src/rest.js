@@ -132,6 +132,23 @@ export async function patch(table, filters, body, options = {}) {
   });
 }
 
+/**
+ * DELETE, for the one screen that has any: the requirements editor, where
+ * removing a requirement removes a row.
+ *
+ * Same counting rule as patch(). A DELETE whose policy matches no row is a 200
+ * with an empty array, not an error, so every caller reads the length rather
+ * than assuming the row is gone. On a published set that is exactly what an
+ * officer's delete would come back as.
+ */
+export async function remove(table, filters, options = {}) {
+  return send(`/rest/v1/${table}${queryString({ filters, select: options.select })}`, {
+    method: 'DELETE',
+    prefer: options.prefer ?? 'return=representation',
+    opts: options,
+  });
+}
+
 /** An officer RPC. Same transport as the anonymous ones, with a token on it. */
 export async function callRpc(name, args, opts = {}) {
   const token = await accessToken();

@@ -8,7 +8,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { freshDb } from './helpers/db.mjs';
-import { loadFixture, MEMBERS, USERS, REQ_SET, YEAR_2026 } from './helpers/fixture.mjs';
+import {
+  loadFixture,
+  MEMBERS,
+  USERS,
+  REQ_SET,
+  YEAR_2025,
+  YEAR_2026,
+} from './helpers/fixture.mjs';
 
 let db;
 
@@ -199,10 +206,13 @@ test('a member cannot approve their own pending record', async () => {
 });
 
 test('an officer cannot publish a requirement set, an admin can', async () => {
+  // In 2025-2026, not the current year: 2026-2027 already holds a published
+  // set, and one_published_set_per_year would reject the admin's update below
+  // for a reason that has nothing to do with the policy under test.
   await db.exec(`
     insert into requirement_sets (id, academic_year_id, name, version, status)
     values ('d0000000-0000-4000-a000-0000000000aa',
-            '${YEAR_2026}', 'Draft Under Test', 1, 'draft');
+            '${YEAR_2025}', 'Draft Under Test', 1, 'draft');
   `);
 
   await db.as('authenticated', USERS.officer);

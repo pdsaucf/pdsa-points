@@ -152,9 +152,16 @@
           </button>
         </div>
 
-        <button id="submit-button" type="submit" class="button button-primary full submit">
-          <span id="submit-label">Check in</span>
-        </button>
+        <!--
+          The submit sits in its own bar so that on a short screen it can stick
+          to the bottom of the viewport instead of falling below the fold. See
+          .actions in checkin.css.
+        -->
+        <div class="actions">
+          <button id="submit-button" type="submit" class="button button-primary full submit">
+            <span id="submit-label">Check in</span>
+          </button>
+        </div>
       </form>
 
       <!-- 4. Done -->

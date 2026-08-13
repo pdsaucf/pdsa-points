@@ -221,10 +221,21 @@ create policy evidence_write_officer on attendance_evidence for all to authentic
 -- Requirements
 -- ---------------------------------------------------------------------------
 -- Everyone signed in can read the rules they are being judged by. Officers
--- may build and edit a draft. Only an admin may publish one, or touch a set
--- that is already published, which is what makes published sets immutable in
--- practice: the WITH CHECK below fails the moment an officer tries to set
--- status to anything but draft.
+-- may build and edit a draft. Only an admin may publish one, or touch the set
+-- row once it is published: the WITH CHECK below fails the moment an officer
+-- tries to set status to anything but draft.
+--
+-- The TREE of a set that is not a draft is closed to everybody, admins
+-- included. That is deliberate and it is not the same rule as the one above.
+-- A published set is the record of what members were judged against, and an
+-- admin quietly lowering a threshold on it would rewrite that record and
+-- change who is honorary with no version, no publish and no audit row. Nobody
+-- edits a published ruleset. They clone it, edit the draft, and publish, which
+-- is exactly what clone_requirement_set() and publish_requirement_set() do.
+--
+-- Those two RPCs are SECURITY DEFINER, so they own every write that these
+-- policies close off: the archive-and-publish transition, and inserting a
+-- whole tree into the fresh draft.
 -- ---------------------------------------------------------------------------
 
 grant select, insert, update, delete
@@ -238,23 +249,23 @@ create policy req_sets_write on requirement_sets for all to authenticated
 
 create policy req_nodes_read on requirement_nodes for select to authenticated using (true);
 create policy req_nodes_write on requirement_nodes for all to authenticated
-  using (fn_is_admin() or (fn_is_officer() and exists (
+  using (fn_is_officer() and exists (
     select 1 from requirement_sets rs
-    where rs.id = requirement_nodes.requirement_set_id and rs.status = 'draft')))
-  with check (fn_is_admin() or (fn_is_officer() and exists (
+    where rs.id = requirement_nodes.requirement_set_id and rs.status = 'draft'))
+  with check (fn_is_officer() and exists (
     select 1 from requirement_sets rs
-    where rs.id = requirement_nodes.requirement_set_id and rs.status = 'draft')));
+    where rs.id = requirement_nodes.requirement_set_id and rs.status = 'draft'));
 
 create policy req_node_cats_read on requirement_node_categories for select to authenticated using (true);
 create policy req_node_cats_write on requirement_node_categories for all to authenticated
-  using (fn_is_admin() or (fn_is_officer() and exists (
+  using (fn_is_officer() and exists (
     select 1 from requirement_nodes n
     join requirement_sets rs on rs.id = n.requirement_set_id
-    where n.id = requirement_node_categories.node_id and rs.status = 'draft')))
-  with check (fn_is_admin() or (fn_is_officer() and exists (
+    where n.id = requirement_node_categories.node_id and rs.status = 'draft'))
+  with check (fn_is_officer() and exists (
     select 1 from requirement_nodes n
     join requirement_sets rs on rs.id = n.requirement_set_id
-    where n.id = requirement_node_categories.node_id and rs.status = 'draft')));
+    where n.id = requirement_node_categories.node_id and rs.status = 'draft'));
 
 -- ---------------------------------------------------------------------------
 -- Operations
@@ -308,6 +319,14 @@ grant execute on function merge_members(uuid, uuid)            to authenticated;
 grant execute on function purge_evidence(int)                  to authenticated;
 grant execute on function purge_orphaned_uploads()             to authenticated;
 
+-- The requirements editor. Each one carries its own role check: validate,
+-- preview and clone need an officer, publish needs an admin. The grant only
+-- decides who may call them at all.
+grant execute on function validate_requirement_set(uuid) to authenticated;
+grant execute on function preview_requirement_set(uuid)  to authenticated;
+grant execute on function clone_requirement_set(uuid)    to authenticated;
+grant execute on function publish_requirement_set(uuid)  to authenticated;
+
 -- Reading progress. The evaluator carries its own authorization check, so a
 -- member calling it directly for somebody else's id is refused rather than
 -- quietly handed zeroes.
@@ -318,6 +337,12 @@ grant execute on function fn_current_member_id()                   to authentica
 grant execute on function fn_is_admin()                            to authenticated;
 grant execute on function fn_is_officer()                          to authenticated;
 grant execute on function fn_is_staff()                            to authenticated;
+-- The assert forms tell a caller nothing the fn_is_* predicates above do not
+-- already tell them. They are granted because validate_requirement_set() and
+-- preview_requirement_set() run as the caller rather than as the owner, so the
+-- role check they perform is executed with the caller's own privileges.
+grant execute on function fn_assert_officer()                      to authenticated;
+grant execute on function fn_assert_admin()                        to authenticated;
 grant execute on function fn_can_view_member(uuid)                 to authenticated;
 grant execute on function fn_assert_can_view_member(uuid)          to authenticated;
 grant execute on function fn_setting_int(text, int)                to authenticated;

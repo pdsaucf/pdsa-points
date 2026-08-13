@@ -19,6 +19,8 @@
 --   PDS08  unknown requirement set
 --   PDS09  rate limited
 --   PDS10  check-in has closed (too late, past any grace period)
+--   PDS11  requirement tree is not a tree (a cycle, or a parent in another set)
+--   PDS12  requirement set failed validation, so it was not published
 --
 -- PDS02 AND PDS10 ARE DELIBERATELY SEPARATE CODES. They were one code, and
 -- the page had to read the message text to tell them apart, which meant
@@ -970,3 +972,465 @@ begin
   );
 end
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 10.10 validate_requirement_set(set_id)
+-- ---------------------------------------------------------------------------
+-- Everything an officer can build in the editor that would not work, one row
+-- per problem, nothing when the set is sound.
+--
+-- The `code` is the contract, the same bargain as the PDS codes above: the
+-- editor pins a message to a node by matching on it, so codes are stable and a
+-- new distinction means a new code rather than a reworded sentence.
+--
+-- Every row here BLOCKS publishing, so only real breakage belongs in it. A
+-- rule that is merely unusual (a threshold of zero, a group needing none of
+-- its children) is a lint, and lints live in v_config_warnings where they
+-- inform without stopping anybody. What is listed below is a ruleset that
+-- cannot be satisfied, cannot be evaluated, or is evaluated differently from
+-- how it reads on screen.
+--
+--   no_root                     nothing at the top
+--   multiple_roots              several tops, so "the" rule is ambiguous
+--   root_not_group              the top is a threshold, so nothing under it counts
+--   root_node_mismatch          the set does not point at its own top node,
+--                               which is what v_member_status reads for honorary
+--   orphan_node                 in the set but not under its root, so it counts
+--                               toward nothing
+--   cycle                       a requirement contains itself
+--   foreign_parent              sits under a node from another ruleset
+--   foreign_child               a node from another ruleset sits under this one,
+--                               inflating this group's child count
+--   threshold_without_category  measures nothing, so it can never be met
+--   archived_category           measures a category nobody can earn any more
+--   threshold_with_children     nodes nested under a threshold, which the
+--                               evaluator never looks at
+--   term_year_mismatch          counts a term from a different academic year,
+--                               so no event can ever fall inside it
+--   empty_group                 a group with nothing under it passes vacuously
+--   group_min_exceeds_children  needs more children than it has
+-- ---------------------------------------------------------------------------
+
+create or replace function validate_requirement_set(p_set_id uuid)
+returns table (code text, node_id uuid, message text)
+language plpgsql
+stable
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_set    requirement_sets;
+  v_anchor uuid;
+begin
+  perform fn_assert_officer();
+
+  select * into v_set from requirement_sets rs where rs.id = p_set_id;
+  if v_set.id is null then
+    raise exception 'Unknown requirement set %.', p_set_id using errcode = 'PDS08';
+  end if;
+
+  -- Reachability is measured from the node the SET points at, because that is
+  -- the node v_member_status reads to decide honorary. Anything the walk does
+  -- not arrive at is not part of the verdict, whatever it looks like on screen.
+  -- When the set points nowhere usable, fall back to the top-level nodes, so a
+  -- set that has simply lost its root pointer reports that one problem rather
+  -- than reporting every node in it as an orphan.
+  select n.id into v_anchor
+  from requirement_nodes n
+  where n.id = v_set.root_node_id and n.requirement_set_id = p_set_id;
+
+  return query
+  with recursive reachable as (
+    select n.id
+    from requirement_nodes n
+    where n.requirement_set_id = p_set_id
+      and case when v_anchor is not null then n.id = v_anchor else n.parent_id is null end
+    union
+    select c.id
+    from requirement_nodes c
+    join reachable r on c.parent_id = r.id
+    where c.requirement_set_id = p_set_id
+  ),
+  -- Every ancestor of every node, capped, so a cycle stops instead of running
+  -- forever. A node that turns up among its own ancestors is in one.
+  ancestry as (
+    select n.id as start_id, n.parent_id as at, 1 as depth
+    from requirement_nodes n
+    where n.requirement_set_id = p_set_id and n.parent_id is not null
+    union all
+    select a.start_id, p.parent_id, a.depth + 1
+    from ancestry a
+    join requirement_nodes p on p.id = a.at
+    where p.parent_id is not null and a.depth < 64
+  ),
+  cyclic as (
+    select distinct a.start_id from ancestry a where a.at = a.start_id
+  ),
+  nodes as (
+    select n.* from requirement_nodes n where n.requirement_set_id = p_set_id
+  ),
+  roots as (
+    select n.id, n.label, n.type from nodes n where n.parent_id is null
+  ),
+  child_counts as (
+    select n.id,
+           (select count(*) from requirement_nodes k
+             where k.parent_id = n.id and k.requirement_set_id = p_set_id) as children
+    from nodes n
+  )
+
+  select 'no_root'::text, null::uuid,
+         'This ruleset has nothing at the top. Add a group and put the requirements inside it.'::text
+  where not exists (select 1 from roots)
+
+  union all
+  select 'multiple_roots', r.id,
+         'Requirement "' || r.label || '" sits at the top alongside others. '
+         || 'Everything must sit inside one group.'
+  from roots r
+  where (select count(*) from roots) > 1
+
+  union all
+  select 'root_not_group', r.id,
+         'The top of this ruleset is a single requirement, not a group, '
+         || 'so nothing else in it is counted.'
+  from roots r
+  where r.type <> 'group'
+
+  union all
+  select 'root_node_mismatch', (select r.id from roots r),
+         'This ruleset does not point at its own top-level group, '
+         || 'so nobody would come out honorary.'
+  where (select count(*) from roots) = 1
+    and v_set.root_node_id is distinct from (select r.id from roots r)
+
+  union all
+  select 'cycle', c.start_id,
+         'Requirement "' || n.label || '" contains itself.'
+  from cyclic c
+  join nodes n on n.id = c.start_id
+
+  union all
+  select 'orphan_node', n.id,
+         'Requirement "' || n.label || '" is not attached to the top-level group, '
+         || 'so it is never counted.'
+  from nodes n
+  where not exists (select 1 from reachable r where r.id = n.id)
+    and not exists (select 1 from cyclic c where c.start_id = n.id)
+
+  union all
+  select 'foreign_parent', n.id,
+         'Requirement "' || n.label || '" sits under a group from a different ruleset.'
+  from nodes n
+  join requirement_nodes p on p.id = n.parent_id
+  where p.requirement_set_id <> p_set_id
+
+  union all
+  select 'foreign_child', n.id,
+         'A requirement from a different ruleset sits under "' || n.label || '", '
+         || 'so this group counts something that is not part of it.'
+  from nodes n
+  where exists (
+    select 1 from requirement_nodes k
+    where k.parent_id = n.id and k.requirement_set_id <> p_set_id
+  )
+
+  union all
+  select 'threshold_without_category', n.id,
+         'Requirement "' || n.label || '" measures no categories, so nobody can meet it.'
+  from nodes n
+  where n.type = 'threshold'
+    and not exists (
+      select 1 from requirement_node_categories rnc where rnc.node_id = n.id
+    )
+
+  union all
+  select 'archived_category', n.id,
+         'Requirement "' || n.label || '" measures "' || c.name || '", which is archived.'
+  from nodes n
+  join requirement_node_categories rnc on rnc.node_id = n.id
+  join categories c on c.id = rnc.category_id
+  where c.archived_at is not null
+
+  union all
+  select 'threshold_with_children', n.id,
+         'Requirement "' || n.label || '" has requirements nested under it. '
+         || 'Only a group can hold other requirements.'
+  from nodes n
+  join child_counts cc on cc.id = n.id
+  where n.type = 'threshold' and cc.children > 0
+
+  union all
+  select 'term_year_mismatch', n.id,
+         'Requirement "' || n.label || '" counts only "' || t.label
+         || '", which belongs to a different academic year, so nothing counts toward it.'
+  from nodes n
+  join terms t on t.id = n.term_id
+  where t.academic_year_id <> v_set.academic_year_id
+
+  union all
+  select 'empty_group', n.id,
+         'Group "' || n.label || '" has nothing in it, so it passes for everybody.'
+  from nodes n
+  join child_counts cc on cc.id = n.id
+  where n.type = 'group' and cc.children = 0
+
+  union all
+  select 'group_min_exceeds_children', n.id,
+         'Group "' || n.label || '" needs ' || n.min_children_passing || ' of '
+         || cc.children || ', so nobody can meet it.'
+  from nodes n
+  join child_counts cc on cc.id = n.id
+  where n.type = 'group'
+    and n.min_children_passing is not null
+    and n.min_children_passing > cc.children
+
+  order by 1, 2;
+end
+$$;
+
+comment on function validate_requirement_set(uuid) is
+  'Every reason a ruleset would not work, one row per problem, none when it is sound. The code column is a stable contract the editor matches on.';
+
+-- ---------------------------------------------------------------------------
+-- 10.11 preview_requirement_set(set_id)
+-- ---------------------------------------------------------------------------
+-- "If I published this, who would qualify?" One row per node including the
+-- root, so the editor can put a count against every line and not just the
+-- bottom one.
+--
+-- It runs on a DRAFT, which is the whole point: the number has to be on screen
+-- before anybody presses publish, not after. Nothing is written and nothing is
+-- cached, so it reflects the attendance approved a second ago.
+--
+-- The denominator is the active roster for the set's own academic year.
+-- Inactive and alumni enrollments are excluded: they are not people this
+-- ruleset is deciding anything about, and counting them would make every
+-- number look worse than it is.
+-- ---------------------------------------------------------------------------
+
+create or replace function preview_requirement_set(p_set_id uuid)
+returns table (node_id uuid, label text, passing int, total int)
+language plpgsql
+stable
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_year  uuid;
+  v_total int;
+begin
+  perform fn_assert_officer();
+
+  select rs.academic_year_id into v_year
+  from requirement_sets rs
+  where rs.id = p_set_id;
+
+  if v_year is null then
+    raise exception 'Unknown requirement set %.', p_set_id using errcode = 'PDS08';
+  end if;
+
+  select count(*) into v_total
+  from member_enrollments me
+  where me.academic_year_id = v_year and me.status = 'active';
+
+  return query
+  select n.id,
+         n.label,
+         coalesce(p.passing, 0)::int,
+         v_total::int
+  from requirement_nodes n
+  left join (
+    select f.node_id as nid,
+           count(*) filter (where f.passed)::int as passing
+    from member_enrollments me
+    cross join lateral fn_member_requirement_status(me.member_id, p_set_id) f
+    where me.academic_year_id = v_year and me.status = 'active'
+    group by f.node_id
+  ) p on p.nid = n.id
+  where n.requirement_set_id = p_set_id
+  order by n.sort_order, n.label;
+end
+$$;
+
+comment on function preview_requirement_set(uuid) is
+  'How many of this years active members would pass each node of a set, draft or published. The safety rail in front of the publish button.';
+
+-- ---------------------------------------------------------------------------
+-- 10.12 clone_requirement_set(set_id)
+-- ---------------------------------------------------------------------------
+-- Editing a published ruleset means copying it. This is that copy: a new draft
+-- at the next version, carrying the whole tree and the categories attached to
+-- it.
+--
+-- The tree is self-referential, so the copy is done in two passes over a map
+-- of old id to new id. Pass one writes every node with no parent at all, which
+-- means the order rows come back in does not matter and a detached node an
+-- officer left mid-edit is copied rather than dropped. Pass two sets every
+-- parent from the map.
+--
+-- The bug being avoided is a clone whose nodes still point at the ORIGINAL's
+-- nodes. That is not a cosmetic mistake: parent_id can address any row in the
+-- table, so a mis-remapped parent would make edits to the draft change the
+-- child count of the published set, and members would silently be judged
+-- against a ruleset nobody published. Migration 07's trigger now refuses such
+-- a link outright, and this function never has to be trusted about it.
+-- ---------------------------------------------------------------------------
+
+create or replace function clone_requirement_set(p_set_id uuid)
+returns uuid
+language plpgsql
+volatile
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_src     requirement_sets;
+  v_new_id  uuid;
+  v_version int;
+  v_map     jsonb := '{}'::jsonb;   -- old node id -> new node id
+  v_new     uuid;
+  r         record;
+begin
+  perform fn_assert_officer();
+
+  select * into v_src from requirement_sets rs where rs.id = p_set_id;
+  if v_src.id is null then
+    raise exception 'Unknown requirement set %.', p_set_id using errcode = 'PDS08';
+  end if;
+
+  -- version + 1, taken from the highest version that exists rather than from
+  -- the source, so cloning last year's published v3 twice does not collide
+  -- with the draft v4 the first clone created.
+  select coalesce(max(rs.version), 0) + 1 into v_version
+  from requirement_sets rs
+  where rs.academic_year_id = v_src.academic_year_id
+    and rs.name = v_src.name;
+
+  insert into requirement_sets (academic_year_id, name, version, status)
+  values (v_src.academic_year_id, v_src.name, v_version, 'draft')
+  returning id into v_new_id;
+
+  for r in
+    select n.* from requirement_nodes n where n.requirement_set_id = p_set_id
+  loop
+    v_new := gen_random_uuid();
+    v_map := jsonb_set(v_map, array[r.id::text], to_jsonb(v_new));
+
+    insert into requirement_nodes
+      (id, requirement_set_id, parent_id, type, label, sort_order,
+       min_children_passing, min_value, term_id)
+    values
+      (v_new, v_new_id, null, r.type, r.label, r.sort_order,
+       r.min_children_passing, r.min_value, r.term_id);
+
+    insert into requirement_node_categories (node_id, category_id)
+    select v_new, rnc.category_id
+    from requirement_node_categories rnc
+    where rnc.node_id = r.id;
+  end loop;
+
+  update requirement_nodes c
+  set parent_id = (v_map ->> src.parent_id::text)::uuid
+  from requirement_nodes src
+  where src.requirement_set_id = p_set_id
+    and src.parent_id is not null
+    and c.id = (v_map ->> src.id::text)::uuid;
+
+  update requirement_sets s
+  set root_node_id = (v_map ->> v_src.root_node_id::text)::uuid
+  where s.id = v_new_id
+    and v_src.root_node_id is not null;
+
+  perform fn_audit('clone_requirement_set', 'requirement_set', v_new_id,
+                   jsonb_build_object('cloned_from', p_set_id,
+                                      'version', v_version,
+                                      'nodes', jsonb_array_length(
+                                        coalesce(jsonb_path_query_array(v_map, '$.keyvalue().key'),
+                                                 '[]'::jsonb))));
+  return v_new_id;
+end
+$$;
+
+comment on function clone_requirement_set(uuid) is
+  'Copies a set and its whole tree into a new draft at the next version, remapping every parent link. Cloning is how a published ruleset is edited.';
+
+-- ---------------------------------------------------------------------------
+-- 10.13 publish_requirement_set(set_id)
+-- ---------------------------------------------------------------------------
+-- Validate, archive the outgoing set, publish this one. One transaction, so
+-- there is no instant at which the year has two published sets or none.
+--
+-- Admin only, matching the RLS in migration 11: an officer builds and edits
+-- drafts, and publishing is the moment a ruleset starts deciding who is
+-- honorary.
+--
+-- Refusing an invalid set is the point of the validation call. A ruleset with
+-- an empty threshold or a group needing more children than it has is one
+-- nobody can satisfy, and it would go unnoticed until an officer wondered why
+-- the honorary list was empty in April.
+-- ---------------------------------------------------------------------------
+
+create or replace function publish_requirement_set(p_set_id uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_set      requirement_sets;
+  v_problems text;
+  v_archived uuid;
+  v_at       timestamptz;
+begin
+  perform fn_assert_admin();
+
+  select * into v_set from requirement_sets rs where rs.id = p_set_id;
+  if v_set.id is null then
+    raise exception 'Unknown requirement set %.', p_set_id using errcode = 'PDS08';
+  end if;
+
+  if v_set.status <> 'draft' then
+    raise exception 'Only a draft can be published. That set is %.', v_set.status
+      using errcode = 'PDS03';
+  end if;
+
+  select string_agg(distinct v.code, ', ' order by v.code) into v_problems
+  from validate_requirement_set(p_set_id) v;
+
+  if v_problems is not null then
+    raise exception 'This ruleset cannot be published: %.', v_problems
+      using errcode = 'PDS12';
+  end if;
+
+  -- Whatever was published for this year stops being published first, so the
+  -- one-per-year index is never briefly violated. Archived, not deleted: it is
+  -- the record of what members were judged against until now.
+  update requirement_sets rs
+  set status = 'archived'
+  where rs.academic_year_id = v_set.academic_year_id
+    and rs.status = 'published'
+    and rs.id <> p_set_id
+  returning rs.id into v_archived;
+
+  v_at := now();
+
+  update requirement_sets rs
+  set status = 'published', published_at = v_at
+  where rs.id = p_set_id;
+
+  perform fn_audit('publish_requirement_set', 'requirement_set', p_set_id,
+                   jsonb_build_object('version', v_set.version,
+                                      'academic_year_id', v_set.academic_year_id,
+                                      'archived_set_id', v_archived));
+
+  return jsonb_build_object(
+    'requirement_set_id', p_set_id,
+    'version',            v_set.version,
+    'published_at',       v_at,
+    'archived_set_id',    v_archived
+  );
+end
+$$;
+
+comment on function publish_requirement_set(uuid) is
+  'Validates, archives the years outgoing set and publishes this one in a single transaction. Admin only.';
