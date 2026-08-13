@@ -27,25 +27,51 @@
        url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2');
 }
 
+/* ---------------------------------------------------------------------------
+   Brand tokens, sampled from the club logo.
+
+   THE BRAND HALF OF THIS BLOCK IS DUPLICATED VERBATIM IN admin.css. The two
+   halves of the product have to look like one product, and there is no build
+   step to share a file between them, so the guard against drift is a check
+   rather than an import: mock/verify-admin.mjs compares the two token blocks
+   value for value, in both schemes, and fails if either moves alone.
+
+   GOLD IS A FILL, NEVER A FOREGROUND. #e6c845 is 1.57:1 on this page
+   background, so it can carry text only as a background with --gold-ink on
+   top, and it can carry a line only when that line is thick enough to read as
+   a bar. Nothing meaningful is ever gold and gold alone. Checked in
+   mock/verify-admin.mjs.
+
+   --danger, --ok and --focus stay outside the brand. A green tick means
+   approved, not PDSA. They are warmed to sit on the new neutrals and are
+   otherwise left where they were.
+   --------------------------------------------------------------------------- */
 :root {
   --font: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
 
-  --bg: #f7f8fa;
+  --bg: #faf9f6;
   --surface: #ffffff;
-  --ink: #14181f;
-  --ink-muted: #5b6472;
-  --line: #d9dde5;
-  --line-strong: #b9c0cc;
+  --ink: #2a2721;
+  --ink-muted: #6b6456;
+  --line: #e3ded3;
+  --line-strong: #c9c1b2;
 
-  --accent: #0b3d69;
+  --accent: #59328f;
   --accent-ink: #ffffff;
-  --accent-soft: #e7f0f8;
+  --accent-soft: #f0eaf7;
+
+  --gold: #e6c845;
+  --gold-ink: #2a2721;
+  --gold-soft: #fbf3d8;
 
   --danger: #8a1f16;
-  --danger-soft: #fdeceb;
+  --danger-soft: #fbeae6;
   --ok: #1c5c34;
-  --ok-soft: #e7f4ec;
+  --ok-soft: #eaf3ea;
 
+  /* Blue, deliberately. It is 4.66:1 on --bg and 4.91:1 on --surface, and the
+     2px outline-offset below means the ring is always separated from the
+     purple button by a strip of page background rather than sitting on it. */
   --focus: #1573c4;
 
   --radius: 12px;
@@ -54,21 +80,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e1218;
-    --surface: #161c25;
-    --ink: #edf1f6;
-    --ink-muted: #a3adbb;
-    --line: #2b3542;
-    --line-strong: #3d4959;
+    --bg: #14120e;
+    --surface: #1e1b16;
+    --ink: #f2efe8;
+    --ink-muted: #a8a091;
+    --line: #332e26;
+    --line-strong: #4a4338;
 
-    --accent: #4a9fe0;
-    --accent-ink: #08121c;
-    --accent-soft: #17293a;
+    /* The accent and its ink swap roles in dark, as they already did. */
+    --accent: #b79bdf;
+    --accent-ink: #1b1226;
+    --accent-soft: #2a2135;
+
+    --gold: #e6c845;
+    --gold-ink: #241f14;
+    --gold-soft: #2e2716;
 
     --danger: #ffb3ab;
-    --danger-soft: #34191a;
+    --danger-soft: #33191a;
     --ok: #9fe0b8;
-    --ok-soft: #14291d;
+    --ok-soft: #16271b;
 
     --focus: #7cc0f5;
   }
@@ -105,6 +136,28 @@ body {
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  /* A bar, not a hairline: 3px so the gold reads as a deliberate edge rather
+     than as a border nobody can see. It carries no meaning, only the brand. */
+  border-top: 3px solid var(--gold);
+}
+
+/* ---------------------------------------------------------------------------
+   The emblem
+
+   Fixed pixels rather than rem, because this is a picture and it should not
+   grow with somebody's text size setting and start pushing the form down. The
+   box is reserved by the width and height attributes in the markup as well, so
+   nothing shifts when the image lands.
+   --------------------------------------------------------------------------- */
+.brand-row {
+  display: flex;
+  margin: 0 0 0.75rem;
+}
+
+.emblem {
+  display: block;
+  width: 40px;
+  height: 40px;
 }
 
 .app {

@@ -6,8 +6,12 @@
     <title>Review | PDSA Points</title>
     <meta name="description" content="Officer review queue for PDSA UCF points." />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#0b1f33" />
+    <meta name="theme-color" content="#59328f" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14120e" media="(prefers-color-scheme: dark)" />
     <meta name="robots" content="noindex" />
+    <!-- Officers pin this page, so it gets a home screen icon as well. -->
+    <link rel="icon" href="../assets/img/pdsa-emblem-96.png" sizes="96x96" type="image/png" />
+    <link rel="apple-touch-icon" href="../assets/img/pdsa-emblem-256.png" />
     <link rel="stylesheet" href="../assets/css/admin.css" />
   </head>
   <body>
@@ -19,7 +23,23 @@
 
     <!-- 2. Sign in -->
     <main id="view-signin" class="view view-narrow" hidden>
-      <h1 class="brand-mark">PDSA Points</h1>
+      <!--
+        The one screen that carries the full lockup. It is 250KB, it is shown
+        once per officer per session, and it is the only place where the
+        wordmark is large enough to read. alt is empty because the heading
+        underneath already names the product to a screen reader.
+      -->
+      <h1 class="brand-mark brand-lockup">
+        <img
+          class="lockup"
+          src="../assets/img/pdsa-logo-512.png"
+          width="512"
+          height="561"
+          decoding="async"
+          alt=""
+        />
+        PDSA Points
+      </h1>
       <form id="signin-form" class="panel" novalidate>
         <h2 class="panel-title">Officer sign-in</h2>
         <p class="muted small">We email you a sign-in link. There is no password.</p>
@@ -65,7 +85,18 @@
     <div id="view-app" hidden>
       <header class="topbar">
         <div class="topbar-left">
-          <span class="brand">PDSA Points</span>
+          <!-- alt is empty: the wordmark is right there in text beside it. -->
+          <span class="brand">
+            <img
+              class="brand-emblem"
+              src="../assets/img/pdsa-emblem-96.png"
+              width="26"
+              height="26"
+              decoding="async"
+              alt=""
+            />
+            PDSA Points
+          </span>
           <label class="visually-hidden" for="year-select">Academic year</label>
           <select id="year-select" class="select select-quiet"></select>
         </div>

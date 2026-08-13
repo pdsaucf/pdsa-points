@@ -18,6 +18,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { atRule, declarations, rule } from './css-rules.mjs';
+import {
+  BRAND_TOKENS,
+  CONTRAST,
+  SEMANTIC_CONTRAST,
+  asRatio,
+  goldMisuse,
+  images,
+  ratio,
+  schemes,
+} from './brand.mjs';
 
 const PORT = 8799;
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -384,6 +394,117 @@ await check('a taller screen is left alone', () => {
   // .actions everywhere.
   const always = declarations(rule(checkinCss, '.actions'));
   assert.ok(!always.has('position'), '.actions sticks at every size, not just short ones');
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe brand\n');
+// ---------------------------------------------------------------------------
+//
+// A colour that is one point too light still paints, and an emblem that grew
+// by forty pixels still loads. Neither shows up as a broken page, so both are
+// measured here rather than looked at. See mock/brand.mjs.
+
+const checkinTokens = schemes(checkinCss);
+
+await check('checkin.css declares every brand token, in both schemes', () => {
+  for (const [scheme, tokens] of Object.entries(checkinTokens)) {
+    for (const token of BRAND_TOKENS) {
+      assert.ok(tokens.has(token), `${token} is not declared for the ${scheme} scheme`);
+    }
+  }
+});
+
+for (const [scheme, tokens] of Object.entries(checkinTokens)) {
+  await check(`${scheme}: every pairing on this page clears its contrast floor`, () => {
+    let measured = 0;
+    for (const [ink, ground, floor] of [...CONTRAST, ...SEMANTIC_CONTRAST]) {
+      // This page has no --warn and no --surface-sunken. Pairs it cannot make
+      // are not its problem.
+      if (!tokens.has(ink) || !tokens.has(ground)) continue;
+      measured += 1;
+      const got = ratio(tokens.get(ink), tokens.get(ground));
+      assert.ok(
+        got >= floor,
+        `${ink} on ${ground} is ${asRatio(got)}, and the floor is ${asRatio(floor)}`,
+      );
+    }
+    assert.ok(measured >= 10, `only ${measured} pairs were measurable, so the tokens moved`);
+  });
+}
+
+await check('gold is a fill or a bar, never a foreground', () => {
+  // #e6c845 is 1.57:1 on --bg. Set as a colour it is unreadable, and set as a
+  // hairline it is a line nobody can see carrying whatever it was meant to say.
+  const misuse = goldMisuse(checkinCss);
+  assert.deepEqual(
+    misuse,
+    [],
+    misuse.map((m) => `${m.property}: ${m.value} (${m.why})`).join('; '),
+  );
+});
+
+await check('the focus ring is drawn clear of the control, not on top of it', () => {
+  // The ring is blue on a purple button: 1.88:1 against the fill, which would
+  // be invisible if the two ever touched. outline-offset is what stops that,
+  // by putting a strip of page background between them, and the ring itself is
+  // measured against the page above. Lose the offset and the ring on the one
+  // button that matters goes with it.
+  const decls = declarations(
+    rule(checkinCss, ':where(a, button, input, label.button, [tabindex]):focus-visible'),
+  );
+  assert.ok(decls.size, 'no focus-visible rule in checkin.css');
+  const offset = Number.parseFloat(decls.get('outline-offset') ?? '0');
+  assert.ok(offset >= 2, `outline-offset is ${decls.get('outline-offset')}, so the ring can touch the fill`);
+  assert.match(decls.get('outline') ?? '', /var\(--focus\)/, 'the ring is not drawn in --focus');
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe emblem\n');
+// ---------------------------------------------------------------------------
+
+await check('the emblem is on the page, above the form', () => {
+  // Somebody scans a QR code on a table and is asked for their name and a
+  // photograph. The emblem is the only thing telling them the page is ours.
+  assert.match(checkinHtml, /<img[^>]*pdsa-emblem-96\.png/, 'no emblem on the check-in page');
+  const emblemAt = checkinHtml.indexOf('pdsa-emblem-96.png');
+  const formAt = checkinHtml.indexOf('id="view-form"');
+  assert.ok(emblemAt !== -1 && emblemAt < formAt, 'the emblem is below the form');
+});
+
+await check('the check-in page never loads the full lockup', () => {
+  // 250KB, on venue wifi, with the whole room on it at once. The wordmark is
+  // unreadable at this size anyway.
+  assert.doesNotMatch(checkinHtml, /pdsa-logo-512/, 'the 512 lockup is on the check-in page');
+  assert.doesNotMatch(checkinCss, /pdsa-logo-512/, 'the 512 lockup is loaded from checkin.css');
+});
+
+await check('the emblem stays small enough not to push Check in down the screen', () => {
+  const declared = declarations(rule(checkinCss, '.emblem'));
+  const rendered = Number.parseFloat(declared.get('height') ?? '0');
+  assert.ok(rendered > 0 && rendered <= 48, `.emblem renders at ${declared.get('height')}`);
+});
+
+await check('every image reserves its box before it loads', () => {
+  // No width and height means the page reflows when the image lands, which on
+  // this page moves the button somebody is already reaching for.
+  //
+  // Only images with a src in the markup. #photo-preview is filled from
+  // whatever the camera returns, so it has no size to declare here, and its
+  // box is bounded by the stylesheet instead.
+  for (const tag of images(checkinHtml).filter((tag) => /\ssrc="/.test(tag))) {
+    assert.match(tag, /\swidth="\d+"/, `an <img> has no width: ${tag}`);
+    assert.match(tag, /\sheight="\d+"/, `an <img> has no height: ${tag}`);
+  }
+});
+
+await check('the page has an icon, and it costs nothing extra to fetch', () => {
+  // The same file the page already renders, so the icon is a cache hit rather
+  // than a second request at an event.
+  assert.match(
+    checkinHtml,
+    /<link[^>]+rel="icon"[^>]+pdsa-emblem-96\.png/,
+    'no favicon, or one pointing at a file the page does not already load',
+  );
 });
 
 server.close();

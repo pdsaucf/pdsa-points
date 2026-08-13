@@ -29,6 +29,16 @@ import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { IDS, UNKNOWN_EMAIL } from './admin-fixtures.mjs';
 import { declarations, rule } from './css-rules.mjs';
+import {
+  BRAND_TOKENS,
+  CONTRAST,
+  SEMANTIC_CONTRAST,
+  asRatio,
+  goldMisuse,
+  images,
+  ratio,
+  schemes,
+} from './brand.mjs';
 
 const PORT = 8798;
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -150,6 +160,132 @@ await check('no em dash anywhere in the officer sources', async () => {
   ]) {
     assert.ok(!source.includes(emDash), `${label} contains an em dash`);
   }
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe brand\n');
+// ---------------------------------------------------------------------------
+//
+// The check-in page and the queue are one product wearing one identity, and
+// there is no build step that could share a token block between two
+// stylesheets. So the guard against them drifting apart is this check rather
+// than an import. See mock/brand.mjs.
+
+const checkinCss = await readFile(`${WEB_ROOT}assets/css/checkin.css`, 'utf8');
+const checkinHtml = await readFile(`${WEB_ROOT}c/index.html`, 'utf8');
+const adminTokens = schemes(adminCss);
+const checkinTokens = schemes(checkinCss);
+
+for (const scheme of ['light', 'dark']) {
+  await check(`${scheme}: both stylesheets declare the same brand tokens`, () => {
+    const mine = adminTokens[scheme];
+    const theirs = checkinTokens[scheme];
+    for (const token of BRAND_TOKENS) {
+      assert.ok(mine.has(token), `admin.css does not declare ${token} for ${scheme}`);
+      assert.ok(theirs.has(token), `checkin.css does not declare ${token} for ${scheme}`);
+      assert.equal(
+        mine.get(token).trim().toLowerCase(),
+        theirs.get(token).trim().toLowerCase(),
+        `${token} is ${mine.get(token)} in admin.css and ${theirs.get(token)} in checkin.css`,
+      );
+    }
+  });
+}
+
+for (const [scheme, tokens] of Object.entries(adminTokens)) {
+  await check(`${scheme}: every pairing on this screen clears its contrast floor`, () => {
+    let measured = 0;
+    for (const [ink, ground, floor] of [...CONTRAST, ...SEMANTIC_CONTRAST]) {
+      if (!tokens.has(ink) || !tokens.has(ground)) continue;
+      measured += 1;
+      const got = ratio(tokens.get(ink), tokens.get(ground));
+      assert.ok(
+        got >= floor,
+        `${ink} on ${ground} is ${asRatio(got)}, and the floor is ${asRatio(floor)}`,
+      );
+    }
+    assert.ok(measured >= 18, `only ${measured} pairs were measurable, so the tokens moved`);
+  });
+}
+
+await check('gold is a fill or a bar, never a foreground', () => {
+  const misuse = goldMisuse(adminCss);
+  assert.deepEqual(
+    misuse,
+    [],
+    misuse.map((m) => `${m.property}: ${m.value} (${m.why})`).join('; '),
+  );
+});
+
+await check('the amber a flag is drawn in is not the gold the brand is drawn in', () => {
+  // A flagged card carries a --warn edge and the top bar carries a --gold one.
+  // If those ever become the same colour, the officer is reading brand as
+  // signal, on the one screen whose whole job is telling those apart.
+  for (const [scheme, tokens] of Object.entries(adminTokens)) {
+    assert.notEqual(
+      tokens.get('--warn').trim().toLowerCase(),
+      tokens.get('--gold').trim().toLowerCase(),
+      `--warn and --gold are the same colour in the ${scheme} scheme`,
+    );
+  }
+});
+
+await check('the focus ring is drawn clear of the control, not on top of it', () => {
+  // Blue on a purple button is 1.88:1. outline-offset is what keeps the two
+  // from touching, by leaving a strip of page between them.
+  const decls = declarations(rule(adminCss, ':where(a, button, input, select, [tabindex]):focus-visible'));
+  assert.ok(decls.size, 'no focus-visible rule in admin.css');
+  const offset = Number.parseFloat(decls.get('outline-offset') ?? '0');
+  assert.ok(offset >= 2, `outline-offset is ${decls.get('outline-offset')}, so the ring can touch the fill`);
+  assert.match(decls.get('outline') ?? '', /var\(--focus\)/, 'the ring is not drawn in --focus');
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe emblem and the lockup\n');
+// ---------------------------------------------------------------------------
+
+await check('the emblem is in the brand bar, and says nothing a screen reader already heard', () => {
+  const bar = /<span class="brand">([\s\S]*?)<\/span>/.exec(adminHtml);
+  assert.ok(bar, 'there is no brand bar in admin/index.html');
+  assert.match(bar[1], /pdsa-emblem-96\.png/, 'the emblem is not in the brand bar');
+  assert.match(bar[1], /alt=""/, 'the emblem repeats the wordmark that is right beside it');
+  assert.match(bar[1], /PDSA Points/, 'the wordmark left the brand bar');
+});
+
+await check('the full lockup is on the sign-in screen and nowhere else', () => {
+  // 250KB. It is worth it once, on the screen where the wordmark is large
+  // enough to read, and nowhere the officer goes repeatedly.
+  const signin = /<main id="view-signin"[\s\S]*?<\/main>/.exec(adminHtml);
+  assert.ok(signin, 'there is no sign-in screen');
+  assert.match(signin[0], /pdsa-logo-512\.png/, 'the sign-in screen does not carry the lockup');
+  assert.equal(
+    adminHtml.split('pdsa-logo-512').length - 1,
+    1,
+    'the 250KB lockup is used more than once',
+  );
+});
+
+await check('every image reserves its box before it loads', () => {
+  // Only images with a src in the markup: the queue builds its photo tiles at
+  // runtime from whatever Storage returns.
+  for (const [label, html] of [
+    ['admin/index.html', adminHtml],
+    ['c/index.html', checkinHtml],
+  ]) {
+    for (const tag of images(html).filter((tag) => /\ssrc="/.test(tag))) {
+      assert.match(tag, /\swidth="\d+"/, `${label}: an <img> has no width: ${tag}`);
+      assert.match(tag, /\sheight="\d+"/, `${label}: an <img> has no height: ${tag}`);
+    }
+  }
+});
+
+await check('officers who pin this page get an icon rather than a screenshot', () => {
+  assert.match(adminHtml, /<link[^>]+rel="icon"[^>]+pdsa-emblem-96\.png/, 'no favicon');
+  assert.match(
+    adminHtml,
+    /<link[^>]+rel="apple-touch-icon"[^>]+pdsa-emblem-256\.png/,
+    'no apple-touch-icon, so a pinned page gets a thumbnail of the screen',
+  );
 });
 
 await check('no jargon reaches the screen', () => {

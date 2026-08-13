@@ -12,7 +12,7 @@
 // relies on, which is a weaker claim than measuring the rendered result. Where
 // that distinction matters it is called out at the check itself.
 
-const withoutComments = (css) => String(css ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+export const withoutComments = (css) => String(css ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

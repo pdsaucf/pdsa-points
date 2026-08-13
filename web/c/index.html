@@ -6,12 +6,40 @@
     <title>Check in | PDSA UCF</title>
     <meta name="description" content="Check in to a PDSA UCF event." />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#0b1f33" />
+    <meta name="theme-color" content="#59328f" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14120e" media="(prefers-color-scheme: dark)" />
     <meta name="robots" content="noindex" />
+    <!--
+      The same file the page renders below, so the icon costs no extra request
+      on venue wifi. No apple-touch-icon here: nobody adds a check-in page to a
+      home screen, and the 256 would be 75KB for that.
+    -->
+    <link rel="icon" href="../assets/img/pdsa-emblem-96.png" sizes="96x96" type="image/png" />
     <link rel="stylesheet" href="../assets/css/checkin.css" />
   </head>
   <body>
     <main id="app" class="app">
+      <!--
+        Somebody scans a QR code taped to a table and lands here, on a page
+        that immediately asks for their name and a photograph. The emblem is
+        how they know the page is ours. It sits above every view, including
+        the refusals, and it is the small badge rather than the full lockup
+        because at this size the wordmark is unreadable anyway.
+
+        width and height are set here as well as in the stylesheet so the box
+        is reserved before the image arrives and nothing below it moves.
+      -->
+      <p class="brand-row">
+        <img
+          class="emblem"
+          src="../assets/img/pdsa-emblem-96.png"
+          width="40"
+          height="40"
+          decoding="async"
+          alt="PDSA UCF"
+        />
+      </p>
+
       <!-- 1. Loading -->
       <section id="view-loading" class="view view-centred" aria-busy="true">
         <p class="spinner" aria-hidden="true"></p>

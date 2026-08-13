@@ -32,55 +32,83 @@
        url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2');
 }
 
+/* ---------------------------------------------------------------------------
+   Brand tokens, sampled from the club logo.
+
+   THE BRAND HALF OF THIS BLOCK IS DUPLICATED VERBATIM IN checkin.css, for the
+   reason given at the top of this file: the check-in page and the queue are
+   one product. mock/verify-admin.mjs compares the two token blocks value for
+   value, in both schemes, so neither can move on its own.
+
+   GOLD IS A FILL, NEVER A FOREGROUND. #e6c845 is 1.57:1 on --bg, so it can
+   carry text only as a background with --gold-ink on top, and it can carry a
+   line only when that line is thick enough to read as a bar. Checked.
+
+   --danger, --ok, --warn and --focus stay outside the brand: a green tick
+   means approved, not PDSA. --warn is pushed a little further towards orange
+   than it was, so that an amber flag on a card and a gold brand bar on the
+   same screen cannot be read as the same signal.
+   --------------------------------------------------------------------------- */
 :root {
   --font: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
 
-  --bg: #f7f8fa;
+  --bg: #faf9f6;
   --surface: #ffffff;
-  --surface-sunken: #eef1f5;
-  --ink: #14181f;
-  --ink-muted: #5b6472;
-  --line: #d9dde5;
-  --line-strong: #b9c0cc;
+  --surface-sunken: #f2efe7;
+  --ink: #2a2721;
+  --ink-muted: #6b6456;
+  --line: #e3ded3;
+  --line-strong: #c9c1b2;
 
-  --accent: #0b3d69;
+  --accent: #59328f;
   --accent-ink: #ffffff;
-  --accent-soft: #e7f0f8;
+  --accent-soft: #f0eaf7;
+
+  --gold: #e6c845;
+  --gold-ink: #2a2721;
+  --gold-soft: #fbf3d8;
 
   --danger: #8a1f16;
-  --danger-soft: #fdeceb;
+  --danger-soft: #fbeae6;
   --ok: #1c5c34;
-  --ok-soft: #e7f4ec;
-  --warn: #7a4a06;
-  --warn-soft: #fdf1de;
+  --ok-soft: #eaf3ea;
+  --warn: #8a4708;
+  --warn-soft: #fbeedd;
 
+  /* Blue, deliberately. 4.66:1 on --bg, 4.91:1 on --surface, and the 2px
+     outline-offset keeps the ring off the purple rather than on it. */
   --focus: #1573c4;
 
   --radius: 12px;
   --tap: 44px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.05);
+  --shadow: 0 1px 2px rgba(42, 39, 33, 0.07), 0 4px 12px rgba(42, 39, 33, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e1218;
-    --surface: #161c25;
-    --surface-sunken: #101720;
-    --ink: #edf1f6;
-    --ink-muted: #a3adbb;
-    --line: #2b3542;
-    --line-strong: #3d4959;
+    --bg: #14120e;
+    --surface: #1e1b16;
+    --surface-sunken: #17140f;
+    --ink: #f2efe8;
+    --ink-muted: #a8a091;
+    --line: #332e26;
+    --line-strong: #4a4338;
 
-    --accent: #4a9fe0;
-    --accent-ink: #08121c;
-    --accent-soft: #17293a;
+    /* The accent and its ink swap roles in dark, as they already did. */
+    --accent: #b79bdf;
+    --accent-ink: #1b1226;
+    --accent-soft: #2a2135;
+
+    --gold: #e6c845;
+    --gold-ink: #241f14;
+    --gold-soft: #2e2716;
 
     --danger: #ffb3ab;
-    --danger-soft: #34191a;
+    --danger-soft: #33191a;
     --ok: #9fe0b8;
-    --ok-soft: #14291d;
-    --warn: #f0c98a;
-    --warn-soft: #2c2313;
+    --ok-soft: #16271b;
+    --warn: #efb37c;
+    --warn-soft: #2e2317;
 
     --focus: #7cc0f5;
     --shadow: none;
@@ -127,6 +155,28 @@ body {
   font-size: 1.25rem;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+/* ---------------------------------------------------------------------------
+   The lockup, on the sign-in screen only
+
+   width and height attributes are on the element, so the aspect ratio is known
+   before the 250KB arrives and the form below it does not jump. Capped by the
+   column it sits in rather than by a second fixed number.
+   --------------------------------------------------------------------------- */
+.brand-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.lockup {
+  display: block;
+  width: 180px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 512 / 561;
 }
 
 .body {
@@ -319,7 +369,10 @@ kbd {
   gap: 0.75rem 1.25rem;
   padding: 0.625rem 1.25rem;
   background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  /* A bar rather than a hairline. Gold cannot carry meaning on its own at this
+     contrast, and it is not being asked to: it separates the bar from the
+     queue and it says whose product this is. */
+  border-bottom: 3px solid var(--gold);
 }
 
 .topbar-left,
@@ -334,9 +387,18 @@ kbd {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+.brand-emblem {
+  display: block;
+  width: 26px;
+  height: 26px;
 }
 
 .tabs {
