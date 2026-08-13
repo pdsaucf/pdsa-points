@@ -122,11 +122,11 @@ await check('the admin page loads no font, script or style from anywhere else', 
   }
 });
 
-await check('Inter is self hosted with font-display: swap and a real fallback', () => {
-  assert.match(adminCss, /@font-face\s*{[^}]*font-family:\s*'Inter'/);
+await check('Public Sans is self hosted with font-display: swap and a real fallback', () => {
+  assert.match(adminCss, /@font-face\s*{[^}]*font-family:\s*'Public Sans'/);
   assert.match(adminCss, /font-display:\s*swap/);
-  assert.match(adminCss, /url\('\.\.\/fonts\/inter\/InterVariable\.woff2'\)/);
-  assert.match(adminCss, /--font:\s*Inter,\s*ui-sans-serif,\s*system-ui,\s*sans-serif/);
+  assert.match(adminCss, /url\('\.\.\/fonts\/public-sans\/PublicSans-VariableFont\.woff2'\)/);
+  assert.match(adminCss, /--font:\s*'Public Sans',\s*ui-sans-serif,\s*system-ui,\s*sans-serif/);
 });
 
 await check('digits line up: tabular-nums is on the body', () => {

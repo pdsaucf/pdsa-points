@@ -32,7 +32,7 @@ web/
 
   assets/css/checkin.css     the check-in stylesheet
   assets/css/admin.css       the admin stylesheet
-  assets/fonts/inter/        Inter goes here (see the README in that folder)
+  assets/fonts/public-sans/  Public Sans goes here (see the README in that folder)
   mock/                      a local stand-in for Supabase, for development
 ```
 
@@ -233,9 +233,10 @@ without the count the screen would report a link that never happened.
 
 - **No em dashes anywhere.** `grep -rn $'\xe2\x80\x94' web/` must return nothing.
   `npm run lint:no-em-dash` runs it.
-- **Inter, self hosted**, `font-display: swap`, no CDN and no Google Fonts link.
-  The woff2 file is not in the repo yet: see `assets/fonts/inter/README.md`. Both
-  pages fall back to `ui-sans-serif, system-ui, sans-serif` until it is added.
+- **Public Sans, self hosted**, `font-display: swap`, no CDN and no Google Fonts
+  link. The woff2 file is not in the repo yet: see
+  `assets/fonts/public-sans/README.md`. Both pages fall back to
+  `ui-sans-serif, system-ui, sans-serif` until it is added.
 - **Nothing anonymous touches a table.** Only the four RPCs, and the one Storage
   path a grant reserved. The admin screens are the opposite case and read tables
   directly, behind a login and behind RLS.

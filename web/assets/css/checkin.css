@@ -8,26 +8,27 @@
    --------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
-   Inter, self hosted.
+   Public Sans, self hosted.
 
    THE WOFF2 FILES ARE NOT IN THE REPO YET. Until somebody drops them into
-   web/assets/fonts/inter/, this @font-face resolves to nothing and every rule
-   below falls through to ui-sans-serif, which is the intended behaviour rather
-   than a broken page: font-display: swap means text is readable from the first
-   paint either way. See web/assets/fonts/inter/README.md for exactly which
-   files to add. No Google Fonts link, no CDN.
+   web/assets/fonts/public-sans/, this @font-face resolves to nothing and
+   every rule below falls through to ui-sans-serif, which is the intended
+   behaviour rather than a broken page: font-display: swap means text is
+   readable from the first paint either way. See
+   web/assets/fonts/public-sans/README.md for exactly which files to add.
+   No Google Fonts link, no CDN.
    --------------------------------------------------------------------------- */
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Public Sans';
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url('../fonts/inter/InterVariable.woff2') format('woff2-variations'),
-       url('../fonts/inter/InterVariable.woff2') format('woff2');
+  src: url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2-variations'),
+       url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2');
 }
 
 :root {
-  --font: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
 
   --bg: #f7f8fa;
   --surface: #ffffff;

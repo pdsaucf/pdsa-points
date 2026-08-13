@@ -17,8 +17,10 @@
 // in. In a browser it is always undefined, and the values below are what ship.
 const override = globalThis.__PDSA_CONFIG__ ?? {};
 
-export const SUPABASE_URL = override.SUPABASE_URL ?? 'https://YOUR-PROJECT-REF.supabase.co';
-export const SUPABASE_ANON_KEY = override.SUPABASE_ANON_KEY ?? 'YOUR-ANON-PUBLIC-KEY';
+export const SUPABASE_URL = override.SUPABASE_URL ?? 'https://psvodlthrxeimlezvmlq.supabase.co';
+export const SUPABASE_ANON_KEY =
+  override.SUPABASE_ANON_KEY ??
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzdm9kbHRocnhlaW1sZXp2bWxxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODQzNDAsImV4cCI6MjEwMjA2MDM0MH0.yHNQPbTSD-ENgcutpXSH8WaoaIO2ul8pq_80LWUMXNE';
 
 // The bucket the evidence photos go to. Matches supabase/migrations/…_storage.sql.
 export const EVIDENCE_BUCKET = 'evidence';

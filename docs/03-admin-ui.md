@@ -423,10 +423,11 @@ portal and the check-in page:
 - **No em dashes anywhere in the product.** Not in UI copy, button labels, empty states,
   error messages, email templates, or seed data. Use a colon, a comma, parentheses, or a
   second sentence.
-- **Inter throughout**, self-hosted from the repo as woff2 with `font-display: swap`.
-  No Google Fonts link and no CDN: the site is static on GitHub Pages and should carry
-  no external font dependency. `ui-sans-serif, system-ui, sans-serif` is the fallback
-  stack behind it.
+- **Public Sans throughout**, self-hosted from the repo as woff2 with
+  `font-display: swap`. Not Inter, which reads as the default choice for an
+  AI-generated interface. No Google Fonts link and no CDN: the site is static on
+  GitHub Pages and should carry no external font dependency.
+  `ui-sans-serif, system-ui, sans-serif` is the fallback stack behind it.
 
 These are enforced in [CLAUDE.md](../CLAUDE.md) so the implementer and reviewers hold
 the line.

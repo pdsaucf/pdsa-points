@@ -33,14 +33,17 @@ Do not substitute `printf '\u2014'`; it is not portable, and when it fails it ex
 an empty pattern that matches every line, which reads as a catastrophic failure rather
 than a clean pass.
 
-### Inter, self-hosted
+### Public Sans, self-hosted
 
-**Inter is the typeface throughout**, for the admin UI, the check-in page and the member
-portal. Self-host the woff2 files from the repo with `font-display: swap`. Do not link
-Google Fonts or any CDN: the site is static and must carry no external font dependency.
+**Public Sans is the typeface throughout**, for the admin UI, the check-in page and the
+member portal. Not Inter: Inter is the reflexive default for AI-generated interfaces to
+the point of being a tell, and Public Sans (the U.S. federal government's open-source
+system typeface) reads as plain civic software instead. Self-host the woff2 files from
+the repo with `font-display: swap`. Do not link Google Fonts or any CDN: the site is
+static and must carry no external font dependency.
 
 ```css
-font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+font-family: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
 ```
 
 Use `font-variant-numeric: tabular-nums` wherever digits line up in columns, which is

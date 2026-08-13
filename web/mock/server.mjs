@@ -500,10 +500,21 @@ async function serveStatic(req, res, url) {
   // every module under src/, is served exactly as it ships: the two constants
   // below are precisely what changes between this and a real project.
   if (pathname === '/config.js') {
+    // Matches by which exported constant a line assigns, not by the literal
+    // placeholder text: config.js is meant to carry real project values once
+    // an officer fills it in, and a match on 'YOUR-PROJECT-REF' would silently
+    // stop working the moment it does, sending this page's real fetches at
+    // whatever production project happens to be configured.
     const source = await readFile(join(WEB_ROOT, 'config.js'), 'utf8');
     const patched = source
-      .replace("'https://YOUR-PROJECT-REF.supabase.co'", `'http://localhost:${PORT}'`)
-      .replace("'YOUR-ANON-PUBLIC-KEY'", `'${ANON_KEY}'`);
+      .replace(
+        /export const SUPABASE_URL = .*;/,
+        `export const SUPABASE_URL = 'http://localhost:${PORT}';`,
+      )
+      .replace(
+        /export const SUPABASE_ANON_KEY =[\s\S]*?;/,
+        `export const SUPABASE_ANON_KEY = '${ANON_KEY}';`,
+      );
     res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' });
     res.end(patched);
     return;
