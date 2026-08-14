@@ -42,6 +42,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { failRpcOnce } from './admin-server.mjs';
 import { IDS } from './admin-fixtures.mjs';
 import { installDom } from './dom.mjs';
 
@@ -144,6 +145,7 @@ const sources = {
   'src/progress.js': await readFile(`${WEB_ROOT}src/progress.js`, 'utf8'),
   'src/roster.js': await readFile(`${WEB_ROOT}src/roster.js`, 'utf8'),
   'src/member.js': await readFile(`${WEB_ROOT}src/member.js`, 'utf8'),
+  'src/joined.js': await readFile(`${WEB_ROOT}src/joined.js`, 'utf8'),
   'src/csv.js': await readFile(`${WEB_ROOT}src/csv.js`, 'utf8'),
 };
 
@@ -845,6 +847,59 @@ await check('the roster is this year, searchable', () => {
   assert.equal(rosterRows().length, all);
 });
 
+await check('the same member shows one join date on the roster and on their own screen', async () => {
+  // THE SAME LABEL ABOUT THE SAME PERSON, ONE CLICK APART. "Joined" is the
+  // earliest enrollment across every year, falling back to when the row was
+  // created, which is what v_possible_duplicate_members.joined_a carries and
+  // what the roster column shows. A detail screen showing the date somebody
+  // was enrolled for THIS year is a second answer to "who has been here
+  // longer", which is the question a merge turns on.
+  //
+  // Read off the rendered cells rather than off the two queries, because it is
+  // the contradiction on screen that does the damage.
+  const enrollments = await select('member_enrollments', {
+    select: 'member_id,academic_year_id,joined_on',
+    filters: { member_id: `eq.${IDS.MEMBER_ABIGAIL}` },
+  });
+  assert.ok(
+    enrollments.length > 1,
+    'Abigail Catto is no longer on more than one year, so this proves nothing',
+  );
+  const thisYear = enrollments.find((row) => row.academic_year_id === IDS.YEAR_CURRENT);
+  const earliest = enrollments.map((row) => row.joined_on).sort()[0];
+  assert.notEqual(
+    thisYear.joined_on,
+    earliest,
+    'both her enrollments are on the same date, so this proves nothing',
+  );
+
+  const row = rosterRows().find((node) => node.textContent.includes('Abigail Catto'));
+  assert.ok(row, 'Abigail Catto is not on the roster');
+  const onRoster = row.querySelectorAll('td')[4].textContent.trim();
+  assert.ok(onRoster, 'the roster row carries no join date');
+
+  dom.click(row.querySelector('.board-name'));
+  await until(
+    () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === 'Abigail Catto',
+    'her own screen never drew',
+  );
+
+  const part = dom
+    .$('member-meta')
+    .textContent.split(' · ')
+    .find((piece) => piece.startsWith('Joined '));
+  assert.ok(part, 'her own screen carries no join date at all');
+  const onDetail = part.slice('Joined '.length).trim();
+  assert.equal(
+    onDetail,
+    onRoster,
+    `Joined ${onDetail} on her own screen and ${onRoster} on the roster`,
+  );
+
+  dom.click(dom.$('member-back'));
+  await until(() => !dom.$('panel-roster').hidden, 'Back did not return to the roster');
+});
+
 await check('Export CSV writes the three columns the import reads back', () => {
   downloads.length = 0;
   dom.click(dom.$('roster-export'));
@@ -932,6 +987,128 @@ await check('running it creates only the people nobody had', async () => {
   // Abby Cato was answered as Abigail Catto, who was already enrolled, so the
   // roster grew by exactly the one new person.
   assert.equal(rosterRows().length, rosterBefore + 1);
+});
+
+await check('a member from a previous year is enrolled, never written down twice', async () => {
+  // THE ONE A YEAR-FILTERED MATCHER CANNOT SEE. Rowan Vance is on the roster
+  // from last year and has no row for this one, so a matcher built from this
+  // year's enrollments finds nobody and the import treats them as new. Their
+  // address is taken, so that either fails the whole run on the unique index
+  // or, for a row with no address, quietly files a second person.
+  const before = (await adminAudit()).members;
+  const rosterBefore = rosterRows().length;
+
+  assert.equal(
+    before.filter((row) => row.display_name === 'Rowan Vance').length,
+    1,
+    'the fixture no longer holds exactly one returning member',
+  );
+  assert.equal(
+    rosterRows().some((row) => row.textContent.includes('Rowan Vance')),
+    false,
+    'the returning member is already on this years roster, so this proves nothing',
+  );
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile('first_name,last_name,email\nRowan,Vance,rowan.vance@knights.ucf.edu\n');
+
+  const [row] = dom.$('import-rows').querySelectorAll('tr');
+  assert.equal(row.dataset.verdict, 'exact', 'somebody here since last year was going to be created');
+  assert.match(row.textContent, /Returning member/, 'the preview does not say what will happen');
+  assert.match(dom.$('import-summary').textContent, /1 returning/);
+
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(
+    () => rosterRows().length === rosterBefore + 1,
+    'the returning member never reached this years roster',
+  );
+
+  const after = (await adminAudit()).members;
+  assert.equal(after.length, before.length, 'the import created a second row for somebody it had');
+  assert.equal(after.filter((node) => node.display_name === 'Rowan Vance').length, 1);
+
+  // On both years now, which is the point: last year's history is still theirs.
+  const years = (await adminAudit()).enrollments
+    .filter((entry) => entry.member_id === IDS.MEMBER_RETURNING)
+    .map((entry) => entry.academic_year_id)
+    .sort();
+  assert.deepEqual(years, [IDS.YEAR_PAST, IDS.YEAR_CURRENT].sort());
+});
+
+await check('an import that dies halfway converges on one row when it is run again', async () => {
+  // Creating a member and enrolling them are one call now, so a row either
+  // lands whole or not at all. What this asserts is the half that is left:
+  // the run stops partway, and running the same file again finishes it without
+  // writing anybody down twice.
+  const before = (await adminAudit()).members.length;
+  const rosterBefore = rosterRows().length;
+  const file = [
+    'first_name,last_name,email',
+    'Bartek,Wozniak,bartek.wozniak@knights.ucf.edu',
+    'Thandiwe,Mkhize,thandiwe.mkhize@knights.ucf.edu',
+  ].join('\n');
+
+  // The second write fails. The first one has already landed.
+  failRpcOnce('upsert_member_and_enroll', 2);
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(
+    () => rosterRows().length !== rosterBefore,
+    'the interrupted run left nothing on screen to retry from',
+  );
+  assert.equal(rosterRows().length, rosterBefore + 1, 'the run did not stop at the failure');
+
+  const half = await adminAudit();
+  const landed = half.members.filter((row) =>
+    ['Bartek Wozniak', 'Thandiwe Mkhize'].includes(row.display_name),
+  );
+
+  // EVERY MEMBER ROW WRITTEN HAS AN ENROLLMENT FOR THE YEAR. This is the state
+  // two separate requests could leave behind and nothing repaired: a member
+  // the roster cannot show, holding an address nobody else can be given.
+  for (const row of landed) {
+    assert.ok(
+      half.enrollments.some(
+        (entry) => entry.member_id === row.id && entry.academic_year_id === IDS.YEAR_CURRENT,
+      ),
+      `${row.display_name} was written with no enrollment for the year`,
+    );
+  }
+
+  assert.deepEqual(
+    landed.map((row) => row.display_name),
+    ['Bartek Wozniak'],
+    'the run did not stop where the failure was',
+  );
+  assert.equal(half.members.length, before + 1);
+
+  // Now run the same file again.
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  const rows = dom.$('import-rows').querySelectorAll('tr');
+  assert.equal(
+    rows.find((node) => node.textContent.includes('Bartek')).dataset.verdict,
+    'exact',
+    'the retry was going to file Bartek Wozniak a second time',
+  );
+
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(
+    () => rosterRows().length === rosterBefore + 2,
+    'the retry never finished the file',
+  );
+
+  const after = (await adminAudit()).members;
+  assert.equal(
+    after.length,
+    before + 2,
+    `${after.length - before} rows exist for the two people in that file`,
+  );
+  for (const name of ['Bartek Wozniak', 'Thandiwe Mkhize']) {
+    assert.equal(after.filter((row) => row.display_name === name).length, 1, `two rows for ${name}`);
+  }
 });
 
 await check('a file that cannot be read writes nothing and says which row', async () => {

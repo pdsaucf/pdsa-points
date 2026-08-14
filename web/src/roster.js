@@ -4,14 +4,31 @@
 // carry the same 355 names with no duplicates, because they are all
 // IMPORTRANGEd from one master list (docs/00-spreadsheet-findings.md). The new
 // system has more ways in than that one list did, so this screen carries the
-// two defences that keep it clean:
+// defences that keep it clean:
 //
-//   IMPORT PREVIEWS EVERY ROW, and shows the fuzzy matches against the members
-//   already on the roster BEFORE anything is written. A row that looks like
-//   somebody already here is not a decision this file makes. It is offered to
-//   the officer, and the import cannot be run while one is still unanswered.
-//   That is what stops an import quietly creating a second Abigail Catto, and
-//   it is the reason the button is disabled rather than the row defaulted.
+//   IMPORT PREVIEWS EVERY ROW, and shows the fuzzy matches against every
+//   member the club has ever had BEFORE anything is written. A row that looks
+//   like somebody already here is not a decision this file makes. It is
+//   offered to the officer, and the import cannot be run while one is still
+//   unanswered. That is what stops an import quietly creating a second Abigail
+//   Catto, and it is the reason the button is disabled rather than the row
+//   defaulted.
+//
+//   MATCHING IS AGAINST EVERY LIVE MEMBER, NOT THIS YEAR'S ROSTER. The table
+//   shows this year, which is right. Matching against this year would not be:
+//   somebody who was here last year and has not been enrolled for this one is
+//   invisible to that matcher, so an import treats them as new. With an email
+//   that collides with the unique index and fails the run; without one it
+//   quietly creates a second person. Same rule scripts/import_roster.py has
+//   always used server-side, which matches against members and not against
+//   member_enrollments.
+//
+//   EVERY WRITE IS ONE CALL. Add and import both go through
+//   upsert_member_and_enroll(), which finds or creates the member and enrolls
+//   them for the year in one transaction. Doing it as two requests left a
+//   member row with no enrollment whenever the second one did not land, and
+//   that person is then invisible on the screen that would have shown the
+//   officer the problem.
 //
 //   DUPLICATES ARE SURFACED AND MERGED, from v_possible_duplicate_members.
 //   Merging is merge_members(), which moves the records onto the survivor,
@@ -25,10 +42,11 @@
 // top is the fuzzy tier the script has no way to offer, since the script has
 // nobody to ask.
 
-import { select, insert, remove, callRpc } from './rest.js';
+import { select, remove, callRpc } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { normaliseName, rankMembers, similarity } from './match.js';
 import { csvFilename, downloadCsv, readRoster } from './csv.js';
+import { firstJoinedIndex } from './joined.js';
 import { $, h, announce, setHidden, plural, monthYear } from './ui.js';
 
 // Above this, an incoming name is close enough to somebody on the roster that
@@ -156,7 +174,9 @@ export function createRoster(ctx) {
   };
 
   const state = {
-    members: [], // this year's roster, with their status
+    members: [], // this year's roster, with their status. What the table shows
+    everyMember: [], // every live, unmerged member. What an import matches on
+    enrolled: new Set(), // the ids in state.members, for telling the two apart
     status: new Map(),
     joined: new Map(),
     recordCounts: new Map(),
@@ -181,7 +201,7 @@ export function createRoster(ctx) {
     const yearId = ctx.year.id;
 
     try {
-      const [enrollments, statuses, duplicates, everyEnrollment] = await Promise.all([
+      const [enrollments, statuses, duplicates, everyEnrollment, everyMember] = await Promise.all([
         select('member_enrollments', {
           select:
             'member_id,status,joined_on,members!inner(id,first_name,last_name,preferred_name,display_name,email,created_at,archived_at,merged_into_id)',
@@ -196,8 +216,17 @@ export function createRoster(ctx) {
           filters: { academic_year_id: `eq.${yearId}` },
         }),
         loadDuplicates(),
-        // Deliberately NOT filtered to the selected year. See firstJoined().
+        // Deliberately NOT filtered to the selected year. See joined.js.
         select('member_enrollments', { select: 'member_id,joined_on' }),
+        // Also deliberately not filtered to the year, and for the same kind of
+        // reason: this is what an import matches against, and a returning
+        // member is exactly the person a year filter would hide. See the note
+        // at the top of this file.
+        select('members', {
+          select: 'id,first_name,last_name,display_name,email,created_at',
+          filters: { archived_at: 'is.null', merged_into_id: 'is.null' },
+          order: 'display_name.asc',
+        }),
       ]);
 
       state.members = enrollments
@@ -205,7 +234,9 @@ export function createRoster(ctx) {
         .filter(Boolean)
         .sort((a, b) => a.display_name.localeCompare(b.display_name));
 
-      state.joined = firstJoined(everyEnrollment, state.members);
+      state.everyMember = everyMember;
+      state.enrolled = new Set(state.members.map((member) => member.id));
+      state.joined = firstJoinedIndex(everyEnrollment, state.members);
       state.status = new Map(
         statuses.map((row) => [
           row.member_id,
@@ -244,43 +275,18 @@ export function createRoster(ctx) {
     }
   }
 
-  /**
-   * When each member first joined PDSA, which is the same fact
-   * v_possible_duplicate_members.joined_a carries: the earliest enrollment,
-   * falling back to when the row was created for somebody never enrolled.
-   *
-   * WHY THIS IS A SECOND READ. The roster query above is filtered to the
-   * selected year, because that filter is what decides who is on this year's
-   * roster at all. Reusing its joined_on would make this column mean "enrolled
-   * for this year", which puts the same month on nearly every row, and puts a
-   * different number under the same word "Joined" than the duplicate banner
-   * directly above it shows for the same person. The banner and the row are
-   * read together precisely when an officer is deciding which of two rows
-   * survives a merge, and "who has been here longer" is the fact that decides
-   * it.
-   *
-   * The read carries no year filter and no id list. Not a list because the real
-   * roster is 355 members (docs/00-spreadsheet-findings.md), and 355 uuids in
-   * an in.() is a query string long enough to be refused; the two columns
-   * fetched here are cheaper than that URL. It sits in the same Promise.all as
-   * the rest, so it costs no extra round trip, and enrollments belonging to
-   * archived or merged members are never looked up.
-   */
-  function firstJoined(rows, members) {
-    const earliest = new Map();
-    for (const row of rows ?? []) {
-      if (!row.joined_on) continue;
-      const held = earliest.get(row.member_id);
-      const value = String(row.joined_on);
-      if (held === undefined || value < held) earliest.set(row.member_id, value);
-    }
-
-    // The fallback is the view's own coalesce. A member with no enrollment row
-    // at all still has a date on the screen rather than an empty cell.
-    return new Map(
-      members.map((member) => [member.id, earliest.get(member.id) ?? member.created_at ?? null]),
-    );
-  }
+  // WHY THE JOIN DATES ARE A SECOND READ. The roster query above is filtered
+  // to the selected year, because that filter is what decides who is on this
+  // year's roster at all. Reusing its joined_on would make the column mean
+  // "enrolled for this year", which puts the same month on nearly every row
+  // and disagrees with the duplicate banner directly above it. joined.js has
+  // the rest of that argument.
+  //
+  // The read carries no year filter and no id list. Not a list because the
+  // real roster is 355 members (docs/00-spreadsheet-findings.md), and 355
+  // uuids in an in.() is a query string long enough to be refused; the two
+  // columns fetched are cheaper than that URL. It sits in the same
+  // Promise.all as the rest, so it costs no extra round trip.
 
   // -------------------------------------------------------------------------
   // Drawing
@@ -528,6 +534,39 @@ export function createRoster(ctx) {
   }
 
   // -------------------------------------------------------------------------
+  // The one write
+  // -------------------------------------------------------------------------
+
+  /**
+   * One person, found or created, and enrolled for the selected year, in one
+   * transaction. Both Add and the import go through here.
+   *
+   * matchedId is the officer's answer from the preview: an exact match, or a
+   * fuzzy one they pressed Link member on. Passing none leaves the function to
+   * match on email and student id itself, which is what makes a re-run of an
+   * interrupted import land on the row the first run created.
+   *
+   * @returns {Promise<{member_id: string, was_created: boolean, was_enrolled: boolean}>}
+   */
+  function enrollPerson(person, matchedId = null) {
+    return callRpc('upsert_member_and_enroll', {
+      p_first_name: person.first_name,
+      p_last_name: person.last_name,
+      p_email: person.email ?? null,
+      p_ucf_nid: null,
+      p_academic_year_id: ctx.year.id,
+      p_matched_member_id: matchedId,
+    });
+  }
+
+  /** Whoever this row resolved to, if the officer's answer was "same person". */
+  const answeredMatch = (row) => (row.decision === 'exact' ? row.match?.id ?? null : null);
+
+  /** An exact match who is not on this year's list yet: enrolled, not created. */
+  const isReturning = (row) =>
+    row.decision === 'exact' && Boolean(row.match) && !state.enrolled.has(row.match.id);
+
+  // -------------------------------------------------------------------------
   // Adding one by hand
   // -------------------------------------------------------------------------
 
@@ -553,9 +592,17 @@ export function createRoster(ctx) {
     // sisters exist and an officer who cannot add the second one has no way
     // through. That case is caught a moment later instead, by the duplicate
     // banner, where it can be merged or dismissed rather than blocked.
+    //
+    // An exact match who is NOT on this year's list is not a refusal either.
+    // That is a returning member, and putting them on this year's roster is
+    // exactly what the officer is asking for.
     const email = el.addEmail.value.trim() || null;
-    const [matched] = matchRoster([{ first_name: first, last_name: last, email, row: 1 }], state.members);
-    if (matched.verdict === 'exact') {
+    const [matched] = matchRoster(
+      [{ first_name: first, last_name: last, email, row: 1 }],
+      state.everyMember,
+    );
+    const matchedId = matched.verdict === 'exact' ? matched.match.id : null;
+    if (matchedId && state.enrolled.has(matchedId)) {
       el.addError.textContent = `${matched.match.display_name} is already on the roster.`;
       setHidden(el.addError, false);
       return;
@@ -565,17 +612,9 @@ export function createRoster(ctx) {
     el.addDialog.close();
     setBusy(true);
     try {
-      const created = await insert('members', [
-        { first_name: first, last_name: last, email },
-      ]);
-      const member = created?.[0];
-      if (!member) throw new Error('nothing came back');
-
-      await insert('member_enrollments', [
-        { member_id: member.id, academic_year_id: ctx.year.id },
-      ]);
-
-      const said = `${member.display_name ?? `${first} ${last}`} added.`;
+      const result = await enrollPerson({ first_name: first, last_name: last, email }, matchedId);
+      const name = matchedId ? matched.match.display_name : `${first} ${last}`;
+      const said = result?.was_created ? `${name} added.` : `${name} added to ${ctx.year.label}.`;
       ctx.note(said);
       announce(said);
       await load();
@@ -658,7 +697,7 @@ export function createRoster(ctx) {
     }
 
     setHidden(el.importProblem, true);
-    state.incoming = matchRoster(people, state.members).map((row) => ({
+    state.incoming = matchRoster(people, state.everyMember).map((row) => ({
       ...row,
       // A fuzzy row starts undecided on purpose. See the note at the top.
       decision: row.verdict === 'fuzzy' ? null : row.verdict,
@@ -690,12 +729,16 @@ export function createRoster(ctx) {
     setHidden(el.importTable, false);
 
     const created = state.incoming.filter((row) => row.decision === 'new').length;
-    const existing = state.incoming.filter((row) => row.decision === 'exact').length;
+    const returning = state.incoming.filter(isReturning).length;
+    const existing = state.incoming.filter(
+      (row) => row.decision === 'exact' && !isReturning(row),
+    ).length;
     const waiting = undecided().length;
 
     el.importSummary.textContent = [
       `${plural(state.incoming.length, 'row')} read`,
       `${created} new`,
+      returning ? `${returning} returning` : null,
       `${existing} already on the roster`,
       waiting ? `${waiting} to decide` : null,
     ]
@@ -717,6 +760,16 @@ export function createRoster(ctx) {
     const name = `${row.first_name} ${row.last_name}`;
 
     const outcome = () => {
+      if (isReturning(row)) {
+        // On the roster from an earlier year, off this one. The distinction is
+        // worth a word: nobody is being created, and the officer is about to
+        // put a name back on the list rather than leave it alone.
+        return h(
+          'span',
+          { class: 'import-outcome', dataset: { kind: 'returning' } },
+          `Returning member: ${row.match.display_name}`,
+        );
+      }
       if (row.decision === 'exact') {
         return h(
           'span',
@@ -785,44 +838,37 @@ export function createRoster(ctx) {
     if (undecided().length) return;
     el.importDialog.close();
 
-    const toCreate = state.incoming.filter((row) => row.decision === 'new');
-    const toEnroll = state.incoming
-      .filter((row) => row.decision === 'exact' && row.match)
-      .map((row) => row.match.id);
+    const rows = state.incoming.filter((row) => row.decision !== null);
 
     setBusy(true);
+    let created = 0;
+    let done = 0;
     try {
-      if (toCreate.length) {
-        const created = await insert(
-          'members',
-          toCreate.map((row) => ({
-            first_name: row.first_name,
-            last_name: row.last_name,
-            email: row.email,
-          })),
-        );
-        for (const member of created ?? []) toEnroll.push(member.id);
+      // One call per row, each of them atomic. A row that fails leaves the
+      // rows before it written and the rows after it untouched, and nothing
+      // half-written in between, which is what running the same file again
+      // then converges on rather than doubling.
+      for (const row of rows) {
+        const result = await enrollPerson(row, answeredMatch(row));
+        if (result?.was_created) created += 1;
+        done += 1;
       }
 
-      if (toEnroll.length) {
-        await insert(
-          'member_enrollments',
-          toEnroll.map((memberId) => ({
-            member_id: memberId,
-            academic_year_id: ctx.year.id,
-          })),
-        );
-      }
-
-      const said = `${plural(toCreate.length, 'member')} added, ${toEnroll.length} on the roster.`;
+      const said = `${plural(created, 'member')} added, ${done} on the roster.`;
       ctx.note(said);
       announce(said);
       state.incoming = [];
-      await load();
-      ctx.onRosterChanged?.();
     } catch (err) {
       ctx.fail(err, null);
     } finally {
+      // Reloaded whether or not the run finished, so the screen shows what
+      // actually landed and the next preview matches against it.
+      try {
+        await load();
+      } catch {
+        /* load() has already put its own failure on screen */
+      }
+      ctx.onRosterChanged?.();
       setBusy(false);
     }
   }
@@ -889,7 +935,7 @@ export function createRoster(ctx) {
     hasLoaded: () => state.loaded,
     // For the checks, so the preview and the export can be driven without a
     // file picker in between.
-    preview: (people) => matchRoster(people, state.members),
+    preview: (people) => matchRoster(people, state.everyMember),
     exportRows,
   };
 }

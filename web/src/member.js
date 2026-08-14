@@ -26,6 +26,7 @@
 import { select, insert, patch, callRpc } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { buildTree, flatten } from './requirement-model.js';
+import { firstJoinedOn } from './joined.js';
 import { $, h, announce, setHidden, plural, shortDate, monthYear } from './ui.js';
 
 // What the source column says, in an officer's words rather than the enum's.
@@ -91,7 +92,7 @@ export function createMember(ctx) {
   const state = {
     memberId: null,
     member: null,
-    enrollment: null,
+    joined: null,
     status: null,
     categories: [],
     totals: new Map(),
@@ -123,10 +124,12 @@ export function createMember(ctx) {
             filters: { id: `eq.${state.memberId}` },
             limit: 1,
           }),
+          // Every year, not the selected one, because "Joined" is the earliest
+          // of them. joined.js says why that has to be the same fact here as
+          // on the roster.
           select('member_enrollments', {
-            select: 'member_id,academic_year_id,status,joined_on',
+            select: 'member_id,joined_on',
             filters: { member_id: `eq.${state.memberId}` },
-            order: 'joined_on.asc',
           }),
           select('categories', {
             select: 'id,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at',
@@ -158,8 +161,9 @@ export function createMember(ctx) {
         return;
       }
 
-      state.enrollment =
-        enrollments.find((row) => row.academic_year_id === yearId) ?? enrollments[0] ?? null;
+      // Every year they have ever been on, not the selected one. The read is
+      // deliberately unfiltered by year for this: see joined.js.
+      state.joined = firstJoinedOn(enrollments, state.member);
       state.status = statuses[0] ?? null;
       state.totals = new Map(totals.map((row) => [row.category_id, Number(row.total ?? 0)]));
       state.reviewers = new Map(reviewers.map((row) => [row.user_id, row.full_name]));
@@ -232,7 +236,7 @@ export function createMember(ctx) {
 
     el.meta.textContent = [
       member.email || 'No email on file',
-      state.enrollment?.joined_on ? `Joined ${monthYear(state.enrollment.joined_on)}` : null,
+      state.joined ? `Joined ${monthYear(state.joined)}` : null,
       ctx.year.label,
     ]
       .filter(Boolean)

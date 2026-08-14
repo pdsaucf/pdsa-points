@@ -34,12 +34,39 @@ const refreshTokens = new Map(); // refresh token -> { userId, email }
 const magicLinks = new Map(); // email -> the URL the email would contain
 const auditCalls = []; // every officer-side request, for the checks to read
 
+// ---------------------------------------------------------------------------
+// One injected failure
+// ---------------------------------------------------------------------------
+// Bad wifi, on the officer side. The anonymous half of the mock already has
+// dropSubmits for this; the roster needed the same thing, because "an import
+// that died halfway converges when it is run again" cannot be asserted against
+// a server that never dies halfway.
+//
+// Set from the check process, never over HTTP and never from anything the page
+// can reach, and cleared the moment it fires.
+let pendingFailure = null; // { fn, nth, seen }
+
+export function failRpcOnce(fn, nth = 1) {
+  pendingFailure = { fn, nth, seen: 0 };
+}
+
+function injectedFailure(res, fn, helpers) {
+  if (!pendingFailure || pendingFailure.fn !== fn) return false;
+  pendingFailure.seen += 1;
+  if (pendingFailure.seen !== pendingFailure.nth) return false;
+  pendingFailure = null;
+  record({ fn, outcome: 'injected failure' });
+  helpers.pds(res, 'PDS03', 'The mock was asked to fail this call once.');
+  return true;
+}
+
 export function resetAdmin() {
   db = buildDatabase();
   sessions.clear();
   refreshTokens.clear();
   magicLinks.clear();
   auditCalls.length = 0;
+  pendingFailure = null;
 }
 
 export function adminState() {
@@ -1462,6 +1489,135 @@ export const ADMIN_RPC = {
     });
 
     json(res, 200, memberId);
+  },
+
+  // -------------------------------------------------------------------------
+  // Putting somebody on this year's roster
+  // -------------------------------------------------------------------------
+
+  /**
+   * upsert_member_and_enroll(p_first_name text, p_last_name text,
+   *   p_email citext, p_ucf_nid citext, p_academic_year_id uuid,
+   *   p_matched_member_id uuid) returns jsonb
+   *
+   * Written against supabase/migrations/20260814100000_member_upsert.sql, and
+   * the properties the roster screen depends on are reproduced rather than
+   * approximated:
+   *
+   *   * the member and the enrollment are one operation. There is no state in
+   *     which one exists without the other, which is the defect the function
+   *     exists to remove
+   *   * enrolling somebody already enrolled is a no-op, not an error, so
+   *     running the same file twice writes nothing the second time
+   *   * with no p_matched_member_id it matches on email and student id itself.
+   *     That is what makes the retry after a half-finished import land on the
+   *     row the first attempt created
+   *   * a merged row resolves to the survivor rather than being enrolled or
+   *     colliding with the unique index on the way to a second row
+   */
+  upsert_member_and_enroll(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'upsert_member_and_enroll', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    if (injectedFailure(res, 'upsert_member_and_enroll', helpers)) return;
+
+    const first = String(body.p_first_name ?? '').trim();
+    const last = String(body.p_last_name ?? '').trim();
+    if (!first || !last) {
+      pds(res, 'PDS03', 'A member needs a first name and a last name.');
+      return;
+    }
+
+    const yearId = body.p_academic_year_id;
+    if (!yearId || !db.academic_years.some((year) => year.id === yearId)) {
+      pds(res, 'PDS03', 'Unknown academic year.');
+      return;
+    }
+
+    const email = String(body.p_email ?? '').trim().toLowerCase() || null;
+    const nid = String(body.p_ucf_nid ?? '').trim().toLowerCase() || null;
+
+    let member = null;
+    if (body.p_matched_member_id) {
+      member = db.members.find((row) => row.id === body.p_matched_member_id) ?? null;
+      if (!member) {
+        pds(res, 'PDS03', 'Unknown member.');
+        return;
+      }
+    } else {
+      if (email) {
+        member =
+          db.members.find((row) => String(row.email ?? '').toLowerCase() === email) ?? null;
+      }
+      if (!member && nid) {
+        member =
+          db.members.find((row) => String(row.ucf_nid ?? '').toLowerCase() === nid) ?? null;
+      }
+    }
+
+    // Follow a tombstone. merge_members() leaves the loser's address on the
+    // merged row, so last year's file still resolves to it.
+    for (let hops = 0; hops < 10 && member?.merged_into_id; hops += 1) {
+      member = db.members.find((row) => row.id === member.merged_into_id) ?? null;
+    }
+    if (member?.archived_at) {
+      pds(res, 'PDS03', 'That member is archived.');
+      return;
+    }
+
+    let created = false;
+    if (!member) {
+      member = {
+        id: uuid('m9000000-0000-4000-a000-'),
+        first_name: first,
+        last_name: last,
+        preferred_name: null,
+        email: body.p_email || null,
+        ucf_nid: body.p_ucf_nid || null,
+        display_name: `${first} ${last}`,
+        notes: null,
+        merged_into_id: null,
+        created_at: new Date().toISOString(),
+        archived_at: null,
+      };
+      db.members.push(member);
+      created = true;
+    }
+
+    const held = db.member_enrollments.find(
+      (row) => row.member_id === member.id && row.academic_year_id === yearId,
+    );
+    let enrolled = false;
+    if (!held) {
+      db.member_enrollments.push({
+        member_id: member.id,
+        academic_year_id: yearId,
+        status: 'active',
+        joined_on: new Date().toISOString().slice(0, 10),
+      });
+      enrolled = true;
+    }
+
+    audit(auth, 'upsert_member_and_enroll', 'member', member.id, {
+      academic_year_id: yearId,
+      was_created: created,
+      was_enrolled: enrolled,
+    });
+    record({
+      fn: 'upsert_member_and_enroll',
+      actor: auth.userId,
+      memberId: member.id,
+      created,
+      enrolled,
+    });
+
+    json(res, 200, { member_id: member.id, was_created: created, was_enrolled: enrolled });
   },
 
   // -------------------------------------------------------------------------

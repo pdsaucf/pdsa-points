@@ -1695,6 +1695,13 @@ kbd {
   color: var(--ok);
 }
 
+/* On the roster from an earlier year, off this one. Nobody is created, so it
+   is not the "new" green, and something does change, so it is not the muted
+   grey of a row already on this year's list. */
+.import-outcome[data-kind='returning'] {
+  color: var(--accent);
+}
+
 .import-outcome[data-kind='wait'] {
   color: var(--warn);
 }

@@ -159,6 +159,27 @@ const NEARLY = [
   ['Pemba', 'Dorjee'],
 ];
 
+/*
+  Somebody who was here last year and has not been put on this year's list yet.
+
+  WHY THEY EXIST. This is the person an import has to FIND rather than create
+  again, and a matcher built from this year's enrollments cannot see them at
+  all: they have no row for this year, which is the whole point. With the
+  address below, importing them as new collides with the unique index on
+  members.email and fails the run; without one it would quietly file a second
+  person. Both are silent until somebody notices the roster holds two of them.
+
+  They carry no attendance history, so no count on the board or in the preview
+  moves because of them, and the name resembles nobody else's, so they raise no
+  duplicate pair.
+*/
+const RETURNING = [
+  'm3000000-0000-4000-a000-000000000001',
+  'Rowan',
+  'Vance',
+  'rowan.vance@knights.ucf.edu',
+];
+
 function buildMembers() {
   const members = NAMED.map(([id, first, last, email]) => ({
     id,
@@ -208,6 +229,20 @@ function buildMembers() {
     });
   });
 
+  members.push({
+    id: RETURNING[0],
+    first_name: RETURNING[1],
+    last_name: RETURNING[2],
+    preferred_name: null,
+    email: RETURNING[3],
+    ucf_nid: null,
+    display_name: `${RETURNING[1]} ${RETURNING[2]}`,
+    notes: null,
+    merged_into_id: null,
+    created_at: '2025-08-20T12:00:00.000Z',
+    archived_at: null,
+  });
+
   return members;
 }
 
@@ -244,13 +279,21 @@ export function buildDatabase() {
   const notEnrolled = byName('Sofia Marchetti');
 
   const enrollments = members
-    .filter((m) => m.id !== notEnrolled.id)
+    .filter((m) => m.id !== notEnrolled.id && m.id !== RETURNING[0])
     .map((m) => ({
       member_id: m.id,
       academic_year_id: YEAR_CURRENT,
       status: 'active',
       joined_on: '2026-08-01',
     }));
+
+  // Last year only. See RETURNING above.
+  enrollments.push({
+    member_id: RETURNING[0],
+    academic_year_id: YEAR_PAST,
+    status: 'active',
+    joined_on: '2025-08-19',
+  });
 
   // A long history on the roster row somebody is claiming, so the claims card
   // has something to say beyond a name.
@@ -495,6 +538,7 @@ export function buildDatabase() {
   members.forEach((member, index) => {
     if (member.id === notEnrolled.id) return;
     if (member.id.startsWith('m2000000')) return; // the NEARLY cohort, below
+    if (member.id === RETURNING[0]) return; // not on this year at all
     const strength = index % 10;
 
     for (let n = 0; n < strength + 3; n += 1) approve(member.id, gbmEvents[n]);
@@ -684,6 +728,7 @@ export const IDS = {
   EVENT_SOAP: EVENTS[1].id,
   EVENT_LAST_YEAR: EVENTS[3].id,
   MEMBER_ABIGAIL: 'm0000000-0000-4000-a000-000000000001',
+  MEMBER_RETURNING: RETURNING[0],
   RECORD_UNMATCHED_CLOSE: 'r0000000-0000-4000-a000-000000000001',
   RECORD_UNMATCHED_NEW: 'r0000000-0000-4000-a000-000000000002',
   RECORD_DUPLICATE_PHOTO: 'r0000000-0000-4000-a000-000000000003',
