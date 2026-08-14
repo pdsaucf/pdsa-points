@@ -1019,6 +1019,45 @@ await check('the card carries what decides which row lives', () => {
   );
 });
 
+await check('a member on the banner and on the roster shows one join date, not two', () => {
+  // THE SAME LABEL ABOUT THE SAME PERSON, ON ONE SCREEN. The banner reads
+  // joined_a from v_possible_duplicate_members, which is the earliest
+  // enrollment falling back to when the row was created. The roster row under
+  // it has to mean the same thing, or an officer choosing which row survives a
+  // merge is reading two different numbers called "Joined" a few pixels apart.
+  //
+  // Asserted on the rendered cells rather than on the two queries, because it
+  // is the contradiction on screen that does the damage, and a screen can
+  // render two agreeing sources into two different strings.
+  const rosterJoined = new Map(
+    rosterRows().map((row) => [row.dataset.member, row.querySelectorAll('td')[4].textContent.trim()]),
+  );
+
+  let compared = 0;
+  for (const card of pairCards()) {
+    for (const sideNode of card.querySelectorAll('.dupe-side')) {
+      const id = sideNode.querySelector('input[type="radio"]').value;
+      if (!rosterJoined.has(id)) continue;
+
+      const name = sideNode.querySelector('.dupe-name').textContent.trim();
+      const part = sideNode
+        .querySelector('.dupe-meta')
+        .textContent.split(' · ')
+        .find((piece) => piece.startsWith('joined '));
+      assert.ok(part, `${name} is on the banner with no join date to compare`);
+
+      const banner = part.slice('joined '.length).trim();
+      assert.equal(
+        banner,
+        rosterJoined.get(id),
+        `${name} joined ${banner} on the banner and ${rosterJoined.get(id)} on the roster`,
+      );
+      compared += 1;
+    }
+  }
+  assert.ok(compared > 0, 'nobody is on both the banner and the roster, so this proves nothing');
+});
+
 await check('merging moves the records onto the survivor and tombstones the other', async () => {
   const card = pairCards().find(
     (candidate) => candidate.dataset.pair.includes(ABIGAIL) && candidate.dataset.pair.includes(ABBY),

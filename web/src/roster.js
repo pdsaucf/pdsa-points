@@ -181,10 +181,10 @@ export function createRoster(ctx) {
     const yearId = ctx.year.id;
 
     try {
-      const [enrollments, statuses, duplicates] = await Promise.all([
+      const [enrollments, statuses, duplicates, everyEnrollment] = await Promise.all([
         select('member_enrollments', {
           select:
-            'member_id,status,joined_on,members!inner(id,first_name,last_name,preferred_name,display_name,email,archived_at,merged_into_id)',
+            'member_id,status,joined_on,members!inner(id,first_name,last_name,preferred_name,display_name,email,created_at,archived_at,merged_into_id)',
           filters: {
             academic_year_id: `eq.${yearId}`,
             'members.archived_at': 'is.null',
@@ -196,6 +196,8 @@ export function createRoster(ctx) {
           filters: { academic_year_id: `eq.${yearId}` },
         }),
         loadDuplicates(),
+        // Deliberately NOT filtered to the selected year. See firstJoined().
+        select('member_enrollments', { select: 'member_id,joined_on' }),
       ]);
 
       state.members = enrollments
@@ -203,7 +205,7 @@ export function createRoster(ctx) {
         .filter(Boolean)
         .sort((a, b) => a.display_name.localeCompare(b.display_name));
 
-      state.joined = new Map(enrollments.map((row) => [row.member_id, row.joined_on]));
+      state.joined = firstJoined(everyEnrollment, state.members);
       state.status = new Map(
         statuses.map((row) => [
           row.member_id,
@@ -240,6 +242,44 @@ export function createRoster(ctx) {
       ctx.fail(err, null);
       return [];
     }
+  }
+
+  /**
+   * When each member first joined PDSA, which is the same fact
+   * v_possible_duplicate_members.joined_a carries: the earliest enrollment,
+   * falling back to when the row was created for somebody never enrolled.
+   *
+   * WHY THIS IS A SECOND READ. The roster query above is filtered to the
+   * selected year, because that filter is what decides who is on this year's
+   * roster at all. Reusing its joined_on would make this column mean "enrolled
+   * for this year", which puts the same month on nearly every row, and puts a
+   * different number under the same word "Joined" than the duplicate banner
+   * directly above it shows for the same person. The banner and the row are
+   * read together precisely when an officer is deciding which of two rows
+   * survives a merge, and "who has been here longer" is the fact that decides
+   * it.
+   *
+   * The read carries no year filter and no id list. Not a list because the real
+   * roster is 355 members (docs/00-spreadsheet-findings.md), and 355 uuids in
+   * an in.() is a query string long enough to be refused; the two columns
+   * fetched here are cheaper than that URL. It sits in the same Promise.all as
+   * the rest, so it costs no extra round trip, and enrollments belonging to
+   * archived or merged members are never looked up.
+   */
+  function firstJoined(rows, members) {
+    const earliest = new Map();
+    for (const row of rows ?? []) {
+      if (!row.joined_on) continue;
+      const held = earliest.get(row.member_id);
+      const value = String(row.joined_on);
+      if (held === undefined || value < held) earliest.set(row.member_id, value);
+    }
+
+    // The fallback is the view's own coalesce. A member with no enrollment row
+    // at all still has a date on the screen rather than an empty cell.
+    return new Map(
+      members.map((member) => [member.id, earliest.get(member.id) ?? member.created_at ?? null]),
+    );
   }
 
   // -------------------------------------------------------------------------
