@@ -1435,3 +1435,439 @@ kbd {
     margin-left: 0;
   }
 }
+
+/* --------------------------------------------------------------------------- */
+/* The progress board, the roster, and one member in full                       */
+/* --------------------------------------------------------------------------- */
+/*
+   THE BOARD IS A WALL OF NUMBERS AND THAT IS THE POINT. It replaces the Total
+   and Honorary tabs of the spreadsheet, which is the screen officers actually
+   looked at, so it is tuned for scanning rather than for reading: small type,
+   tight rows, and every digit tabular so a column of them lines up.
+
+   Two things are load bearing here.
+
+   THE FIRST COLUMN DOES NOT SCROLL. Thirteen categories do not fit on a laptop,
+   so the board scrolls sideways, and a name that scrolled away with it would
+   make the whole screen useless. The name column and the header rows are both
+   sticky, and their z-indexes are ordered so the corner cell stays on top of
+   both.
+
+   GOLD IS A FILL. The honorary star is drawn as gold behind dark ink rather
+   than as gold ink, because #e6c845 is 1.57:1 on the page background and
+   cannot carry a glyph on its own. See the token block at the top of this file
+   and goldMisuse() in mock/brand.mjs.
+*/
+
+.board-scroll {
+  max-height: calc(100vh - 13rem);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.board {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.board th,
+.board td {
+  padding: 0.3125rem 0.625rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.board thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 1.875rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--surface-sunken);
+}
+
+/* The strip of targets under the headings. It sits directly below them, which
+   is why its offset is the header row's own height rather than zero. */
+.board-targets td {
+  position: sticky;
+  top: 1.875rem;
+  z-index: 2;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.board-number {
+  text-align: right;
+}
+
+.board-name-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  font-weight: 400;
+  background: var(--surface);
+}
+
+.board thead .board-name-cell,
+.board-targets .board-name-cell {
+  z-index: 3;
+  background: var(--surface-sunken);
+}
+
+.board tbody tr:hover .board-name-cell,
+.board tbody tr:hover td {
+  background: var(--surface-sunken);
+}
+
+.board-name {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.board-name:hover {
+  text-decoration: underline;
+}
+
+.board-points {
+  font-weight: 600;
+}
+
+.board-value {
+  color: var(--ink);
+}
+
+.board td[data-met='true'] .board-value {
+  font-weight: 600;
+}
+
+.board-tick {
+  margin-left: 0.1875rem;
+  color: var(--ok);
+}
+
+.board-blank {
+  color: var(--ink-muted);
+}
+
+.board-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.375rem;
+  padding: 0 0.25rem;
+  color: var(--gold-ink);
+  background: var(--gold);
+  border-radius: 999px;
+}
+
+/* The roster, the record log and the import preview are ordinary tables: no
+   sideways scroll, so nothing has to stick. */
+.board-plain {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.board-plain thead th {
+  position: static;
+}
+
+.board-plain td {
+  white-space: normal;
+}
+
+.roster-email {
+  color: var(--ink-muted);
+}
+
+.roster-actions {
+  text-align: right;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Duplicate people                                                             */
+/* --------------------------------------------------------------------------- */
+
+.dupe-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dupe-card {
+  padding: 0.75rem 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+}
+
+.dupe-reason {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.dupe-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.5rem;
+}
+
+.dupe-side {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.dupe-side:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.dupe-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.dupe-name {
+  font-weight: 600;
+}
+
+.dupe-meta {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.dupe-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 0.625rem;
+}
+
+.dupe-actions .muted {
+  margin-right: auto;
+}
+
+/* --------------------------------------------------------------------------- */
+/* CSV import                                                                   */
+/* --------------------------------------------------------------------------- */
+
+.dialog-wide {
+  width: min(52rem, calc(100vw - 2rem));
+}
+
+.import-scroll {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.import-outcome {
+  font-weight: 600;
+}
+
+.import-outcome[data-kind='exact'] {
+  color: var(--ink-muted);
+}
+
+.import-outcome[data-kind='new'] {
+  color: var(--ok);
+}
+
+.import-outcome[data-kind='wait'] {
+  color: var(--warn);
+}
+
+.import-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 0.75rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.import-buttons {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.import-buttons .button[aria-pressed='true'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.import-line {
+  color: var(--ink-muted);
+}
+
+/* --------------------------------------------------------------------------- */
+/* One member                                                                   */
+/* --------------------------------------------------------------------------- */
+
+.member-head {
+  margin-bottom: 1rem;
+}
+
+.member-name {
+  margin: 0;
+  font-size: 1.375rem;
+}
+
+.member-points-line {
+  display: flex;
+  gap: 0.375rem;
+  align-items: baseline;
+  margin: 0.5rem 0 0;
+}
+
+.member-points {
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.member-badge {
+  padding: 0.125rem 0.5rem;
+  margin-left: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--gold-ink);
+  background: var(--gold);
+  border-radius: 999px;
+}
+
+.member-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.member-block {
+  padding: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.member-block .zone-title {
+  margin-top: 0;
+}
+
+.progress-list {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.progress-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.1875rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.progress-label {
+  color: var(--ink);
+}
+
+.progress-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.check-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.1875rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.check-row[data-depth='2'] {
+  padding-left: 1.25rem;
+}
+
+.check-mark {
+  width: 1rem;
+  font-weight: 700;
+}
+
+.check-row[data-passed='true'] .check-mark {
+  color: var(--ok);
+}
+
+.check-row[data-passed='false'] .check-mark {
+  color: var(--danger);
+}
+
+.check-label {
+  flex: 1;
+}
+
+.check-figures {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.record-date {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.record-status {
+  font-weight: 600;
+}
+
+.record-status[data-status='approved'] {
+  color: var(--ok);
+}
+
+.record-status[data-status='pending'] {
+  color: var(--warn);
+}
+
+.record-status[data-status='rejected'] {
+  color: var(--danger);
+}
+
+.record-note {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 46rem) {
+  .board-scroll {
+    max-height: none;
+  }
+}

@@ -108,6 +108,12 @@
           <button id="tab-claims" type="button" class="tab" aria-selected="false" aria-controls="panel-claims">
             Account claims <span id="tab-claims-count" class="pill">0</span>
           </button>
+          <button id="tab-progress" type="button" class="tab" aria-selected="false" aria-controls="panel-progress">
+            Progress
+          </button>
+          <button id="tab-roster" type="button" class="tab" aria-selected="false" aria-controls="panel-roster">
+            Members
+          </button>
           <button id="tab-requirements" type="button" class="tab" aria-selected="false" aria-controls="panel-requirements">
             Requirements
           </button>
@@ -196,6 +202,171 @@
         </section>
 
         <div id="claims-list" class="flagged-list"></div>
+      </main>
+
+      <!--
+        The progress board, which replaces the Total and Honorary tabs of the
+        spreadsheet. Every number on it is read from the database: the point
+        total and the star come from v_member_status, each cell from
+        v_member_category_totals, each target from the published rules.
+      -->
+      <main id="panel-progress" class="panel-view" hidden>
+        <div class="toolbar">
+          <div class="toolbar-field">
+            <label class="label" for="progress-search">Search</label>
+            <input
+              id="progress-search"
+              class="input"
+              type="search"
+              autocomplete="off"
+              placeholder="Name or email"
+            />
+          </div>
+          <div class="toolbar-field toolbar-field-narrow">
+            <label class="label" for="progress-filter">Show</label>
+            <select id="progress-filter" class="select"></select>
+          </div>
+          <p id="progress-count" class="count" aria-live="polite"></p>
+          <button id="progress-export" type="button" class="button">Export CSV</button>
+        </div>
+
+        <section id="loading-progress" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading the board…</p>
+        </section>
+
+        <section id="empty-progress" class="empty" hidden>
+          <h2 id="empty-progress-title" class="empty-title"></h2>
+          <p id="empty-progress-body" class="muted"></p>
+        </section>
+
+        <!-- Scrolls sideways under a first column that does not, which is the
+             whole reason the board is readable at thirteen categories. -->
+        <div
+          id="progress-scroll"
+          class="board-scroll"
+          tabindex="0"
+          role="region"
+          aria-label="Progress board"
+          hidden
+        >
+          <table id="progress-table" class="board"></table>
+        </div>
+      </main>
+
+      <!--
+        The roster. Search, add, edit, import, export, and the duplicate people
+        banner, which is the other half of the "duplicates happen" problem: the
+        review queue stops one person checking in twice for one event, this
+        stops one person existing twice on the roster.
+      -->
+      <main id="panel-roster" class="panel-view" hidden>
+        <div class="toolbar">
+          <div class="toolbar-field">
+            <label class="label" for="roster-search">Search</label>
+            <input
+              id="roster-search"
+              class="input"
+              type="search"
+              autocomplete="off"
+              placeholder="Name or email"
+            />
+          </div>
+          <p id="roster-count" class="count" aria-live="polite"></p>
+          <button id="roster-add" type="button" class="button">Add</button>
+          <button id="roster-import" type="button" class="button">Import CSV</button>
+          <button id="roster-export" type="button" class="button">Export CSV</button>
+        </div>
+
+        <section id="duplicates-zone" class="zone" hidden aria-labelledby="duplicates-title">
+          <h2 id="duplicates-title" class="zone-title zone-title-warn"></h2>
+          <div id="duplicates-list" class="dupe-list"></div>
+        </section>
+
+        <section id="loading-roster" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading the roster…</p>
+        </section>
+
+        <section id="empty-roster" class="empty" hidden>
+          <h2 id="empty-roster-title" class="empty-title"></h2>
+          <p id="empty-roster-body" class="muted"></p>
+        </section>
+
+        <table id="roster-table" class="board board-plain" hidden>
+          <thead>
+            <tr>
+              <th scope="col">Member</th>
+              <th scope="col">Email</th>
+              <th class="board-number" scope="col">Points</th>
+              <th class="board-number" scope="col">Honorary</th>
+              <th scope="col">Joined</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="roster-rows"></tbody>
+        </table>
+      </main>
+
+      <!--
+        One member, in full. This is the screen that answers "I think I am
+        missing a GBM": the checklist comes from the same function that decides
+        the star on the board, so the two can never disagree.
+      -->
+      <main id="panel-member" class="panel-view" hidden>
+        <div class="toolbar">
+          <button id="member-back" type="button" class="button">Back</button>
+          <p id="member-records-count" class="count"></p>
+          <button id="member-edit" type="button" class="button">Edit</button>
+          <button id="member-add-record" type="button" class="button">Add record</button>
+        </div>
+
+        <section id="loading-member" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading…</p>
+        </section>
+
+        <div id="member-body" hidden>
+          <header class="member-head">
+            <h2 id="member-name" class="member-name"></h2>
+            <p id="member-meta" class="muted small"></p>
+            <p class="member-points-line">
+              <span id="member-points" class="member-points"></span>
+              <span class="muted small">points</span>
+              <span id="member-honorary" class="member-badge" hidden>★ Honorary</span>
+            </p>
+          </header>
+
+          <div class="member-columns">
+            <section class="member-block" aria-labelledby="member-progress-title">
+              <h3 id="member-progress-title" class="zone-title">Categories</h3>
+              <div id="member-progress" class="progress-list"></div>
+            </section>
+
+            <section class="member-block" aria-labelledby="member-checklist-title">
+              <h3 id="member-checklist-title" class="zone-title">Honorary</h3>
+              <p id="member-checklist-note" class="muted small" hidden></p>
+              <ul id="member-checklist" class="check-list"></ul>
+            </section>
+          </div>
+
+          <section class="member-block" aria-labelledby="member-records-title">
+            <h3 id="member-records-title" class="zone-title">Records</h3>
+            <table class="board board-plain">
+              <thead>
+                <tr>
+                  <th scope="col">Event</th>
+                  <th scope="col">Date</th>
+                  <th scope="col">Credit</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Decided by</th>
+                </tr>
+              </thead>
+              <tbody id="member-records"></tbody>
+            </table>
+          </section>
+        </div>
       </main>
 
       <!--
@@ -379,6 +550,143 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button id="retire-confirm" type="submit" class="button button-danger">Retire</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- One member, typed in by an officer. -->
+    <dialog id="roster-add-dialog" class="dialog">
+      <form id="roster-add-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Add member</h2>
+        <label class="label" for="roster-add-first">First name</label>
+        <input id="roster-add-first" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="roster-add-last">Last name</label>
+        <input id="roster-add-last" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="roster-add-email">Email (optional)</label>
+        <input
+          id="roster-add-email"
+          class="input"
+          type="email"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p id="roster-add-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Off this year's roster. The person and their records both stay. -->
+    <dialog id="roster-remove-dialog" class="dialog">
+      <form id="roster-remove-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Remove from this year</h2>
+        <p id="roster-remove-meta" class="muted small"></p>
+        <p class="body">Their records are kept. They can be added back.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-danger">Remove</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      CSV import. Nothing is written until Import is pressed, and it cannot be
+      pressed while a row that resembles somebody already on the roster is
+      still unanswered. That is what stops an import creating a second Abigail
+      Catto.
+    -->
+    <dialog id="import-dialog" class="dialog dialog-wide">
+      <form id="import-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Import roster</h2>
+        <label class="label" for="import-file">CSV file</label>
+        <input id="import-file" class="input" type="file" accept=".csv,text/csv" />
+
+        <p id="import-problem" class="notice" role="alert" hidden>
+          <span id="import-problem-title" class="notice-title"></span>
+          <span id="import-problem-body" class="notice-body"></span>
+        </p>
+
+        <p id="import-summary" class="muted small" aria-live="polite"></p>
+        <ul id="import-skipped" class="problem-list" hidden></ul>
+
+        <div id="import-table" class="import-scroll" hidden>
+          <table class="board board-plain">
+            <thead>
+              <tr>
+                <th class="board-number" scope="col">Row</th>
+                <th scope="col">Name</th>
+                <th scope="col">Email</th>
+                <th scope="col">What happens</th>
+              </tr>
+            </thead>
+            <tbody id="import-rows"></tbody>
+          </table>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="import-run" type="submit" class="button button-primary" disabled>
+            Import
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      A record an officer files by hand, which is how the spreadsheet workflow
+      actually operated. It is filed pending and then approved through
+      review_records(), so the reviewer and the audit row are stamped exactly
+      as they are for a scanned check-in.
+    -->
+    <dialog id="record-dialog" class="dialog">
+      <form id="record-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Add record</h2>
+        <label class="label" for="record-event">Event</label>
+        <select id="record-event" class="select"></select>
+        <div id="record-value-field" hidden>
+          <label class="label" for="record-value"><span id="record-value-label"></span></label>
+          <input
+            id="record-value"
+            class="input"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="0.5"
+            autocomplete="off"
+          />
+        </div>
+        <p id="record-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Correcting a name or an address on the roster row itself. -->
+    <dialog id="member-edit-dialog" class="dialog">
+      <form id="member-edit-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Edit member</h2>
+        <label class="label" for="member-edit-first">First name</label>
+        <input id="member-edit-first" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="member-edit-last">Last name</label>
+        <input id="member-edit-last" class="input" type="text" autocomplete="off" required />
+        <label class="label" for="member-edit-preferred">Preferred name (optional)</label>
+        <input id="member-edit-preferred" class="input" type="text" autocomplete="off" />
+        <label class="label" for="member-edit-email">Email (optional)</label>
+        <input
+          id="member-edit-email"
+          class="input"
+          type="email"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p id="member-edit-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-primary">Save</button>
         </div>
       </form>
     </dialog>

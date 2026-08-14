@@ -21,6 +21,9 @@
 
 import { randomBytes } from 'node:crypto';
 import { buildDatabase, ACCOUNTS } from './admin-fixtures.mjs';
+// The same trigram measure the review queue ranks with, so the duplicate view
+// here pairs the same people the database's pg_trgm one would.
+import { normaliseName, similarity } from '../src/match.js';
 
 const ACCESS_TTL_SECONDS = 3600;
 
@@ -62,6 +65,8 @@ export function adminState() {
     requirementSets: db.requirement_sets,
     requirementNodes: db.requirement_nodes,
     requirementNodeCategories: db.requirement_node_categories,
+    merges: db.member_merges,
+    dismissals: db.duplicate_dismissals,
   };
 }
 
@@ -228,6 +233,9 @@ const RELATIONS = {
   member_claims: {
     members: { table: 'members', kind: 'one', from: 'member_id', to: 'id' },
   },
+  member_enrollments: {
+    members: { table: 'members', kind: 'one', from: 'member_id', to: 'id' },
+  },
   attendance_evidence: {
     attendance_records: {
       table: 'attendance_records',
@@ -339,12 +347,308 @@ function matches(row, column, test) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The derived views
+// ---------------------------------------------------------------------------
+// These are not tables and are not stored. Each one is recomputed on every
+// read, which is exactly what the real ones do, and is why the progress board
+// cannot be tested against a fixture somebody hand-wrote to agree with it.
+//
+// The point of computing them here rather than storing an answer: the board is
+// forbidden from recomputing a point total or an honorary flag in JavaScript
+// (invariant 2). If this mock simply echoed back numbers the fixtures declared,
+// a board that quietly did its own arithmetic would still pass. Because these
+// come out of the same attendance rows and the same requirement rows the real
+// views read, a board that computed its own answer would disagree with them.
+
+/** v_attendance_credit: one row per approved record per category it counts for. */
+function creditRows() {
+  const eventById = new Map(db.events.map((event) => [event.id, event]));
+  const out = [];
+  for (const record of db.attendance_records) {
+    if (record.status !== 'approved' || !record.member_id) continue;
+    const event = eventById.get(record.event_id);
+    if (!event) continue;
+    for (const link of db.event_categories.filter((row) => row.event_id === event.id)) {
+      out.push({
+        attendance_id: record.id,
+        member_id: record.member_id,
+        event_id: event.id,
+        academic_year_id: event.academic_year_id,
+        occurred_on: event.occurred_on,
+        category_id: link.category_id,
+        credit:
+          link.credit_mode === 'fixed'
+            ? Number(link.fixed_credit ?? 0)
+            : Number(record.submitted_value ?? 0),
+      });
+    }
+  }
+  return out;
+}
+
+/** v_member_category_totals. */
+function categoryTotalRows() {
+  const totals = new Map();
+  for (const row of creditRows()) {
+    const key = `${row.member_id}:${row.academic_year_id}:${row.category_id}`;
+    const held = totals.get(key);
+    if (held) held.total += row.credit;
+    else
+      totals.set(key, {
+        member_id: row.member_id,
+        academic_year_id: row.academic_year_id,
+        category_id: row.category_id,
+        total: row.credit,
+      });
+  }
+  return [...totals.values()];
+}
+
+/** member_id -> category_id -> total, for one year. */
+function totalsByMember(yearId) {
+  const out = new Map();
+  for (const row of categoryTotalRows()) {
+    if (row.academic_year_id !== yearId) continue;
+    if (!out.has(row.member_id)) out.set(row.member_id, new Map());
+    out.get(row.member_id).set(row.category_id, row.total);
+  }
+  return out;
+}
+
+const publishedSetFor = (yearId) =>
+  db.requirement_sets.find((row) => row.academic_year_id === yearId && row.status === 'published') ??
+  null;
+
+/**
+ * fn_member_requirement_status(), in the mock.
+ *
+ * One row per requirement in the set, deepest first so a group sees its
+ * children's verdicts, which is the shape the real function returns and the
+ * shape the member screen's checklist is built from.
+ */
+function evaluateSet(setId, memberId, index) {
+  const set = setOf(setId);
+  if (!set) return [];
+
+  const nodes = db.requirement_nodes.filter((row) => row.requirement_set_id === setId);
+  const totals = (index ?? totalsByMember(set.academic_year_id)).get(memberId) ?? new Map();
+
+  const byOrder = (a, b) =>
+    (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.label).localeCompare(String(b.label));
+  const childrenOf = (id) => nodes.filter((row) => row.parent_id === id).sort(byOrder);
+  const categoryIdsOf = (id) =>
+    db.requirement_node_categories.filter((link) => link.node_id === id).map((link) => link.category_id);
+
+  const verdicts = new Map();
+  const evaluate = (node) => {
+    const held = verdicts.get(node.id);
+    if (held) return held;
+
+    let value;
+    let target;
+    if (node.type === 'threshold') {
+      value = categoryIdsOf(node.id).reduce((sum, id) => sum + (totals.get(id) ?? 0), 0);
+      target = Number(node.min_value ?? 0);
+    } else {
+      const children = childrenOf(node.id);
+      value = children.filter((child) => evaluate(child).passed).length;
+      target =
+        node.min_children_passing === null || node.min_children_passing === undefined
+          ? children.length
+          : Number(node.min_children_passing);
+    }
+
+    const result = { node, value, target, passed: value >= target };
+    verdicts.set(node.id, result);
+    return result;
+  };
+
+  for (const node of nodes) evaluate(node);
+
+  // The real function orders by parent, then by sort order. The member screen
+  // rebuilds the tree from the parent ids, so what this has to preserve is
+  // that siblings arrive together and in their own order.
+  return [...verdicts.values()]
+    .sort(
+      (a, b) =>
+        String(a.node.parent_id ?? '').localeCompare(String(b.node.parent_id ?? '')) ||
+        byOrder(a.node, b.node),
+    )
+    .map(({ node, value, target, passed }) => ({
+      node_id: node.id,
+      parent_id: node.parent_id,
+      type: node.type,
+      label: node.label,
+      value,
+      target,
+      passed,
+    }));
+}
+
+/**
+ * v_member_status: the point total and the honorary flag, per member per year.
+ *
+ * point_total sums only the categories flagged as counting toward it, which is
+ * what reproduces a Total column that excludes Volunteering hours while still
+ * requiring them for Honorary. is_honorary is the root requirement's verdict.
+ */
+function memberStatusRows() {
+  const countsToward = new Map(db.categories.map((row) => [row.id, row.counts_toward_point_total]));
+  const indexByYear = new Map();
+  const out = [];
+
+  for (const enrollment of db.member_enrollments) {
+    const yearId = enrollment.academic_year_id;
+    if (!indexByYear.has(yearId)) indexByYear.set(yearId, totalsByMember(yearId));
+    const index = indexByYear.get(yearId);
+    const totals = index.get(enrollment.member_id) ?? new Map();
+
+    let points = 0;
+    for (const [categoryId, total] of totals) {
+      if (countsToward.get(categoryId)) points += total;
+    }
+
+    const set = publishedSetFor(yearId);
+    const root = set
+      ? evaluateSet(set.id, enrollment.member_id, index).find((row) => row.node_id === set.root_node_id)
+      : null;
+
+    out.push({
+      member_id: enrollment.member_id,
+      academic_year_id: yearId,
+      point_total: points,
+      is_honorary: Boolean(root?.passed),
+      requirement_set_id: set?.id ?? null,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * v_possible_duplicate_members.
+ *
+ * Written against supabase/migrations/20260813100000_duplicate_people.sql, and
+ * the parts of it the screen depends on are reproduced rather than approximated:
+ *
+ *   * each pair appears once, in canonical id order, never in both. The roster
+ *     screen renders what comes back and does no deduping of its own
+ *   * `reason` is one of four stable codes, strongest only, in the same
+ *     priority order the SQL applies. The screen branches on the code, so a
+ *     mock that invented its own vocabulary would let a screen that cannot read
+ *     the real one pass here
+ *   * archived, merged and dismissed pairs are already gone
+ *   * records_a counts every attendance record, whatever its status, because
+ *     that is the number an officer weighs when choosing which row lives
+ *   * joined_a is the earliest enrollment, falling back to when the row was
+ *     created
+ */
+const WHOLE_NAME_FLOOR = 0.55;
+const VARIANT_FLOOR = 0.4;
+
+function duplicatePairRows() {
+  const live = db.members.filter((row) => !row.archived_at && !row.merged_into_id);
+  const dismissed = new Set(
+    db.duplicate_dismissals.map((row) => `${row.member_a}:${row.member_b}`),
+  );
+
+  const recordsOf = (memberId) =>
+    db.attendance_records.filter((row) => row.member_id === memberId).length;
+  const joinedOf = (member) =>
+    db.member_enrollments
+      .filter((row) => row.member_id === member.id)
+      .map((row) => row.joined_on)
+      .sort()[0] ?? String(member.created_at ?? '').slice(0, 10) ?? null;
+
+  const initial = (member) =>
+    normaliseName(member.preferred_name || member.first_name).slice(0, 1);
+
+  const out = [];
+  for (let i = 0; i < live.length; i += 1) {
+    for (let j = i + 1; j < live.length; j += 1) {
+      // Canonical order, so a pair has exactly one spelling.
+      const [a, b] = [live[i], live[j]].sort((x, y) => x.id.localeCompare(y.id));
+
+      const measured = similarity(a.display_name, b.display_name);
+      let reason = null;
+      let score = 0;
+
+      if (a.email && b.email && String(a.email).toLowerCase() === String(b.email).toLowerCase()) {
+        reason = 'exact_email';
+        score = 1;
+      } else if (a.ucf_nid && b.ucf_nid && a.ucf_nid === b.ucf_nid) {
+        reason = 'exact_nid';
+        score = 0.999;
+      } else if (
+        normaliseName(a.display_name) &&
+        normaliseName(a.display_name) === normaliseName(b.display_name)
+      ) {
+        reason = 'exact_name';
+        score = 0.998;
+      } else if (
+        measured >= WHOLE_NAME_FLOOR ||
+        (measured >= VARIANT_FLOOR &&
+          normaliseName(a.last_name) === normaliseName(b.last_name) &&
+          initial(a) === initial(b) &&
+          initial(a))
+      ) {
+        // The nickname shape: same surname, same first initial, a name that is
+        // merely a variant. Abigail and Abby Catto are exactly this.
+        reason = 'close_name';
+        score = Math.min(Number(measured.toFixed(3)), 0.997);
+      }
+
+      if (!reason) continue;
+      if (dismissed.has(`${a.id}:${b.id}`)) continue;
+
+      out.push({
+        member_a: a.id,
+        member_b: b.id,
+        display_a: a.display_name,
+        display_b: b.display_name,
+        email_a: a.email,
+        email_b: b.email,
+        reason,
+        score,
+        records_a: recordsOf(a.id),
+        records_b: recordsOf(b.id),
+        joined_a: joinedOf(a),
+        joined_b: joinedOf(b),
+      });
+    }
+  }
+  return out.sort(
+    (x, y) => y.score - x.score || x.display_a.localeCompare(y.display_a),
+  );
+}
+
+const VIEWS = {
+  v_attendance_credit: creditRows,
+  v_member_category_totals: categoryTotalRows,
+  v_member_status: memberStatusRows,
+  v_possible_duplicate_members: duplicatePairRows,
+};
+
 /**
  * The RLS table from docs/01-data-model.md section 8, in the crude form the
  * client can actually be tested against. Reads only: writes are checked at
  * their own call sites below.
  */
 function visibleRows(table, auth) {
+  if (VIEWS[table]) {
+    const rows = VIEWS[table]();
+    if (isStaff(auth)) return rows;
+
+    // Every view here is security_invoker, so a member reads it through their
+    // own policies: their own numbers, and nothing about anybody else. The
+    // duplicate view is over the whole roster, which a member cannot read at
+    // all, so it comes back empty rather than partly filled.
+    const memberId = auth.profile?.member_id ?? null;
+    if (table === 'v_possible_duplicate_members') return [];
+    return memberId ? rows.filter((row) => row.member_id === memberId) : [];
+  }
+
   const rows = db[table];
   if (!rows) return null;
 
@@ -425,8 +729,15 @@ function shape(table, row, nodes, auth, filters) {
 
     const relation = RELATIONS[table]?.[node.name];
     if (!relation) {
-      out[node.name] = relation?.kind === 'many' ? [] : null;
-      continue;
+      // Loud, on purpose. PostgREST resolves an embed from the foreign keys and
+      // answers PGRST200 when there is none; this mock has to be told about
+      // each one, and a missing entry used to come back as `null` on every row.
+      // A screen reading that gets an empty list rather than an error, which is
+      // exactly the silent failure these suites exist to catch: it cost an
+      // afternoon once, and it is not costing another.
+      throw new Error(
+        `the mock has no relation from ${table} to ${node.name}. Add it to RELATIONS.`,
+      );
     }
 
     const childFilters = descend(filters, node.name);
@@ -565,6 +876,43 @@ const INSERT_DEFAULTS = {
     ...row,
   }),
   requirement_node_categories: (row) => ({ ...row }),
+
+  // display_name is `coalesce(preferred_name, first_name) || ' ' || last_name`,
+  // generated and stored, so a client that sent one would have it ignored.
+  members: (row) => ({
+    id: uuid('m9000000-0000-4000-a000-'),
+    preferred_name: null,
+    email: null,
+    ucf_nid: null,
+    notes: null,
+    merged_into_id: null,
+    created_at: new Date().toISOString(),
+    archived_at: null,
+    ...row,
+    display_name: `${row.preferred_name || row.first_name} ${row.last_name}`,
+  }),
+
+  // status is deliberately NOT taken from the caller. An officer filing a
+  // record by hand files it pending and then approves it through
+  // review_records(), exactly as the queue does, so the reviewer and the audit
+  // row are stamped either way. A client that tried to write 'approved'
+  // straight in would find it overwritten here.
+  attendance_records: (row) => ({
+    id: uuid('r9000000-0000-4000-a000-'),
+    member_id: null,
+    claimed_name: null,
+    claimed_email: null,
+    source: 'self_checkin',
+    submitted_value: null,
+    flags: [],
+    submitted_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    reviewed_by: null,
+    reviewed_at: null,
+    review_note: null,
+    ...row,
+    status: 'pending',
+  }),
 };
 
 function runInsert(table, payload, auth) {
@@ -623,6 +971,65 @@ function runInsert(table, payload, auth) {
         if (existing) {
           written.push(existing);
           continue;
+        }
+      }
+
+      if (table === 'members') {
+        // Both columns are NOT NULL with a non-empty check.
+        if (!String(row.first_name ?? '').trim() || !String(row.last_name ?? '').trim()) {
+          return {
+            error: {
+              status: 400,
+              body: {
+                code: '23514',
+                message: 'new row violates check constraint on "members"',
+              },
+            },
+          };
+        }
+        // members.email is citext UNIQUE. This is the constraint an import that
+        // skipped its own preview would hit, and it has to be an error rather
+        // than a second row.
+        if (
+          row.email &&
+          db.members.some(
+            (m) => String(m.email ?? '').toLowerCase() === String(row.email).toLowerCase(),
+          )
+        ) {
+          return {
+            error: {
+              status: 409,
+              body: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "members_email_key"',
+              },
+            },
+          };
+        }
+      }
+
+      if (table === 'attendance_records') {
+        // one_live_record_per_member_event. An officer filing a record by hand
+        // for an event the member already attended is refused, not doubled.
+        const clash =
+          row.member_id &&
+          db.attendance_records.find(
+            (other) =>
+              other.event_id === row.event_id &&
+              other.member_id === row.member_id &&
+              other.status !== 'rejected',
+          );
+        if (clash) {
+          return {
+            error: {
+              status: 409,
+              body: {
+                code: '23505',
+                message:
+                  'duplicate key value violates unique constraint "one_live_record_per_member_event"',
+              },
+            },
+          };
         }
       }
 
@@ -1058,6 +1465,163 @@ export const ADMIN_RPC = {
   },
 
   // -------------------------------------------------------------------------
+  // Duplicate people
+  // -------------------------------------------------------------------------
+
+  /** merge_members(p_from_id uuid, p_into_id uuid) returns jsonb */
+  merge_members(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'merge_members', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const from = body.p_from_id;
+    const into = body.p_into_id;
+    if (from === into) {
+      pds(res, 'PDS03', 'Cannot merge a member into themselves.');
+      return;
+    }
+    if (!db.members.some((m) => m.id === from) || !db.members.some((m) => m.id === into)) {
+      pds(res, 'PDS03', 'Unknown member.');
+      return;
+    }
+
+    // Collisions first: where the survivor already holds a live record for the
+    // same event, the duplicate cannot be moved, so it goes. Doing this the
+    // other way round would violate one_live_record_per_member_event halfway
+    // through, which is why the real function has the same order.
+    const collisions = db.attendance_records.filter(
+      (row) =>
+        row.member_id === from &&
+        row.status !== 'rejected' &&
+        db.attendance_records.some(
+          (other) =>
+            other.member_id === into &&
+            other.event_id === row.event_id &&
+            other.status !== 'rejected',
+        ),
+    );
+    const dropped = collisions.length;
+    const gone = new Set(collisions);
+    db.attendance_records = db.attendance_records.filter((row) => !gone.has(row));
+
+    const moving = db.attendance_records.filter((row) => row.member_id === from);
+    for (const row of moving) row.member_id = into;
+    const moved = moving.length;
+
+    for (const enrollment of db.member_enrollments.filter((row) => row.member_id === from)) {
+      const held = db.member_enrollments.find(
+        (row) => row.member_id === into && row.academic_year_id === enrollment.academic_year_id,
+      );
+      if (!held) {
+        db.member_enrollments.push({ ...enrollment, member_id: into });
+      }
+    }
+    db.member_enrollments = db.member_enrollments.filter((row) => row.member_id !== from);
+
+    // A tombstone, not a delete. Old links still resolve, which is the whole
+    // reason merged_into_id exists.
+    const loser = db.members.find((m) => m.id === from);
+    loser.merged_into_id = into;
+    loser.archived_at = loser.archived_at ?? new Date().toISOString();
+
+    const mergeId = uuid('g0000000-0000-4000-a000-');
+    db.member_merges.push({
+      id: mergeId,
+      from_member_id: from,
+      into_member_id: into,
+      moved_records: moved,
+      dropped_records: dropped,
+      performed_by: auth.userId,
+      performed_at: new Date().toISOString(),
+    });
+
+    audit(auth, 'merge_members', 'member', into, { from_member_id: from, moved, dropped });
+    record({ fn: 'merge_members', actor: auth.userId, from, into, moved, dropped });
+
+    json(res, 200, { merge_id: mergeId, moved, dropped });
+  },
+
+  /** dismiss_duplicate_pair(p_member_a uuid, p_member_b uuid) returns void */
+  dismiss_duplicate_pair(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    // Officer only. A member who could dismiss a pair could hide their own
+    // duplicate row from the people whose job it is to fix it.
+    if (!isOfficer(auth)) {
+      record({ fn: 'dismiss_duplicate_pair', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const a = body.p_member_a;
+    const b = body.p_member_b;
+    if (!a || !b || a === b) {
+      pds(res, 'PDS03', 'Two different members are required.');
+      return;
+    }
+
+    // Order-independent. The pair is stored the one way round the view spells
+    // it, so dismissing (a, b) and dismissing (b, a) are the same dismissal
+    // and neither comes back.
+    const [first, second] = [a, b].sort((x, y) => String(x).localeCompare(String(y)));
+    const held = db.duplicate_dismissals.some(
+      (row) => row.member_a === first && row.member_b === second,
+    );
+    if (!held) {
+      db.duplicate_dismissals.push({
+        member_a: first,
+        member_b: second,
+        dismissed_by: auth.userId,
+        dismissed_at: new Date().toISOString(),
+      });
+    }
+
+    audit(auth, 'dismiss_duplicate_pair', 'member', first, { member_b: second });
+    record({ fn: 'dismiss_duplicate_pair', actor: auth.userId, memberA: first, memberB: second });
+
+    json(res, 200, null);
+  },
+
+  // -------------------------------------------------------------------------
+  // One member's progress
+  // -------------------------------------------------------------------------
+
+  /**
+   * fn_member_requirement_status(p_member_id uuid, p_requirement_set_id uuid)
+   * returns table (node_id, parent_id, type, label, value, target, passed)
+   *
+   * Staff may ask about anybody, a member only about themselves, which is
+   * fn_can_view_member() and is what stops the member portal being a roster.
+   */
+  fn_member_requirement_status(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    const memberId = body.p_member_id;
+    const mine = auth.profile?.member_id ?? null;
+    if (!isStaff(auth) && mine !== memberId) {
+      record({ fn: 'fn_member_requirement_status', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'Not allowed to read that members progress.');
+      return;
+    }
+
+    const set = setOf(body.p_requirement_set_id);
+    if (!set) {
+      pds(res, 'PDS08', 'Unknown requirement set.');
+      return;
+    }
+
+    record({ fn: 'fn_member_requirement_status', actor: auth.userId, memberId, setId: set.id });
+    json(res, 200, evaluateSet(set.id, memberId));
+  },
+
+  // -------------------------------------------------------------------------
   // The requirements engine
   // -------------------------------------------------------------------------
   // These four are the contract the editor is written against. The evaluator
@@ -1265,49 +1829,22 @@ export const ADMIN_RPC = {
     }
 
     const nodes = db.requirement_nodes.filter((row) => row.requirement_set_id === set.id);
-    const childrenOf = (id) =>
-      nodes
-        .filter((row) => row.parent_id === id)
-        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-    const categoryIdsOf = (id) =>
-      db.requirement_node_categories
-        .filter((link) => link.node_id === id)
-        .map((link) => link.category_id);
 
     const members = db.member_enrollments
       .filter((row) => row.academic_year_id === set.academic_year_id)
       .map((row) => row.member_id);
 
-    const credit = creditByMember(set.academic_year_id);
+    // The same evaluator v_member_status and fn_member_requirement_status()
+    // use, run once per member. The preview and the board therefore cannot
+    // disagree about who passes what, which is the property that makes the
+    // preview worth putting a threshold change behind.
+    const index = totalsByMember(set.academic_year_id);
     const passing = new Map(nodes.map((node) => [node.id, 0]));
 
     for (const memberId of members) {
-      const totals = credit.get(memberId) ?? new Map();
-      const verdict = (node) => {
-        if (node.type === 'threshold') {
-          const sum = categoryIdsOf(node.id).reduce(
-            (running, categoryId) => running + (totals.get(categoryId) ?? 0),
-            0,
-          );
-          return sum >= Number(node.min_value ?? 0);
-        }
-        const children = childrenOf(node.id);
-        const passed = children.filter((child) => walk(child)).length;
-        const needed =
-          node.min_children_passing === null || node.min_children_passing === undefined
-            ? children.length
-            : node.min_children_passing;
-        return passed >= needed;
-      };
-      // Deepest first, so a group sees its children's verdicts, exactly as
-      // fn_member_requirement_status() does.
-      const walk = (node) => {
-        const passed = verdict(node);
-        if (passed) passing.set(node.id, (passing.get(node.id) ?? 0) + 1);
-        return passed;
-      };
-      const root = nodes.find((node) => node.id === set.root_node_id) ?? nodes.find((n) => !n.parent_id);
-      if (root) walk(root);
+      for (const row of evaluateSet(set.id, memberId, index)) {
+        if (row.passed) passing.set(row.node_id, (passing.get(row.node_id) ?? 0) + 1);
+      }
     }
 
     record({ fn: 'preview_requirement_set', actor: auth.userId, setId: set.id });
@@ -1323,39 +1860,6 @@ export const ADMIN_RPC = {
     );
   },
 };
-
-/**
- * v_member_category_totals, in the mock: approved credit per member per
- * category for one year. `fixed` events carry their own credit, and the one
- * event that reads a number off the check-in form carries whatever the member
- * typed, which is how Volunteering hours arrive.
- */
-function creditByMember(yearId) {
-  const eventById = new Map(db.events.map((event) => [event.id, event]));
-  const linksByEvent = new Map();
-  for (const link of db.event_categories) {
-    if (!linksByEvent.has(link.event_id)) linksByEvent.set(link.event_id, []);
-    linksByEvent.get(link.event_id).push(link);
-  }
-
-  const out = new Map();
-  for (const row of db.attendance_records) {
-    if (row.status !== 'approved' || !row.member_id) continue;
-    const event = eventById.get(row.event_id);
-    if (!event || event.academic_year_id !== yearId) continue;
-
-    for (const link of linksByEvent.get(event.id) ?? []) {
-      const credit =
-        link.credit_mode === 'fixed'
-          ? Number(link.fixed_credit ?? 0)
-          : Number(row.submitted_value ?? 0);
-      if (!out.has(row.member_id)) out.set(row.member_id, new Map());
-      const totals = out.get(row.member_id);
-      totals.set(link.category_id, (totals.get(link.category_id) ?? 0) + credit);
-    }
-  }
-  return out;
-}
 
 // ---------------------------------------------------------------------------
 // Signed photo URLs

@@ -4,8 +4,9 @@ Two surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
   This is **P1**.
-- **`/admin/`** the officer review queue and the account claims tab, behind a
-  magic-link sign-in. This is **P2**.
+- **`/admin/`** the officer screens, behind a magic-link sign-in: the review queue and
+  account claims (**P2**), the requirements editor and categories (**P3**), and the
+  progress board, member detail and roster (**P4**).
 
 ```
 web/
@@ -20,15 +21,22 @@ web/
   src/image.js               compression to the docs/02-storage.md spec
   src/format.js              dates, labels, units
 
-  src/admin.js               sign-in, the role guard, the two tabs
+  src/admin.js               sign-in, the role guard, the tabs
   src/auth.js                the session: magic link, refresh, sign out
   src/rest.js                authenticated PostgREST reads and writes
   src/review.js              the review queue
   src/claims.js              account claims
+  src/requirements.js        the rule editor, with the live preview
+  src/requirement-model.js   the rule tree as data, with no DOM in it
+  src/categories.js          what the rules measure
+  src/progress.js            the progress board, member by category
+  src/member.js              one member: progress, checklist, record log
+  src/roster.js              the roster, CSV import, duplicate people
+  src/csv.js                 reading and writing CSV, both directions
   src/match.js               ranking the roster against a typed-in name
   src/flags.js               the triage vocabulary, in an officer's words
   src/officer-errors.js      every PDS* code, written from the officer's side
-  src/ui.js                  four DOM helpers
+  src/ui.js                  the DOM helpers
 
   assets/css/checkin.css     the check-in stylesheet
   assets/css/admin.css       the admin stylesheet
@@ -101,11 +109,20 @@ There is no live Supabase project in development, so `mock/` stands in for one.
 
 ```bash
 cd web
-npm run mock          # http://localhost:8787
-npm run verify        # the check-in checks
-npm run verify:admin  # the review queue checks
-npm run check         # em dash gate, then both suites
+npm run mock                 # http://localhost:8787
+npm run verify               # the check-in checks
+npm run verify:admin         # the review queue checks
+npm run verify:requirements  # the rule editor checks
+npm run verify:board         # the board, member, roster and merge checks
+npm run check                # em dash gate, then all four suites
 ```
+
+`verify:board` is the one suite that mounts the shipped page rather than only
+the modules. `mock/dom.mjs` parses `admin/index.html`, `admin.js`'s own
+`start()` runs against it, and what is asserted is the rendered DOM, so an id
+that stops matching between the markup and a module fails there rather than in
+front of an officer. It is a deliberate subset of a DOM: no layout, no CSS, and
+a selector it cannot parse throws instead of quietly matching nothing.
 
 `npm run mock` prints one URL per scenario. Each check-in token is a different
 event:
@@ -220,6 +237,20 @@ reject go through `review_records()` anyway, and linking goes through
 write the `audit_log` row, and refuse the approvals that have to be refused. The
 absence of a direct write is asserted against the source, since nothing else
 would notice it coming back.
+
+### The board never does its own arithmetic
+
+`point_total` and `is_honorary` are read from `v_member_status`, and each cell
+from `v_member_category_totals`. Nothing under `src/` sums a category or decides
+who is honorary, which is invariant 2 and the reason the engine is in Postgres.
+
+The trap is that a board which added up its own columns would look completely
+normal. It would also be wrong for every member with volunteering hours, because
+the point total excludes them (`counts_toward_point_total` is false on that
+category) while the column still shows them. So `verify-board.mjs` asserts that
+the visible cells deliberately do NOT sum to the visible point total, on more
+than twenty members. A client doing its own arithmetic could not produce both
+numbers.
 
 ### A refused PATCH is a 200
 

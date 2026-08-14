@@ -665,6 +665,13 @@ export function buildDatabase() {
     member_claims: claims,
     attendance_records: attendance,
     attendance_evidence: evidence,
+    // Written by merge_members(), read by nothing on screen yet. It is the
+    // record that a merge happened and who did it, and the mock keeps it for
+    // the same reason the schema does.
+    member_merges: [],
+    // "Not a duplicate", remembered. Without this the same pair asks again on
+    // the next load, which is the behaviour the officer just said no to.
+    duplicate_dismissals: [],
     audit_log: [],
   };
 }

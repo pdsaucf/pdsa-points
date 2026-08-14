@@ -33,14 +33,22 @@ import { createReview } from './review.js';
 import { createClaims } from './claims.js';
 import { createRequirements } from './requirements.js';
 import { createCategories } from './categories.js';
+import { createProgress } from './progress.js';
+import { createRoster } from './roster.js';
+import { createMember } from './member.js';
 import { $, h, announce, setHidden } from './ui.js';
 
 const REVIEWING_ROLES = ['officer', 'admin'];
 const READING_ROLES = ['officer', 'admin', 'viewer'];
 
-// The four panels, in tab order. Each one is mounted once and reloaded when the
+// The six panels, in tab order. Each one is mounted once and reloaded when the
 // year changes, so switching tabs costs nothing.
-const TABS = ['review', 'claims', 'requirements', 'categories'];
+const TABS = ['review', 'claims', 'progress', 'roster', 'requirements', 'categories'];
+
+// One member, in full. It is not a tab: it is opened from a name on the board
+// or on the roster and closed back to whichever of those it came from, so
+// clicking a name never loses the officer's place.
+const PANELS = [...TABS, 'member'];
 
 const el = {};
 const app = {
@@ -52,7 +60,11 @@ const app = {
   claims: null,
   requirements: null,
   categories: null,
+  progress: null,
+  roster: null,
+  member: null,
   tab: 'review',
+  returnTab: 'roster',
 };
 
 // ---------------------------------------------------------------------------
@@ -315,16 +327,45 @@ function context() {
     clearMessage,
     setReviewCount: (count) => setCount(el.tabReviewCount, count),
     setClaimCount: (count) => setCount(el.tabClaimsCount, count),
+    openMember,
+    closeMember,
+    // A record added by hand, or a name edited, changes a number the board and
+    // the roster are both showing. They reload rather than being patched in
+    // place, because the point total and the honorary star are the database's
+    // answer and not something this screen may recompute.
+    onMemberChanged: () => {
+      app.progress?.reload();
+      app.roster?.reload();
+    },
+    onRosterChanged: () => {
+      app.progress?.reload();
+    },
   };
+}
+
+function showPanel(name) {
+  for (const panel of PANELS) setHidden(el.panels[panel], panel !== name);
+  for (const tab of TABS) {
+    el.tabs[tab].setAttribute('aria-selected', String(tab === name));
+  }
 }
 
 function selectTab(tab) {
   app.tab = tab;
-  for (const name of TABS) {
-    el.tabs[name].setAttribute('aria-selected', String(tab === name));
-    setHidden(el.panels[name], tab !== name);
-  }
+  showPanel(tab);
   clearMessage();
+}
+
+function openMember(memberId) {
+  app.returnTab = app.tab === 'member' ? app.returnTab : app.tab;
+  app.tab = 'member';
+  showPanel('member');
+  clearMessage();
+  app.member?.open(memberId);
+}
+
+function closeMember() {
+  selectTab(app.returnTab);
 }
 
 function startApp() {
@@ -347,11 +388,17 @@ function startApp() {
   app.claims = createClaims(ctx);
   app.requirements = createRequirements(ctx);
   app.categories = createCategories(ctx);
+  app.progress = createProgress(ctx);
+  app.roster = createRoster(ctx);
+  app.member = createMember(ctx);
 
   app.review.mount();
   app.claims.mount();
   app.requirements.mount();
   app.categories.mount();
+  app.progress.mount();
+  app.roster.mount();
+  app.member.mount();
 }
 
 // ---------------------------------------------------------------------------
@@ -380,14 +427,19 @@ function cacheElements() {
     tabs: {
       review: $('tab-review'),
       claims: $('tab-claims'),
+      progress: $('tab-progress'),
+      roster: $('tab-roster'),
       requirements: $('tab-requirements'),
       categories: $('tab-categories'),
     },
     panels: {
       review: $('panel-review'),
       claims: $('panel-claims'),
+      progress: $('panel-progress'),
+      roster: $('panel-roster'),
       requirements: $('panel-requirements'),
       categories: $('panel-categories'),
+      member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),
     tabClaimsCount: $('tab-claims-count'),
@@ -423,6 +475,13 @@ function wire() {
     // Requirements are scoped to the year in the top bar, so this is the one
     // control that decides which rules are on screen.
     app.requirements?.reload();
+    // Every number on these three is per year: the totals, the star, who is on
+    // the roster, and which records a member has. A year change that left them
+    // showing last year's figures is the "why do the numbers look wrong"
+    // question the year selector exists to answer.
+    app.progress?.reload();
+    app.roster?.reload();
+    if (app.tab === 'member') app.member?.reload();
   });
 }
 
