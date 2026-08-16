@@ -250,6 +250,33 @@ record for the same event, and leaves a tombstone so old links still resolve. It
 recorded in `member_merges` with who did it. **Not a dupe** is remembered, so the same
 pair never nags twice.
 
+### Retroactive matches
+
+Somebody who attended before they joined used the Couldn't find their name path at
+check-in (§ Review queue, above), so their earlier attendance sits unmatched, waiting on
+`resolve_unmatched()` one record at a time. Adding them to the roster is the moment an
+officer already knows who they are, so it's also the moment those records can be
+offered back: `fn_retroactive_match_candidates(member_id)` returns every unresolved
+check-in that might be theirs, restricted to years they're actually enrolled in. A
+claimed email that matches the member's own is reported as an identity; a claimed name
+that merely resembles theirs is reported as a resemblance, never presented with the same
+confidence. Nothing is linked until an officer confirms which ones are really theirs,
+through `link_retroactive_matches()`, and confirming does not approve: the records stay
+in the review queue exactly like every other pending record.
+
+Confirming a batch is not all-or-nothing. `link_retroactive_matches()` answers back one
+outcome per record an officer confirmed, not a total, because "9 of the 10 you picked
+worked" is not something an officer can act on without knowing which one didn't. A record
+another officer rejected in the review queue after the candidate list loaded and before
+Confirm was pressed comes back distinctly (not turned into credit, and not silently
+skipped either), so a stale screen never reads as a success.
+
+Asking about an archived member's earlier check-ins is refused outright: archiving already
+said this is not somebody the club is tracking. Asking about a member who has since been
+merged into somebody else follows the merge to the survivor, the same way approving an
+account claim does (see Account claims, below), since that's where `merge_members()`
+already moved the rest of their history.
+
 ### Member detail
 
 Per-category progress bars, the Honorary checklist with pass/fail per requirement, and

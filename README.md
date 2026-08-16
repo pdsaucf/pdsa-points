@@ -78,6 +78,7 @@ feature, so each one can be read on its own.
 | `..._role_assertions.sql` | `fn_assert_officer()` and `fn_assert_admin()` refuse a caller whose role cannot be determined |
 | `..._member_import_batch.sql` | `upsert_members_and_enroll()`, which imports a roster in one request instead of 355 |
 | `..._member_portal.sql` | `attendance_records.member_note`, `member_claims.review_note`, and the six RPCs the member portal signs in through: session bootstrap, the claim flow and its officer approval, and the missing-credit request. Also locks both member rows at the top of `merge_members()`, which approving a claim now depends on |
+| `..._retroactive_matching.sql` | `fn_retroactive_match_candidates()` and `link_retroactive_matches()`, so a member's check-ins from before they joined are offered back to them instead of resolved one at a time |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
