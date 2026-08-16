@@ -59,6 +59,56 @@ A claim is what stops someone signing in as themselves and reading another membe
 record. Until it is approved, `profiles.member_id` stays null and the portal shows
 "waiting for an officer to confirm this is you", not somebody's data.
 
+### The functions the flow is made of
+
+Every step above is a `SECURITY DEFINER` RPC, because every step does something the
+caller's own policies forbid. They are defined in `..._member_portal.sql` and
+enumerated in [01-data-model.md](01-data-model.md) section 8.
+
+| Step | Function |
+|---|---|
+| signed in, first request of the session | `start_portal_session()` |
+| "which of these is you" | `search_roster_for_claim(q)` |
+| the member picks one | `file_member_claim(member_id, note)` |
+| the officer's queue | `list_pending_claims()` |
+| the officer's one click | `review_member_claim(claim_id, decision, note)` |
+| "Something's missing?" | `request_missing_credit(event_id, note, value)` |
+
+`start_portal_session()` is the one that carries the branch in the diagram. A signed-in
+account has no `profiles` row until something creates one, and nothing else in the
+schema does, so this creates it with role `member` (**not** the `viewer` column default,
+which is read-only staff and can see the whole club) and links it when the address
+matches. It never changes a role that already exists, never moves a `member_id` that is
+already set, and never links a member another profile holds, so calling it on every page
+load is a read in every case except the first.
+
+An officer whose account never got a `profiles` row comes out of it a member. That is
+deliberate: `fn_current_role()` was already null for them, so they had no officer rights
+to lose, and an admin now updates the role rather than inserting it.
+
+Two notes carried by a claim, not one. `member_claims.note` is the member's own words and
+is shown back to them; `review_note` is why an officer declined. Same split, and same
+reason, as `member_note` against `review_note` on an attendance record.
+
+**The roster moves while a claim waits.** That gap is the design, not a defect: one
+officer click per member, whenever each person first signs in. But the days in between
+are exactly when roster cleanup happens, so `review_member_claim()` revalidates the
+member at approval instead of trusting the check made when the claim was filed.
+
+- **Merged**: followed to the survivor, the same bounded walk
+  `upsert_member_and_enroll()` does. A merge means the row moved, not that the person
+  stopped existing, and `merge_members()` took every attendance record with it. Linking
+  to the tombstone would hand somebody an empty portal. The claim keeps naming the row
+  the member actually picked; the resolved id is reported in the audit row instead.
+- **Archived**: refused. `search_roster_for_claim()` already declines to offer archived
+  rows, so approving one would leave the two halves of one rule disagreeing.
+
+A claim can also be POSTed straight to `member_claims`, since `claims_insert_own`
+permits it, skipping `file_member_claim()` and its checks. That is why those checks are
+made again at approval, which is the step that actually grants the read, and why the
+500-character limit on `note` is a check constraint on the column as well as a readable
+refusal in the function. A cap enforced in one of two write paths is not a cap.
+
 ## What a member sees
 
 ```
@@ -114,10 +164,15 @@ Three things here matter more than they look:
 
 ### "Something's missing?"
 
-Opens a short form: pick the event from a list, add a note, submit. That files an
-ordinary `attendance_records` row with `status = 'pending'` and
-`source = 'member_request'`, flagged `member_requested`, landing in the same review
-queue as everything else.
+Opens a short form: pick the event from a list, add a note, submit. That calls
+`request_missing_credit()`, which files an ordinary `attendance_records` row with
+`status = 'pending'` and `source = 'member_request'`, flagged `member_requested`, the
+note in `member_note`, landing in the same review queue as everything else.
+
+It refuses an event the member is not enrolled for, an unpublished one, and a second
+request for an event they already have a live record on. A member who is asking about an
+event from a year they were not on the roster for has made a mistake at the point of
+asking, and saying so beats filing a record that will be declined later.
 
 This deliberately reuses the existing machinery instead of adding a support inbox. An
 officer approving a missing-credit request is doing the exact same action, in the exact
@@ -140,8 +195,13 @@ existing enum, and every policy is keyed on `profiles.member_id`:
 Two specifics worth stating:
 
 - **A member can never see another member's progress or the roster.** There is no
-  leaderboard, and the progress board stays officer-only. The check-in autocomplete is
-  the only place a name search exists, and it returns names only.
+  leaderboard, and the progress board stays officer-only. Two name searches exist and
+  no more: the check-in autocomplete (`search_members()`) and the claim screen
+  (`search_roster_for_claim()`). Both return names and ids and nothing else, both cap
+  at ten rows and three letters, and both are rate limited. The claim search is open
+  only to an account that is not yet linked, and it hides anybody already linked or
+  already claimed, so it is strictly narrower than the anonymous one the check-in page
+  already exposes.
 - **A member cannot approve anything**, including their own missing-credit request. The
   status column is set by RPC, never by a client write.
 

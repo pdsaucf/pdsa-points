@@ -69,10 +69,15 @@ feature, so each one can be read on its own.
 | `..._requirements.sql` | `requirement_sets`, `requirement_nodes`, `requirement_node_categories` |
 | `..._ops_tables.sql` | `purge_runs`, `app_settings`, `audit_log`, upload grants, rate limiting |
 | `..._views_and_functions.sql` | role helpers, the evaluator, `v_member_status`, `v_config_warnings` |
-| `..._rpcs.sql` | the eight RPCs |
+| `..._rpcs.sql` | the thirteen RPCs: four for the anonymous check-in page, five for the review queue and the purges, four for the requirements editor |
 | `..._rls.sql` | policies and grants |
 | `..._storage.sql` | the `evidence` bucket and its policies |
 | `..._seed_2026_2027.sql` | the year, its terms, the categories, and the published rule tree |
+| `..._duplicate_people.sql` | `v_possible_duplicate_members` and `dismiss_duplicate_pair()` |
+| `..._member_upsert.sql` | `upsert_member_and_enroll()`, the one write behind roster Add and import |
+| `..._role_assertions.sql` | `fn_assert_officer()` and `fn_assert_admin()` refuse a caller whose role cannot be determined |
+| `..._member_import_batch.sql` | `upsert_members_and_enroll()`, which imports a roster in one request instead of 355 |
+| `..._member_portal.sql` | `attendance_records.member_note`, `member_claims.review_note`, and the six RPCs the member portal signs in through: session bootstrap, the claim flow and its officer approval, and the missing-credit request. Also locks both member rows at the top of `merge_members()`, which approving a claim now depends on |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
@@ -178,14 +183,20 @@ Everyone signed in shares the `authenticated` database role; admin, officer,
 viewer and member are values of `profiles.role`, read through `SECURITY
 DEFINER` helpers so that policies on `profiles` do not recurse. Members are
 keyed on `profiles.member_id`, which stays null until an officer approves an
-account claim, so an unclaimed account sees nothing.
+account claim, so an unclaimed account sees nothing. An account with no
+`profiles` row at all has no role, and no role is refused: `fn_assert_officer()`
+and `fn_assert_admin()` treat an indeterminate role as a no rather than as a
+missing no. `test/privileges.test.mjs` holds both that and the grants, so a
+migration that forgets to revoke `EXECUTE` from `PUBLIC` fails there.
 
 RPC errors carry distinct SQLSTATE codes so a client can tell them apart
 **without matching on message text**: `PDS01` bad token, `PDS02` check-in has not
 opened yet, `PDS03` bad argument, `PDS04` evidence problem, `PDS05` already
 checked in, `PDS06` cannot approve an unmatched record, `PDS07` wrong role,
 `PDS08` unknown requirement set, `PDS09` rate limited, `PDS10` check-in has
-closed.
+closed, `PDS11` the requirement tree is not a tree, `PDS12` a requirement set
+failed validation, `PDS13` this account already holds a claim or a link, `PDS14`
+that member is already claimed by, or linked to, another account.
 
 `PDS02` and `PDS10` are separate codes on purpose. They were one code, which
 forced the page to read the message text to decide which of two screens to show,
@@ -193,6 +204,11 @@ so rewording a sentence would have silently shown the wrong one with no test
 failing. The message text is copy and is meant to be rewritten freely; the code
 is the contract. If a further distinction is ever needed, add a code rather than
 a sentence.
+
+`PDS13` and `PDS14` are the same rule applied again. A claim that cannot be
+filed has failed for one of two reasons, and only one of them is the member's
+mistake: their own claim is already waiting, or somebody else already holds one
+on that person, which an officer has to look at.
 
 ### Check-in rate limits, and the client nonce
 

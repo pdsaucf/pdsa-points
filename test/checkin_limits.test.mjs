@@ -406,16 +406,24 @@ test('every check-in ceiling is a setting, so an officer can raise it without a 
       where key like '%max_per%' or key like '%outstanding%' or key like '%ttl_minutes'
       order by key`,
   );
+  // The query is broader than this file: it matches every ceiling in the
+  // schema, so the two the member portal added (migration 18) show up here
+  // too. They are listed rather than filtered out, because what makes this
+  // assertion worth having is that it fails BOTH ways. A ceiling introduced
+  // anywhere as a constant instead of a row has to fail somewhere, and this is
+  // the only place that would notice.
   assert.deepEqual(
     keys.map((k) => k.key),
     [
       'checkin_nonce_max_per_min',
       'checkin_nonce_ttl_minutes',
+      'claim_search_max_per_min',
       'evidence_grant_ttl_minutes',
       'evidence_grants_outstanding_per_event',
       'evidence_grants_outstanding_per_member',
       'evidence_upload_max_per_event_per_min',
       'evidence_upload_max_per_nonce_per_min',
+      'missing_credit_max_per_min',
       'search_members_max_per_event_per_min',
       'search_members_max_per_nonce_per_min',
       'submit_checkin_max_per_event_per_min',
