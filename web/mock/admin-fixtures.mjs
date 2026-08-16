@@ -23,11 +23,20 @@ const USERS = {
   claimant2: 'u0000000-0000-4000-a000-00000000006f',
 };
 
+// This is the mock's auth.users as much as it is its sign-in form. The address
+// each account signed in WITH is the thing list_pending_claims() exists to
+// return, and it is not the address on anybody's roster row: the two claimants
+// below are exactly the case the claim flow is for, somebody whose sign-in
+// address the club has never seen. An account with no entry here is one whose
+// email the queue shows as missing, which is a real state and is why the card
+// has copy for it.
 export const ACCOUNTS = {
   'sara@pdsaucf.com': { user_id: USERS.officer, role: 'officer', full_name: 'Sara Whitfield' },
   'ben@pdsaucf.com': { user_id: USERS.admin, role: 'admin', full_name: 'Ben Le' },
   'advisor@ucf.edu': { user_id: USERS.viewer, role: 'viewer', full_name: 'Dr Okafor' },
   'priya@knights.ucf.edu': { user_id: USERS.member, role: 'member', full_name: 'Priya Raman' },
+  'a.catto.2027@knights.ucf.edu': { user_id: USERS.claimant, role: 'member', full_name: 'Abigail Catto' },
+  'ewallace99@gmail.com': { user_id: USERS.claimant2, role: 'member', full_name: null },
 };
 
 // Somebody with no account at all, for the "no profile row" branch of the guard.
@@ -665,6 +674,10 @@ export function buildDatabase() {
       requested_at: '2026-08-11T09:00:00.000Z',
       reviewed_by: null,
       reviewed_at: null,
+      // The officer's column, added by migration 18. member_claims.note above
+      // is the member's own words and is shown back to them, so a decline
+      // reason cannot go there.
+      review_note: null,
     },
     {
       // No name on the profile: the officer has only the roster row to go on,
@@ -677,6 +690,7 @@ export function buildDatabase() {
       requested_at: '2026-08-11T10:30:00.000Z',
       reviewed_by: null,
       reviewed_at: null,
+      review_note: null,
     },
   ];
 

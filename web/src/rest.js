@@ -125,8 +125,9 @@ export async function patch(table, filters, body, options = {}) {
     // return=representation is how the caller learns that RLS matched no row.
     // A PATCH the policy refuses is not an error: it is a 200 with an empty
     // array, and a UI that does not check gets to report success for a write
-    // that did not happen. See claims.js, where exactly that distinction is
-    // the difference between an officer and an admin.
+    // that did not happen. See requirements.js, where an officer editing a
+    // PUBLISHED set comes back as exactly that: req_sets_write admits an
+    // officer for drafts only, and the empty array is the whole refusal.
     prefer: options.prefer ?? 'return=representation',
     opts: options,
   });

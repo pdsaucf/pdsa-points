@@ -6,48 +6,57 @@
 // roster email they are linked automatically. Claims exist for the 355
 // imported members who arrived with no email on file.
 //
-// TWO THINGS THE DESIGN DOC ASKS FOR THAT THE DATABASE CANNOT YET GIVE. Both
-// are called out in the report for this phase rather than papered over here.
+// BOTH HALVES OF THE CARD ARE RPCs, AND EACH ONE OWNS A WRITE OR A READ THIS
+// SCREEN IS NOT ALLOWED TO MAKE ITSELF.
 //
-// 1. The wireframe leads each card with the address the person signed in
-//    with. That lives in auth.users.email, which PostgREST does not expose
-//    (it serves the `public` schema) and which no view or RPC in P0 surfaces.
-//    So the card leads with profiles.full_name, which an officer can read,
-//    and says plainly when even that is missing.
+// 1. The card leads with the address the person signed in with, because that
+//    is the thing the officer is actually deciding about. It lives in
+//    auth.users.email, which PostgREST does not serve, so the queue comes from
+//    list_pending_claims() rather than from member_claims.
+// 2. Confirm links the account. Writing profiles.member_id is an admin write
+//    under profiles_write_admin, and review_member_claim() owns it: an officer
+//    calling it records the decision, makes the link, and writes the audit row
+//    in one transaction. It is the only column of profiles that function
+//    writes, and an officer still cannot change anybody's role.
 //
-// 2. Confirming a claim should link the account: set profiles.member_id. The
-//    policy that governs writes to profiles is profiles_write_admin, so an
-//    OFFICER cannot make that write. There is no approve_claim() RPC to do it
-//    for them. An officer's Confirm therefore records the decision, and an
-//    admin's Confirm also completes the link. The screen says which of those
-//    just happened instead of claiming the second one either way.
+// THE ROSTER MOVES WHILE A CLAIM WAITS, which is why Confirm can come back
+// saying something the officer did not press. review_member_claim() revalidates
+// the member at approval: an archived one is refused, and a merged one is
+// followed to the survivor, because merge_members() took every attendance
+// record with it and linking to the tombstone would hand somebody an empty
+// portal. The claim keeps naming the row the member picked, so when the walk
+// moved the answer, the status line has to say so.
 //
-// A PATCH that RLS refuses is not an error. It is a 200 with an empty array,
-// which is exactly why every write here asks for return=representation and
-// counts the rows that came back.
+// Declining takes a reason, and the member reads it. Same split as a declined
+// check-in: member_claims.note is theirs, review_note is the officer's.
 
-import { select, patch } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
+import { select, callRpc } from './rest.js';
+import { CLAIM } from './officer-errors.js';
 import { $, h, announce, setHidden, plural, monthYear } from './ui.js';
 
-// Both writes below can come back refused as a 200 with an empty array, and
-// the officer's next step is the same either way.
-const NOT_CHANGED = 'That claim was not changed. Reload the page and try again.';
+/** Shown to a staff account that is not an officer, in place of the queue. */
+const OFFICER_ONLY = 'Read only: account claims are decided by officers.';
 
 export function createClaims(ctx) {
   const el = {
     loading: $('loading-claims'),
     empty: $('empty-claims'),
     list: $('claims-list'),
+    declineDialog: $('claim-decline-dialog'),
+    declineForm: $('claim-decline-form'),
+    declineWho: $('claim-decline-who'),
+    declineNote: $('claim-decline-note'),
+    declineError: $('claim-decline-error'),
   };
 
   const state = {
     claims: [],
-    profiles: new Map(), // user_id -> profile
+    rosterEmails: new Map(), // member_id -> the address on the roster row
     recordCounts: new Map(), // member_id -> approved records
     joined: new Map(), // member_id -> earliest joined_on
     busy: false,
     loaded: false,
+    declining: null,
   };
 
   async function load() {
@@ -55,18 +64,27 @@ export function createClaims(ctx) {
     setHidden(el.empty, true);
     el.list.replaceChildren();
 
-    try {
-      const claims = await select('member_claims', {
-        select: 'id,user_id,member_id,status,note,requested_at,members(id,display_name,email)',
-        filters: { status: 'eq.pending' },
-        order: 'requested_at.asc',
-      });
-
-      state.claims = claims;
+    // list_pending_claims() is officer only, where the table it replaced was
+    // readable by any staff account. So a viewer's load would be one request
+    // whose only possible answer is a refusal, and the screen says what it is
+    // instead of showing them an error on every page load.
+    if (!ctx.canReview) {
+      state.claims = [];
       state.loaded = true;
-      ctx.setClaimCount(claims.length);
+      ctx.setClaimCount(0);
+      setHidden(el.loading, true);
+      el.list.replaceChildren(h('p', { class: 'muted small' }, OFFICER_ONLY));
+      return;
+    }
 
-      if (claims.length) await loadContext(claims);
+    try {
+      const claims = await callRpc('list_pending_claims');
+
+      state.claims = Array.isArray(claims) ? claims : [];
+      state.loaded = true;
+      ctx.setClaimCount(state.claims.length);
+
+      if (state.claims.length) await loadContext(state.claims);
       render();
     } catch (err) {
       setHidden(el.loading, true);
@@ -75,23 +93,23 @@ export function createClaims(ctx) {
   }
 
   /**
-   * What an officer needs in order to believe a claim: how much history is
-   * attached to the roster row, and how long it has been there. A row with 45
-   * approved records and a join date from last August is somebody real; a row
-   * with none may be a duplicate that should be merged instead.
+   * What an officer needs in order to believe a claim: the address already on
+   * the roster row, how much history is attached to it, and how long it has
+   * been there. A row with 45 approved records and a join date from last August
+   * is somebody real; a row with none may be a duplicate that should be merged
+   * instead.
    *
-   * member_claims has no foreign key to profiles (both point at auth.users
-   * separately), so the names cannot be fetched as an embedded select and come
-   * back in their own query.
+   * list_pending_claims() returns names and ids, deliberately: it is the one
+   * thing PostgREST cannot answer, and everything else here is an ordinary read
+   * under the officer's own policies.
    */
   async function loadContext(claims) {
-    const userIds = [...new Set(claims.map((c) => c.user_id))];
     const memberIds = [...new Set(claims.map((c) => c.member_id))];
 
-    const [profiles, records, enrollments] = await Promise.all([
-      select('profiles', {
-        select: 'user_id,full_name,role,member_id',
-        filters: { user_id: `in.(${userIds.join(',')})` },
+    const [members, records, enrollments] = await Promise.all([
+      select('members', {
+        select: 'id,email',
+        filters: { id: `in.(${memberIds.join(',')})` },
       }),
       select('attendance_records', {
         select: 'id,member_id',
@@ -104,7 +122,7 @@ export function createClaims(ctx) {
       }),
     ]);
 
-    state.profiles = new Map(profiles.map((p) => [p.user_id, p]));
+    state.rosterEmails = new Map(members.map((row) => [row.id, row.email]));
 
     state.recordCounts = new Map();
     for (const row of records) {
@@ -132,30 +150,28 @@ export function createClaims(ctx) {
   }
 
   function renderClaim(claim) {
-    const profile = state.profiles.get(claim.user_id);
-    const member = claim.members ?? {};
-    const who = profile?.full_name?.trim();
     const count = state.recordCounts.get(claim.member_id) ?? 0;
     const joinedOn = state.joined.get(claim.member_id);
+    const rosterEmail = state.rosterEmails.get(claim.member_id);
 
     const card = h('article', {
       class: 'card',
-      dataset: { id: claim.id, severity: 'look' },
+      dataset: { id: claim.claim_id, severity: 'look' },
     });
 
     const main = h('div', { class: 'card-main' });
 
-    // The heading names the state. Who is asking, and which roster row they
-    // say is theirs, are the metadata line under it.
+    // The heading names the state. The address they signed in with, and which
+    // roster row they say is theirs, are the metadata line under it.
     main.append(h('p', { class: 'card-headline' }, 'Account claim'));
 
     main.append(
       h(
         'p',
         { class: 'card-meta' },
-        h('span', { class: 'card-who' }, who || 'No name on file'),
+        h('span', { class: 'card-who' }, claim.account_email || 'No address on file'),
         h('span', { class: 'claim-says' }, ' claims to be '),
-        h('span', { class: 'card-who' }, member.display_name ?? 'somebody on the roster'),
+        h('span', { class: 'card-who' }, claim.member_name ?? 'somebody on the roster'),
       ),
     );
 
@@ -163,7 +179,8 @@ export function createClaims(ctx) {
       h(
         'ul',
         { class: 'claim-facts' },
-        h('li', {}, member.email ? `Roster email: ${member.email}` : 'Roster email: none on file'),
+        claim.account_name ? h('li', {}, `Account name: ${claim.account_name}`) : null,
+        h('li', {}, rosterEmail ? `Roster email: ${rosterEmail}` : 'Roster email: none on file'),
         h('li', {}, `${plural(count, 'approved record')}`),
         h('li', {}, joinedOn ? `Joined ${monthYear(joinedOn)}` : 'Not on any year of the roster'),
       ),
@@ -190,16 +207,19 @@ export function createClaims(ctx) {
 
     card.append(main, h('div', { class: 'card-side' }));
 
-    const actions = h('div', { class: 'card-actions' });
-    if (ctx.canReview) {
-      actions.append(
+    // No read-only branch here: load() answers that case before a card is ever
+    // built, because the queue itself is officer only now.
+    card.append(
+      h(
+        'div',
+        { class: 'card-actions' },
         h(
           'button',
           {
             type: 'button',
             class: 'button button-primary',
             disabled: state.busy,
-            onClick: () => confirmClaim(claim, card),
+            onClick: () => confirmClaim(claim),
           },
           'Confirm',
         ),
@@ -209,15 +229,12 @@ export function createClaims(ctx) {
             type: 'button',
             class: 'button button-danger',
             disabled: state.busy,
-            onClick: () => rejectClaim(claim, card),
+            onClick: () => openDecline(claim),
           },
           'Decline',
         ),
-      );
-    } else {
-      actions.append(h('p', { class: 'muted small' }, READ_ONLY));
-    }
-    card.append(actions);
+      ),
+    );
 
     return card;
   }
@@ -227,82 +244,124 @@ export function createClaims(ctx) {
     for (const node of el.list.querySelectorAll('button')) node.disabled = on;
   }
 
-  async function decide(claim, status) {
-    return patch(
-      'member_claims',
-      { id: `eq.${claim.id}` },
-      {
-        status,
-        reviewed_by: ctx.userId,
-        reviewed_at: new Date().toISOString(),
-      },
-    );
+  const drop = (claim) => {
+    state.claims = state.claims.filter((row) => row.claim_id !== claim.claim_id);
+  };
+
+  /**
+   * The name of the row the link actually landed on.
+   *
+   * review_member_claim() reports the resolved id rather than rewriting the
+   * claim, so after a followed merge the only name this screen holds is the one
+   * the member picked, which is now a tombstone. One read turns that id into
+   * the name the officer has to be shown.
+   */
+  async function survivorName(memberId) {
+    try {
+      const rows = await select('members', {
+        select: 'id,display_name',
+        filters: { id: `eq.${memberId}` },
+        limit: 1,
+      });
+      return rows[0]?.display_name ?? null;
+    } catch {
+      return null;
+    }
   }
 
-  async function confirmClaim(claim, card) {
+  async function confirmClaim(claim) {
     setBusy(true);
     ctx.clearMessage();
     try {
-      const updated = await decide(claim, 'approved');
-      if (!Array.isArray(updated) || !updated.length) {
-        // The policy refused it and said so by returning nothing.
-        ctx.note(NOT_CHANGED, 'warn');
-        return;
+      const result = await callRpc('review_member_claim', {
+        p_claim_id: claim.claim_id,
+        p_decision: 'approve',
+        p_note: null,
+      });
+
+      const picked = claim.member_name ?? 'that member';
+      let said = `Linked to ${picked}. They can see their points now.`;
+      let tone = 'ok';
+
+      if (result?.followed_merge) {
+        // Confirm was pressed on one row and another was linked. Saying only
+        // "linked" here would leave the officer reading a name they did not
+        // press the next time this member comes up.
+        const survivor = await survivorName(result.member_id);
+        said = survivor
+          ? `Linked to ${survivor}. ${picked} was merged into that record.`
+          : `Linked. ${picked} was merged into another record.`;
+        tone = 'warn';
       }
 
-      // The link itself, which only an admin is allowed to write.
-      let linked = [];
-      try {
-        linked = await patch(
-          'profiles',
-          { user_id: `eq.${claim.user_id}` },
-          { member_id: claim.member_id },
-        );
-      } catch (err) {
-        ctx.fail(err, null);
-        return;
-      }
-
-      const name = claim.members?.display_name ?? 'That member';
-      const said = linked.length
-        ? `Linked to ${name}. They can see their points now.`
-        : `Confirmed as ${name}. An admin still has to finish linking the account.`;
-
-      state.claims = state.claims.filter((c) => c.id !== claim.id);
-      ctx.note(said, linked.length ? 'ok' : 'warn');
+      drop(claim);
+      ctx.note(said, tone);
       announce(said);
       render();
     } catch (err) {
-      ctx.fail(err, () => confirmClaim(claim, card));
+      ctx.fail(err, () => confirmClaim(claim), CLAIM);
     } finally {
       setBusy(false);
     }
   }
 
-  async function rejectClaim(claim) {
+  function openDecline(claim) {
+    state.declining = claim;
+    el.declineNote.value = '';
+    setHidden(el.declineError, true);
+    el.declineWho.textContent = `${claim.account_email || 'This account'} · ${claim.member_name ?? ''}`;
+    el.declineDialog.showModal();
+  }
+
+  async function submitDecline(event) {
+    event.preventDefault();
+    const claim = state.declining;
+    if (!claim) return;
+
+    const note = el.declineNote.value.trim();
+    if (!note) {
+      setHidden(el.declineError, false);
+      el.declineNote.focus();
+      return;
+    }
+    setHidden(el.declineError, true);
+    el.declineDialog.close();
+
     setBusy(true);
     ctx.clearMessage();
     try {
-      const updated = await decide(claim, 'rejected');
-      if (!Array.isArray(updated) || !updated.length) {
-        ctx.note(NOT_CHANGED, 'warn');
-        return;
-      }
-      const name = claim.members?.display_name ?? 'that member';
+      await callRpc('review_member_claim', {
+        p_claim_id: claim.claim_id,
+        p_decision: 'reject',
+        p_note: note,
+      });
+
+      const name = claim.member_name ?? 'that member';
       const said = `Declined. Nobody is linked to ${name}, and they can ask again.`;
-      state.claims = state.claims.filter((c) => c.id !== claim.id);
+      drop(claim);
       ctx.note(said, 'ok');
       announce(said);
       render();
     } catch (err) {
-      ctx.fail(err, () => rejectClaim(claim));
+      ctx.fail(err, null, CLAIM);
     } finally {
+      state.declining = null;
       setBusy(false);
     }
   }
 
+  function wire() {
+    el.declineForm.addEventListener('submit', submitDecline);
+    el.declineDialog
+      .querySelector('[data-close]')
+      ?.addEventListener('click', () => el.declineDialog.close());
+  }
+
   return {
-    mount: load,
+    mount() {
+      wire();
+      return load();
+    },
     reload: load,
     hasLoaded: () => state.loaded,
   };

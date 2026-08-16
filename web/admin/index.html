@@ -278,6 +278,17 @@
           <button id="roster-export" type="button" class="button">Export CSV</button>
         </div>
 
+        <!--
+          The rows an import could not write. The batch RPC refuses a row on
+          its own rather than discarding the run, so this is the other half of
+          that: the lines the officer has to fix, outside the dialog, because
+          the dialog is closed by the time the run finishes.
+        -->
+        <section id="import-refused" class="zone" hidden aria-labelledby="import-refused-title">
+          <h2 id="import-refused-title" class="zone-title"></h2>
+          <ul id="import-refused-list" class="problem-list"></ul>
+        </section>
+
         <section id="duplicates-zone" class="zone" hidden aria-labelledby="duplicates-title">
           <h2 id="duplicates-title" class="zone-title zone-title-warn"></h2>
           <div id="duplicates-list" class="dupe-list"></div>
@@ -496,6 +507,35 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button id="reject-confirm" type="submit" class="button button-danger">Decline</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      Declining an account claim, which captures a reason for the same reason a
+      declined check-in does: the member reads it on their own screen, and a
+      decline with no reason produces the email this product exists to stop.
+      review_member_claim() keeps it in member_claims.review_note, which is the
+      officer's column. member_claims.note beside it is the member's own words.
+    -->
+    <dialog id="claim-decline-dialog" class="dialog">
+      <form id="claim-decline-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Decline claim</h2>
+        <p id="claim-decline-who" class="muted small"></p>
+        <label class="label" for="claim-decline-note">Reason</label>
+        <input
+          id="claim-decline-note"
+          class="input"
+          type="text"
+          maxlength="200"
+          autocomplete="off"
+          placeholder="That roster row belongs to somebody else"
+          required
+        />
+        <p id="claim-decline-error" class="field-error" hidden>Type a reason.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-danger">Decline</button>
         </div>
       </form>
     </dialog>

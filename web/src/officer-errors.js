@@ -35,6 +35,20 @@ const NOT_AN_OFFICER = {
 /** Shown on a card whose buttons are not offered, so it says why they are not. */
 export const READ_ONLY = 'Read only: this account cannot approve or decline.';
 
+/**
+ * Which call raised it, for the one code that needs it.
+ *
+ * PDS03 is the whole product's "that was not accepted", and review_member_claim()
+ * raises it for four situations an officer can genuinely cause: the member was
+ * archived while the claim waited, the merge chain would not resolve, the claim
+ * was decided by somebody else first, or the decision argument was wrong.
+ * Telling those apart from the code alone is impossible, and telling them apart
+ * from the SENTENCE is the thing this file exists not to do. So the caller says
+ * which call it was, exactly as errors.js splits PDS04 by stage, and the heading
+ * names the state instead of the whole product's generic one.
+ */
+export const CLAIM = 'claim';
+
 const BY_CODE = {
   // Raised by review_records() when an approve would touch a record with no
   // member attached. The queue is built so this is unreachable (an unmatched
@@ -56,10 +70,36 @@ const BY_CODE = {
     recover: 'refresh',
   }),
 
-  PDS03: (message) => ({
-    title: 'That was not accepted',
-    body: message || 'Check what was entered, then try again.',
-    recover: 'none',
+  PDS03: (message, stage) =>
+    stage === CLAIM
+      ? {
+          // The sentence the function raised is already an officer's sentence:
+          // "That member is archived", "That claim has already been decided".
+          // What it does not carry is a heading, so it gets one here.
+          title: 'That claim cannot be confirmed',
+          body: message || 'Reload the queue and look at it again.',
+          recover: 'refresh',
+        }
+      : {
+          title: 'That was not accepted',
+          body: message || 'Check what was entered, then try again.',
+          recover: 'none',
+        },
+
+  // review_member_claim(), approving. The account holds a different member
+  // already, so this claim cannot be what links it.
+  PDS13: () => ({
+    title: 'Account already linked',
+    body: 'This account is linked to a different member. Decline this claim.',
+    recover: 'refresh',
+  }),
+
+  // review_member_claim(), approving. Somebody else got there first, or the
+  // roster holds two rows for one person and one of them is already spoken for.
+  PDS14: () => ({
+    title: 'Member already claimed',
+    body: 'Another account already holds that member. Decline this claim.',
+    recover: 'refresh',
   }),
 
   PDS09: () => ({
@@ -94,9 +134,10 @@ const HTTP_FALLBACK = {
  *   'none'     nothing here will help, so no button
  *
  * @param {unknown} err
+ * @param {'claim'} [stage] which call raised it, where the code alone is not enough
  * @returns {{title: string, body: string, recover: 'signin'|'refresh'|'retry'|'none'}}
  */
-export function describeOfficer(err) {
+export function describeOfficer(err, stage) {
   if (err instanceof SessionExpiredError) return SESSION_EXPIRED;
 
   if (err instanceof NetworkError) {
@@ -109,7 +150,7 @@ export function describeOfficer(err) {
 
   if (err instanceof RpcError) {
     const build = BY_CODE[err.code];
-    if (build) return build(err.message);
+    if (build) return build(err.message, stage);
 
     if (err.status && HTTP_FALLBACK[err.status]) return HTTP_FALLBACK[err.status];
 

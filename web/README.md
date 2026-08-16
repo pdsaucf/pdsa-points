@@ -165,8 +165,8 @@ returns. Four accounts exist, and the differences between them are the point:
 | address | role | what it can do |
 |---|---|---|
 | `sara@pdsaucf.com` | officer | the whole queue |
-| `ben@pdsaucf.com` | admin | the queue, and the only role that can finish an account claim |
-| `advisor@ucf.edu` | viewer | reads the queue, decides nothing |
+| `ben@pdsaucf.com` | admin | the queue, and publishing a requirement set |
+| `advisor@ucf.edu` | viewer | reads the queue, decides nothing, and sees no account claims |
 | `priya@knights.ucf.edu` | member | refused, and told where their own points are |
 | anything else | none | no link is sent, and the form says the same thing either way |
 
@@ -256,9 +256,16 @@ numbers.
 
 PostgREST answers an UPDATE whose policy matches no row with `200` and an empty
 array, not an error. Every write in `src/rest.js` therefore asks for
-`return=representation` and every caller counts the rows that came back. This is
-the difference between an officer and an admin confirming an account claim, and
-without the count the screen would report a link that never happened.
+`return=representation` and every caller counts the rows that came back.
+
+The live case is the requirements editor: `req_sets_write` admits an officer for
+drafts only, so an officer's edit to a published set comes back as a 200 with
+nothing in it, and without the count the screen would report a save that never
+happened.
+
+Account claims used to be the example here. They are not any more: `Confirm` and
+`Decline` both go through `review_member_claim()`, which returns what it did,
+and `src/claims.js` writes no table at all.
 
 ## House rules
 

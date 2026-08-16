@@ -60,6 +60,51 @@ function injectedFailure(res, fn, helpers) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// One refused import row
+// ---------------------------------------------------------------------------
+// The other half of the same idea, one level down. upsert_members_and_enroll()
+// refuses a row on its own without discarding the batch, and the screen has to
+// list that row for the officer to fix. Provoking it needs a row the database
+// will not write, and the honest example is an archived member, which this
+// fixture deliberately does not have: adding one would change what the roster
+// table, the matcher and the duplicate banner all see, so a check about a
+// refused import row would be paid for by every other check on the screen.
+//
+// Set from the check process, never over HTTP, and cleared the moment it
+// fires. The message is one the real function actually raises.
+let pendingRowRefusal = null; // the CSV line number to refuse
+
+export function refuseImportRowOnce(row) {
+  pendingRowRefusal = row;
+}
+
+// A batch response that does not account for every row it was sent. A proxy
+// that truncates a body, or a server change that starts skipping rows, both
+// look like this, and the interesting part is entirely on the client: rows it
+// gets no answer about must not be counted as written. The mock still writes
+// the rows, because that is the honest version of the problem. The client
+// genuinely cannot tell.
+let pendingShortResult = false;
+
+export function dropImportResultOnce() {
+  pendingShortResult = true;
+}
+
+function shortenResults(results) {
+  if (!pendingShortResult) return results;
+  pendingShortResult = false;
+  record({ fn: 'upsert_members_and_enroll', outcome: 'short result', sent: results.length - 1 });
+  return results.slice(0, -1);
+}
+
+function refusedImportRow(line) {
+  if (pendingRowRefusal === null || pendingRowRefusal !== line) return null;
+  pendingRowRefusal = null;
+  record({ fn: 'upsert_members_and_enroll', outcome: 'refused row', row: line });
+  return { error: 'PDS03', message: 'That member is archived.' };
+}
+
 export function resetAdmin() {
   db = buildDatabase();
   sessions.clear();
@@ -67,6 +112,8 @@ export function resetAdmin() {
   magicLinks.clear();
   auditCalls.length = 0;
   pendingFailure = null;
+  pendingRowRefusal = null;
+  pendingShortResult = false;
 }
 
 export function adminState() {
@@ -158,6 +205,17 @@ export function resolveAuth(req, anonKey) {
     profile,
   };
 }
+
+/**
+ * auth.users.email, for one user id.
+ *
+ * ACCOUNTS is keyed by address because that is what a sign-in form sends, so
+ * the reverse lookup is a scan. It is here rather than inlined because it is
+ * the whole reason list_pending_claims() exists: PostgREST serves the `public`
+ * schema, auth.users is not in it, and no view in P0 surfaces this column.
+ */
+const emailOfUser = (userId) =>
+  Object.entries(ACCOUNTS).find(([, account]) => account.user_id === userId)?.[0] ?? null;
 
 const isStaff = (auth) => auth.kind === 'user' && STAFF_ROLES.includes(auth.role);
 const isOfficer = (auth) => auth.kind === 'user' && OFFICER_ROLES.includes(auth.role);
@@ -1307,6 +1365,103 @@ function audit(auth, action, entityType, entityId, detail) {
   });
 }
 
+/**
+ * One roster row, found or created, and enrolled for the year.
+ *
+ * This is the body of upsert_member_and_enroll(), lifted out so that the batch
+ * RPC calls it rather than carrying a second copy of the resolution rules. The
+ * real batch function does the same thing for the same reason: two
+ * implementations of "who is this row" drift, and the way they drift is by
+ * quietly creating a second person for somebody the club already has.
+ *
+ * Returns the same three fields the RPC returns, or `{ error, message }` for a
+ * row that cannot be written. The caller decides whether that is an HTTP error
+ * (single row) or an entry in the results array (batch).
+ *
+ * @param {{first_name?: string, last_name?: string, email?: string|null,
+ *   ucf_nid?: string|null, matched_member_id?: string|null}} row
+ */
+function upsertOne(auth, yearId, row) {
+  const first = String(row.first_name ?? '').trim();
+  const last = String(row.last_name ?? '').trim();
+  if (!first || !last) {
+    return { error: 'PDS03', message: 'A member needs a first name and a last name.' };
+  }
+
+  const email = String(row.email ?? '').trim().toLowerCase() || null;
+  const nid = String(row.ucf_nid ?? '').trim().toLowerCase() || null;
+
+  let member = null;
+  if (row.matched_member_id) {
+    member = db.members.find((one) => one.id === row.matched_member_id) ?? null;
+    if (!member) return { error: 'PDS03', message: 'Unknown member.' };
+  } else {
+    if (email) {
+      member = db.members.find((one) => String(one.email ?? '').toLowerCase() === email) ?? null;
+    }
+    if (!member && nid) {
+      member = db.members.find((one) => String(one.ucf_nid ?? '').toLowerCase() === nid) ?? null;
+    }
+  }
+
+  // Follow a tombstone. merge_members() leaves the loser's address on the
+  // merged row, so last year's file still resolves to it.
+  for (let hops = 0; hops < 10 && member?.merged_into_id; hops += 1) {
+    member = db.members.find((one) => one.id === member.merged_into_id) ?? null;
+  }
+  if (member?.archived_at) {
+    return { error: 'PDS03', message: 'That member is archived.' };
+  }
+
+  let created = false;
+  if (!member) {
+    member = {
+      id: uuid('m9000000-0000-4000-a000-'),
+      first_name: first,
+      last_name: last,
+      preferred_name: null,
+      email: row.email || null,
+      ucf_nid: row.ucf_nid || null,
+      display_name: `${first} ${last}`,
+      notes: null,
+      merged_into_id: null,
+      created_at: new Date().toISOString(),
+      archived_at: null,
+    };
+    db.members.push(member);
+    created = true;
+  }
+
+  const held = db.member_enrollments.find(
+    (one) => one.member_id === member.id && one.academic_year_id === yearId,
+  );
+  let enrolled = false;
+  if (!held) {
+    db.member_enrollments.push({
+      member_id: member.id,
+      academic_year_id: yearId,
+      status: 'active',
+      joined_on: new Date().toISOString().slice(0, 10),
+    });
+    enrolled = true;
+  }
+
+  audit(auth, 'upsert_member_and_enroll', 'member', member.id, {
+    academic_year_id: yearId,
+    was_created: created,
+    was_enrolled: enrolled,
+  });
+  record({
+    fn: 'upsert_member_and_enroll',
+    actor: auth.userId,
+    memberId: member.id,
+    created,
+    enrolled,
+  });
+
+  return { member_id: member.id, was_created: created, was_enrolled: enrolled };
+}
+
 export const ADMIN_RPC = {
   /** review_records(p_ids uuid[], p_decision text, p_note text) returns int */
   review_records(res, body, req, helpers, anonKey) {
@@ -1527,9 +1682,11 @@ export const ADMIN_RPC = {
 
     if (injectedFailure(res, 'upsert_member_and_enroll', helpers)) return;
 
-    const first = String(body.p_first_name ?? '').trim();
-    const last = String(body.p_last_name ?? '').trim();
-    if (!first || !last) {
+    // Names before the year, which is the order the real function checks them
+    // in. upsertOne() checks the names again; the year is checked here rather
+    // than inside it because the batch RPC checks the year once for the whole
+    // call, before any row runs.
+    if (!String(body.p_first_name ?? '').trim() || !String(body.p_last_name ?? '').trim()) {
       pds(res, 'PDS03', 'A member needs a first name and a last name.');
       return;
     }
@@ -1540,84 +1697,121 @@ export const ADMIN_RPC = {
       return;
     }
 
-    const email = String(body.p_email ?? '').trim().toLowerCase() || null;
-    const nid = String(body.p_ucf_nid ?? '').trim().toLowerCase() || null;
+    const result = upsertOne(auth, yearId, {
+      first_name: body.p_first_name,
+      last_name: body.p_last_name,
+      email: body.p_email,
+      ucf_nid: body.p_ucf_nid,
+      matched_member_id: body.p_matched_member_id,
+    });
 
-    let member = null;
-    if (body.p_matched_member_id) {
-      member = db.members.find((row) => row.id === body.p_matched_member_id) ?? null;
-      if (!member) {
-        pds(res, 'PDS03', 'Unknown member.');
-        return;
-      }
-    } else {
-      if (email) {
-        member =
-          db.members.find((row) => String(row.email ?? '').toLowerCase() === email) ?? null;
-      }
-      if (!member && nid) {
-        member =
-          db.members.find((row) => String(row.ucf_nid ?? '').toLowerCase() === nid) ?? null;
-      }
-    }
-
-    // Follow a tombstone. merge_members() leaves the loser's address on the
-    // merged row, so last year's file still resolves to it.
-    for (let hops = 0; hops < 10 && member?.merged_into_id; hops += 1) {
-      member = db.members.find((row) => row.id === member.merged_into_id) ?? null;
-    }
-    if (member?.archived_at) {
-      pds(res, 'PDS03', 'That member is archived.');
+    if (result.error) {
+      pds(res, result.error, result.message);
       return;
     }
 
-    let created = false;
-    if (!member) {
-      member = {
-        id: uuid('m9000000-0000-4000-a000-'),
-        first_name: first,
-        last_name: last,
-        preferred_name: null,
-        email: body.p_email || null,
-        ucf_nid: body.p_ucf_nid || null,
-        display_name: `${first} ${last}`,
-        notes: null,
-        merged_into_id: null,
-        created_at: new Date().toISOString(),
-        archived_at: null,
-      };
-      db.members.push(member);
-      created = true;
-    }
-
-    const held = db.member_enrollments.find(
-      (row) => row.member_id === member.id && row.academic_year_id === yearId,
-    );
-    let enrolled = false;
-    if (!held) {
-      db.member_enrollments.push({
-        member_id: member.id,
-        academic_year_id: yearId,
-        status: 'active',
-        joined_on: new Date().toISOString().slice(0, 10),
-      });
-      enrolled = true;
-    }
-
-    audit(auth, 'upsert_member_and_enroll', 'member', member.id, {
-      academic_year_id: yearId,
-      was_created: created,
-      was_enrolled: enrolled,
+    json(res, 200, {
+      member_id: result.member_id,
+      was_created: result.was_created,
+      was_enrolled: result.was_enrolled,
     });
-    record({
-      fn: 'upsert_member_and_enroll',
-      actor: auth.userId,
-      memberId: member.id,
+  },
+
+  /**
+   * upsert_members_and_enroll(p_rows jsonb, p_academic_year_id uuid)
+   *   returns jsonb
+   *
+   * Written against supabase/migrations/20260814120000_member_import_batch.sql.
+   * The reason the roster screen calls this instead of looping is that the
+   * real file is 355 rows, and the reason it can trust the answer is the
+   * per-row isolation, so both are reproduced here:
+   *
+   *   * it runs the same upsertOne() the single-row RPC above runs, so there
+   *     is one implementation of who a row resolves to on this side too
+   *   * a row that fails is a result with an error on it, not the end of the
+   *     call. Its neighbours are written
+   *   * results come back in input order, carrying the caller's own line
+   *     number when it sent one and the 1-based ordinal when it did not
+   *   * the whole call is refused for a caller who is not an officer, for an
+   *     unknown year, and over the 500 row cap, before anything is written
+   */
+  upsert_members_and_enroll(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'upsert_members_and_enroll', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    // A whole call that never lands, which is what a dropped connection looks
+    // like now that a chunk is one request rather than a hundred.
+    if (injectedFailure(res, 'upsert_members_and_enroll', helpers)) return;
+
+    const rows = body.p_rows;
+    if (!Array.isArray(rows)) {
+      pds(res, 'PDS03', 'Rows must be a JSON array.');
+      return;
+    }
+    if (rows.length > 500) {
+      pds(res, 'PDS03', 'An import is at most 500 rows per call.');
+      return;
+    }
+
+    const yearId = body.p_academic_year_id;
+    if (!yearId || !db.academic_years.some((year) => year.id === yearId)) {
+      pds(res, 'PDS03', 'Unknown academic year.');
+      return;
+    }
+
+    let created = 0;
+    let enrolled = 0;
+    let refused = 0;
+
+    const results = rows.map((row, index) => {
+      const line = typeof row?.row === 'number' ? row.row : index + 1;
+      const outcome = refusedImportRow(line) ?? upsertOne(auth, yearId, row ?? {});
+
+      if (outcome.error) {
+        refused += 1;
+        return {
+          row: line,
+          member_id: null,
+          was_created: false,
+          was_enrolled: false,
+          error: outcome.error,
+          message: outcome.message,
+        };
+      }
+
+      if (outcome.was_created) created += 1;
+      if (outcome.was_enrolled) enrolled += 1;
+      return {
+        row: line,
+        member_id: outcome.member_id,
+        was_created: outcome.was_created,
+        was_enrolled: outcome.was_enrolled,
+      };
+    });
+
+    audit(auth, 'upsert_members_and_enroll', 'member', null, {
+      academic_year_id: yearId,
+      rows: rows.length,
       created,
       enrolled,
+      refused,
+    });
+    record({
+      fn: 'upsert_members_and_enroll',
+      actor: auth.userId,
+      rows: rows.length,
+      created,
+      enrolled,
+      refused,
     });
 
-    json(res, 200, { member_id: member.id, was_created: created, was_enrolled: enrolled });
+    json(res, 200, shortenResults(results));
   },
 
   // -------------------------------------------------------------------------
@@ -1742,6 +1936,223 @@ export const ADMIN_RPC = {
     record({ fn: 'dismiss_duplicate_pair', actor: auth.userId, memberA: first, memberB: second });
 
     json(res, 200, null);
+  },
+
+  // -------------------------------------------------------------------------
+  // Account claims
+  // -------------------------------------------------------------------------
+  // Written against supabase/migrations/20260814130000_member_portal.sql, which
+  // is the contract. Both of these exist because the claims screen cannot do
+  // the job through PostgREST: one reads a column PostgREST does not serve, and
+  // the other makes a write RLS reserves for an admin.
+
+  /**
+   * list_pending_claims() returns table (claim_id, user_id, account_email,
+   *   account_name, member_id, member_name, note, requested_at)
+   *
+   * The address the person signed in with lives in auth.users.email, and
+   * PostgREST serves the `public` schema only. ACCOUNTS is this mock's
+   * auth.users, so the lookup below is the LEFT JOIN the real function makes:
+   * a claim filed by an account this mock has no address for comes back with a
+   * null email rather than being dropped, exactly as the join would.
+   */
+  list_pending_claims(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'list_pending_claims', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const rows = db.member_claims
+      .filter((claim) => claim.status === 'pending')
+      .sort(
+        (a, b) =>
+          String(a.requested_at).localeCompare(String(b.requested_at)) ||
+          String(a.id).localeCompare(String(b.id)),
+      )
+      .map((claim) => {
+        const member = db.members.find((m) => m.id === claim.member_id);
+        const profile = db.profiles.find((p) => p.user_id === claim.user_id) ?? null;
+        return {
+          claim_id: claim.id,
+          user_id: claim.user_id,
+          account_email: emailOfUser(claim.user_id),
+          account_name: profile?.full_name ?? null,
+          member_id: claim.member_id,
+          member_name: member?.display_name ?? null,
+          note: claim.note ?? null,
+          requested_at: claim.requested_at,
+        };
+      })
+      // join members: a claim whose member is gone is not in the queue.
+      .filter((row) => row.member_name !== null);
+
+    record({ fn: 'list_pending_claims', actor: auth.userId, rows: rows.length });
+    json(res, 200, rows);
+  },
+
+  /**
+   * review_member_claim(p_claim_id uuid, p_decision text, p_note text)
+   *   returns jsonb
+   *
+   * The properties the claims screen depends on, reproduced rather than
+   * approximated:
+   *
+   *   * an OFFICER can finish the link. This is the only path by which one can
+   *     write profiles.member_id, and it is still the only column of profiles
+   *     it writes: no role is created, changed or removed by an approval of an
+   *     account that already has a profiles row
+   *   * the member is revalidated HERE, not trusted from when the claim was
+   *     filed. A merge is followed to the survivor, which is where
+   *     merge_members() put the records; an archived row is refused
+   *   * the claim keeps naming the row the member picked. Following is reported
+   *     in the return value and the audit row instead, which is the only place
+   *     that records that Confirm on one row linked another
+   *   * both refusals that can arrive from a race are the constraints
+   *     themselves rather than a hardcoded message: PDS13 is an account that
+   *     already holds a different member, PDS14 is the UNIQUE on
+   *     profiles.member_id refusing a member another profile already holds
+   */
+  review_member_claim(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'review_member_claim', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const decision = body.p_decision;
+    if (!['approve', 'reject'].includes(decision)) {
+      pds(res, 'PDS03', 'Decision must be approve or reject.');
+      return;
+    }
+
+    const claim = db.member_claims.find((row) => row.id === body.p_claim_id) ?? null;
+    if (!claim) {
+      pds(res, 'PDS03', 'Unknown claim.');
+      return;
+    }
+    if (claim.status !== 'pending') {
+      pds(res, 'PDS03', 'That claim has already been decided.');
+      return;
+    }
+
+    const note = String(body.p_note ?? '').trim() || null;
+    let member = null;
+
+    if (decision === 'approve') {
+      // The same bounded walk upsert_member_and_enroll() does. A merge means
+      // the row moved, not that the person stopped existing.
+      let memberId = claim.member_id;
+      for (let hops = 0; hops < 10; hops += 1) {
+        member = db.members.find((row) => row.id === memberId) ?? null;
+        if (!member) break;
+        if (!member.merged_into_id) break;
+        memberId = member.merged_into_id;
+      }
+
+      if (!member) {
+        pds(res, 'PDS03', 'Unknown member.');
+        return;
+      }
+      if (member.merged_into_id) {
+        // Ten deep and still pointing somewhere else: a cycle, or a chain
+        // longer than any real merge history.
+        pds(res, 'PDS03', 'That members record cannot be resolved.');
+        return;
+      }
+      if (member.archived_at) {
+        // search_roster_for_claim() declines to offer archived rows, so
+        // approving one here would leave the two halves of one rule
+        // disagreeing.
+        pds(res, 'PDS03', 'That member is archived.');
+        return;
+      }
+
+      let profile = db.profiles.find((row) => row.user_id === claim.user_id) ?? null;
+
+      if (profile?.member_id && profile.member_id !== member.id) {
+        pds(res, 'PDS13', 'That account is already linked to a member.');
+        return;
+      }
+
+      // profiles.member_id is UNIQUE, and that constraint is what decides this
+      // rather than a check the function makes first: an admin patching
+      // profiles directly is a second writer with no interest in this
+      // function's gap.
+      const held = db.profiles.find(
+        (row) => row.member_id === member.id && row.user_id !== claim.user_id,
+      );
+      if (held) {
+        pds(res, 'PDS14', 'That member is already linked to another account.');
+        return;
+      }
+
+      if (!profile) {
+        // claims_insert_own lets any signed-in account file a claim without
+        // ever calling start_portal_session(), so the profiles row may
+        // genuinely not exist yet. Role comes out `member` on that path.
+        profile = {
+          user_id: claim.user_id,
+          member_id: member.id,
+          full_name: null,
+          role: 'member',
+          created_at: new Date().toISOString(),
+        };
+        db.profiles.push(profile);
+      } else if (profile.member_id === null || profile.member_id === undefined) {
+        // The do-update branch, guarded: an existing role is never touched.
+        profile.member_id = member.id;
+      }
+
+      // THE POSTCONDITION. A wrong refusal gets retried and a wrong success
+      // does not, so this function does not report a link it has not confirmed.
+      if (profile.member_id !== member.id) {
+        pds(res, 'PDS13', 'That account is already linked to a member.');
+        return;
+      }
+    }
+
+    claim.status = decision === 'approve' ? 'approved' : 'rejected';
+    claim.reviewed_by = auth.userId;
+    claim.reviewed_at = new Date().toISOString();
+    claim.review_note = note ?? claim.review_note ?? null;
+
+    const followedMerge = Boolean(member) && member.id !== claim.member_id;
+    const resolved = member?.id ?? claim.member_id;
+
+    audit(auth, 'review_member_claim', 'member_claim', claim.id, {
+      decision,
+      user_id: claim.user_id,
+      claimed_member_id: claim.member_id,
+      member_id: resolved,
+      followed_merge: followedMerge,
+      note,
+    });
+    record({
+      fn: 'review_member_claim',
+      actor: auth.userId,
+      claimId: claim.id,
+      decision,
+      claimedMemberId: claim.member_id,
+      memberId: resolved,
+      followedMerge,
+    });
+
+    json(res, 200, {
+      claim_id: claim.id,
+      status: claim.status,
+      user_id: claim.user_id,
+      claimed_member_id: claim.member_id,
+      member_id: resolved,
+      followed_merge: followedMerge,
+      linked: decision === 'approve',
+    });
   },
 
   // -------------------------------------------------------------------------

@@ -42,7 +42,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
-import { failRpcOnce } from './admin-server.mjs';
+import { failRpcOnce, refuseImportRowOnce, dropImportResultOnce } from './admin-server.mjs';
 import { IDS } from './admin-fixtures.mjs';
 import { installDom } from './dom.mjs';
 
@@ -1035,11 +1035,98 @@ await check('a member from a previous year is enrolled, never written down twice
   assert.deepEqual(years, [IDS.YEAR_PAST, IDS.YEAR_CURRENT].sort());
 });
 
-await check('an import that dies halfway converges on one row when it is run again', async () => {
-  // Creating a member and enrolling them are one call now, so a row either
-  // lands whole or not at all. What this asserts is the half that is left:
-  // the run stops partway, and running the same file again finishes it without
-  // writing anybody down twice.
+await check('the whole file goes in one call, not one call per row', async () => {
+  // THE REASON THIS CHANGED. The real file is 355 rows, and the loop this
+  // replaced made 355 sequential round trips. A check that only counted rows
+  // on the roster would pass either way, so what is asserted is the number of
+  // calls the screen actually made.
+  const file = [
+    'first_name,last_name,email',
+    'Ottoline,Fairbairn,ottoline.fairbairn@knights.ucf.edu',
+    'Rafferty,Delacroix,rafferty.delacroix@knights.ucf.edu',
+    'Sunniva,Haugland,sunniva.haugland@knights.ucf.edu',
+  ].join('\n');
+
+  const callsBefore = (await adminAudit()).calls.filter(
+    (entry) => entry.fn === 'upsert_members_and_enroll' && entry.rows !== undefined,
+  ).length;
+  const rosterBefore = rosterRows().length;
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(() => rosterRows().length === rosterBefore + 3, 'the roster never grew by three');
+
+  const batches = (await adminAudit()).calls.filter(
+    (entry) => entry.fn === 'upsert_members_and_enroll' && entry.rows !== undefined,
+  );
+  assert.equal(batches.length, callsBefore + 1, 'three rows took more than one call');
+  assert.equal(batches.at(-1).rows, 3);
+  assert.equal(batches.at(-1).created, 3);
+  assert.equal(batches.at(-1).refused, 0);
+});
+
+await check('a refused row is listed by line, and its neighbours are still written', async () => {
+  // The property the batch buys back. One bad row used to be the end of the
+  // run; it is now a line the officer can go and fix, with the reason on it,
+  // while everything else in the file lands.
+  const before = (await adminAudit()).members.length;
+  const rosterBefore = rosterRows().length;
+  const file = [
+    'first_name,last_name,email',
+    'Anouk,Brightwater,anouk.brightwater@knights.ucf.edu',
+    'Casimir,Odenkirk,casimir.odenkirk@knights.ucf.edu',
+    'Delphine,Quintanar,delphine.quintanar@knights.ucf.edu',
+  ].join('\n');
+
+  // Line 3 of the file, which is Casimir Odenkirk.
+  refuseImportRowOnce(3);
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  assert.equal(dom.$('import-run').disabled, false, 'a row in this file needs a decision');
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(() => rosterRows().length === rosterBefore + 2, 'the run did not write the good rows');
+
+  // The run is reported rather than thrown away: what landed on the strip,
+  // what did not underneath it.
+  assert.match(dom.$('screen-message-title').textContent, /2 members added/);
+  assert.equal(dom.$('screen-message').dataset.tone, 'warn');
+
+  assert.equal(dom.$('import-refused').hidden, false, 'the refused row was not shown anywhere');
+  assert.match(dom.$('import-refused-title').textContent, /1 row refused/);
+  const listed = dom.$('import-refused-list').querySelectorAll('li');
+  assert.equal(listed.length, 1);
+  assert.match(listed[0].textContent, /Row 3/, 'the refusal does not say which line of the file');
+  assert.match(listed[0].textContent, /Casimir Odenkirk/);
+  assert.match(listed[0].textContent, /archived/i, 'the refusal does not say what went wrong');
+
+  const after = await adminAudit();
+  assert.equal(after.members.length, before + 2, 'the refused row was written anyway');
+  assert.equal(
+    after.members.some((row) => row.display_name === 'Casimir Odenkirk'),
+    false,
+  );
+
+  // Every member row written has an enrollment for the year. This is the state
+  // two separate requests could leave behind and nothing repaired: a member
+  // the roster cannot show, holding an address nobody else can be given.
+  for (const name of ['Anouk Brightwater', 'Delphine Quintanar']) {
+    const row = after.members.find((one) => one.display_name === name);
+    assert.ok(
+      after.enrollments.some(
+        (entry) => entry.member_id === row.id && entry.academic_year_id === IDS.YEAR_CURRENT,
+      ),
+      `${name} was written with no enrollment for the year`,
+    );
+  }
+});
+
+await check('an import that dies converges on one row when it is run again', async () => {
+  // A chunk is one call and one transaction, so a call that never lands writes
+  // nothing at all rather than half of itself. What still has to hold is the
+  // half after that: running the same file again finishes it without writing
+  // anybody down twice.
   const before = (await adminAudit()).members.length;
   const rosterBefore = rosterRows().length;
   const file = [
@@ -1048,41 +1135,23 @@ await check('an import that dies halfway converges on one row when it is run aga
     'Thandiwe,Mkhize,thandiwe.mkhize@knights.ucf.edu',
   ].join('\n');
 
-  // The second write fails. The first one has already landed.
-  failRpcOnce('upsert_member_and_enroll', 2);
+  failRpcOnce('upsert_members_and_enroll');
 
   dom.click(dom.$('roster-import'));
   await chooseFile(file);
+  assert.equal(dom.$('import-run').disabled, false, 'a row in this file needs a decision');
   dom.fire(dom.$('import-form'), 'submit');
+
+  // The copy officer-errors.js gives a PDS03, so this waits for the failure
+  // rather than for the message strip the previous check left on screen.
   await until(
-    () => rosterRows().length !== rosterBefore,
-    'the interrupted run left nothing on screen to retry from',
+    () => dom.$('screen-message-title').textContent === 'That was not accepted',
+    'the failed run said nothing at all',
   );
-  assert.equal(rosterRows().length, rosterBefore + 1, 'the run did not stop at the failure');
 
   const half = await adminAudit();
-  const landed = half.members.filter((row) =>
-    ['Bartek Wozniak', 'Thandiwe Mkhize'].includes(row.display_name),
-  );
-
-  // EVERY MEMBER ROW WRITTEN HAS AN ENROLLMENT FOR THE YEAR. This is the state
-  // two separate requests could leave behind and nothing repaired: a member
-  // the roster cannot show, holding an address nobody else can be given.
-  for (const row of landed) {
-    assert.ok(
-      half.enrollments.some(
-        (entry) => entry.member_id === row.id && entry.academic_year_id === IDS.YEAR_CURRENT,
-      ),
-      `${row.display_name} was written with no enrollment for the year`,
-    );
-  }
-
-  assert.deepEqual(
-    landed.map((row) => row.display_name),
-    ['Bartek Wozniak'],
-    'the run did not stop where the failure was',
-  );
-  assert.equal(half.members.length, before + 1);
+  assert.equal(half.members.length, before, 'a call that failed still wrote somebody');
+  assert.equal(rosterRows().length, rosterBefore, 'the roster grew on a call that failed');
 
   // Now run the same file again.
   dom.click(dom.$('roster-import'));
@@ -1090,8 +1159,8 @@ await check('an import that dies halfway converges on one row when it is run aga
   const rows = dom.$('import-rows').querySelectorAll('tr');
   assert.equal(
     rows.find((node) => node.textContent.includes('Bartek')).dataset.verdict,
-    'exact',
-    'the retry was going to file Bartek Wozniak a second time',
+    'new',
+    'the failed run left Bartek Wozniak behind on the roster',
   );
 
   dom.fire(dom.$('import-form'), 'submit');
@@ -1109,6 +1178,115 @@ await check('an import that dies halfway converges on one row when it is run aga
   for (const name of ['Bartek Wozniak', 'Thandiwe Mkhize']) {
     assert.equal(after.filter((row) => row.display_name === name).length, 1, `two rows for ${name}`);
   }
+
+  // And the refused list from the run before is gone, because this run had
+  // nothing to refuse.
+  assert.equal(dom.$('import-refused').hidden, true, 'a stale refusal is still on screen');
+});
+
+await check('a chunk that does not report every row is not reported as a success', async () => {
+  // A short response is the shape a truncated body or a skipped row arrives
+  // in. The rows may well have landed, and the client cannot tell, so the one
+  // thing it must not do is count them as written and say the run is done. An
+  // officer who cannot tell what landed is the failure this screen exists to
+  // prevent.
+  const before = (await adminAudit()).members.length;
+  const file = [
+    'first_name,last_name,email',
+    'Yusra,Benhamou,yusra.benhamou@knights.ucf.edu',
+    'Torfinn,Aasheim,torfinn.aasheim@knights.ucf.edu',
+  ].join('\n');
+
+  dropImportResultOnce();
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  assert.equal(dom.$('import-run').disabled, false, 'a row in this file needs a decision');
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(
+    () => /unknown/.test(dom.$('screen-message-title').textContent),
+    'a short response was reported as a finished run',
+  );
+
+  // BOTH rows of the chunk are unknown, not just the missing one. A response
+  // that does not line up row for row cannot be trusted to line up by index
+  // either, so nothing in the chunk is claimed as written.
+  const said = dom.$('screen-message-title').textContent;
+  assert.match(said, /0 members added, 0 on the roster/, 'a short chunk was counted as written');
+  assert.match(said, /2 rows unknown/, 'the officer is not told how many rows are unaccounted for');
+  assert.match(said, /Import the file again/, 'the officer is not told what to do about it');
+  assert.equal(dom.$('screen-message').dataset.tone, 'warn');
+
+  // The unaccounted row is not filed as a refusal either: nothing is known
+  // about it, and a line in the refused list would say the opposite.
+  assert.equal(dom.$('import-refused').hidden, true, 'a row nobody heard about was listed as refused');
+
+  // And doing what it says converges, because the import is idempotent.
+  dom.click(dom.$('roster-import'));
+  await chooseFile(file);
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(
+    () => /2 on the roster/.test(dom.$('screen-message-title').textContent),
+    'the re-run never finished the file',
+  );
+
+  const after = (await adminAudit()).members;
+  assert.equal(after.length, before + 2, 'the re-run wrote somebody a second time');
+  for (const name of ['Yusra Benhamou', 'Torfinn Aasheim']) {
+    assert.equal(after.filter((row) => row.display_name === name).length, 1, `two rows for ${name}`);
+  }
+});
+
+await check('a fresh import does not open underneath the last one refusals', async () => {
+  // QA walked this. An officer fixes the file, opens Import again, and the
+  // previous run's line numbers are still on screen next to a preview of a
+  // different file, which invites them to go and fix line 3 of the wrong one.
+  const rosterBefore = rosterRows().length;
+  refuseImportRowOnce(3);
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(
+    [
+      'first_name,last_name,email',
+      'Eilidh,Kavanagh,eilidh.kavanagh@knights.ucf.edu',
+      'Ruaridh,Blackwood,ruaridh.blackwood@knights.ucf.edu',
+    ].join('\n'),
+  );
+  assert.equal(dom.$('import-run').disabled, false, 'a row in this file needs a decision');
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(() => rosterRows().length === rosterBefore + 1, 'the good row never landed');
+  assert.equal(dom.$('import-refused').hidden, false, 'nothing was refused, so this proves nothing');
+
+  dom.click(dom.$('roster-import'));
+  assert.equal(dom.$('import-refused').hidden, true, 'the last run refusals are still on screen');
+  assert.equal(dom.$('import-refused-list').querySelectorAll('li').length, 0);
+  dom.$('import-dialog').close();
+});
+
+await check('leaving the roster and coming back does not resurrect the refusals', async () => {
+  // The other path QA walked. The panels are hidden and shown rather than
+  // rebuilt, so a list left in the markup is still there on the way back.
+  const rosterBefore = rosterRows().length;
+  refuseImportRowOnce(3);
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile(
+    [
+      'first_name,last_name,email',
+      'Saoirse,Lindgren,saoirse.lindgren@knights.ucf.edu',
+      'Piia,Vuorinen,piia.vuorinen@knights.ucf.edu',
+    ].join('\n'),
+  );
+  assert.equal(dom.$('import-run').disabled, false, 'a row in this file needs a decision');
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(() => rosterRows().length === rosterBefore + 1, 'the good row never landed');
+  assert.equal(dom.$('import-refused').hidden, false, 'nothing was refused, so this proves nothing');
+
+  dom.click(dom.$('tab-progress'));
+  dom.click(dom.$('tab-roster'));
+
+  assert.equal(dom.$('import-refused').hidden, true, 'a run the officer left behind is still on screen');
+  assert.equal(dom.$('import-refused-list').querySelectorAll('li').length, 0);
 });
 
 await check('a file that cannot be read writes nothing and says which row', async () => {

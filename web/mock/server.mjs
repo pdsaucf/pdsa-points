@@ -689,7 +689,7 @@ if (isMain) {
       `Review queue:  http://localhost:${PORT}/admin/`,
       '  Sign in as one of these, then open the link the "email" would have contained:',
       '    sara@pdsaucf.com        officer',
-      '    ben@pdsaucf.com         admin, and the only role that can finish an account claim',
+      '    ben@pdsaucf.com         admin, and the only role that can publish rules',
       '    advisor@ucf.edu         viewer, reads the queue and decides nothing',
       '    priya@knights.ucf.edu   member, refused',
       `  The link: http://localhost:${PORT}/__mock/magic-link?email=sara@pdsaucf.com`,

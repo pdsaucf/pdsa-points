@@ -23,12 +23,28 @@
 //   always used server-side, which matches against members and not against
 //   member_enrollments.
 //
-//   EVERY WRITE IS ONE CALL. Add and import both go through
+//   EVERY WRITE IS ONE CALL. Adding somebody goes through
 //   upsert_member_and_enroll(), which finds or creates the member and enrolls
 //   them for the year in one transaction. Doing it as two requests left a
 //   member row with no enrollment whenever the second one did not land, and
 //   that person is then invisible on the screen that would have shown the
 //   officer the problem.
+//
+//   THE IMPORT IS ONE CALL PER CHUNK, NOT ONE PER ROW. It used to loop over
+//   the preview and call the single-row function once per line. The real file
+//   is 355 rows (docs/00-spreadsheet-findings.md), so that was 355 sequential
+//   round trips from a laptop on campus wifi, each one waiting for the last
+//   and each one a fresh chance for the run to die halfway. It now sends
+//   chunks of IMPORT_CHUNK rows to upsert_members_and_enroll(), which runs the
+//   same single-row function over each of them server side, so there is still
+//   exactly one implementation of who a row resolves to.
+//
+//   A REFUSED ROW DOES NOT COST THE RUN. Each row is its own subtransaction on
+//   the server, so one archived member does not discard the other 354. What
+//   comes back is a result per row in input order, carrying the officer's own
+//   line number, and the lines that were refused are listed on screen with the
+//   reason the database gave. Throwing that away and showing one error would
+//   leave the officer to find the bad row by bisecting their own file.
 //
 //   DUPLICATES ARE SURFACED AND MERGED, from v_possible_duplicate_members.
 //   Merging is merge_members(), which moves the records onto the survivor,
@@ -58,6 +74,16 @@ import { $, h, announce, setHidden, plural, monthYear } from './ui.js';
 // straight through. Below it the suggestion is noise, and a preview full of
 // noise gets clicked through, which is the other way to lose.
 const FUZZY_FLOOR = 0.3;
+
+// How many rows go in one call to upsert_members_and_enroll(). The server caps
+// a batch at 500, so this is a unit of work rather than the ceiling.
+//
+// One call is one transaction, whatever the per-row isolation does inside it,
+// so a call that never lands takes its whole chunk with it. Four chunks for
+// the real 355 row file means a dropped connection costs at most a hundred
+// rows, and re-running the same file writes nothing for the ones that already
+// landed, so pressing Import again is the recovery.
+const IMPORT_CHUNK = 100;
 
 /**
  * What the duplicate view found, in an officer's words.
@@ -145,6 +171,10 @@ export function createRoster(ctx) {
     table: $('roster-table'),
     rows: $('roster-rows'),
 
+    refusedZone: $('import-refused'),
+    refusedTitle: $('import-refused-title'),
+    refusedList: $('import-refused-list'),
+
     duplicatesZone: $('duplicates-zone'),
     duplicatesTitle: $('duplicates-title'),
     duplicatesList: $('duplicates-list'),
@@ -184,6 +214,7 @@ export function createRoster(ctx) {
     query: '',
     incoming: [], // the import preview, once a file has been read
     skipped: [],
+    refused: [], // the lines the last import could not write, and why
     removing: null,
     busy: false,
     loaded: false,
@@ -319,6 +350,7 @@ export function createRoster(ctx) {
     setHidden(el.empty, rows.length > 0);
     setHidden(el.table, rows.length === 0);
 
+    renderRefused();
     renderDuplicates();
 
     if (!rows.length) {
@@ -370,6 +402,38 @@ export function createRoster(ctx) {
           ),
         );
       }),
+    );
+  }
+
+  /**
+   * The lines the last import could not write.
+   *
+   * Outside the import dialog, because the dialog is closed by the time the
+   * run finishes, and the officer needs the line number, the name and the
+   * reason together to find the row in the file they still have open.
+   *
+   * WHERE THIS GETS CLEARED, AND WHY THERE. The list and the message strip
+   * above it are one report: the strip says what landed, the list says what
+   * did not, and neither one means anything without the other. So the list is
+   * cleared wherever the strip is, through clearReport() below, which admin.js
+   * calls from clearMessage(). That covers every way an officer moves on from
+   * a run in one place: opening a new import, switching tabs, opening a
+   * member, changing the year. Clearing it inside runImport() instead would
+   * put the reset on the one path that must not have it, since the reload that
+   * follows a run has to leave this run's refusals standing.
+   */
+  function renderRefused() {
+    const rows = state.refused;
+    setHidden(el.refusedZone, rows.length === 0);
+    el.refusedTitle.textContent = rows.length ? `${plural(rows.length, 'row')} refused` : '';
+    el.refusedList.replaceChildren(
+      ...rows.map((entry) =>
+        h(
+          'li',
+          { class: 'problem' },
+          [`Row ${entry.row}`, entry.name, entry.message].filter(Boolean).join(' · '),
+        ),
+      ),
     );
   }
 
@@ -566,6 +630,35 @@ export function createRoster(ctx) {
   const isReturning = (row) =>
     row.decision === 'exact' && Boolean(row.match) && !state.enrolled.has(row.match.id);
 
+  /**
+   * A chunk of the import, in one call.
+   *
+   * The rows carry the officer's own CSV line number, and the server echoes it
+   * back on every result, so a refusal points at a line in the file they still
+   * have open rather than at a position in a chunk they never saw.
+   *
+   * Resolution is not repeated here. upsert_members_and_enroll() runs
+   * upsert_member_and_enroll() over each row, so the match tiers, the
+   * tombstone walk and the archived check are the same ones the single Add
+   * path goes through.
+   *
+   * @returns {Promise<Array<{row: number, member_id: string|null,
+   *   was_created: boolean, was_enrolled: boolean, error?: string,
+   *   message?: string}>>} one entry per row, in input order
+   */
+  function enrollBatch(rows) {
+    return callRpc('upsert_members_and_enroll', {
+      p_rows: rows.map((row) => ({
+        row: row.row,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        email: row.email ?? null,
+        matched_member_id: answeredMatch(row),
+      })),
+      p_academic_year_id: ctx.year.id,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Adding one by hand
   // -------------------------------------------------------------------------
@@ -668,6 +761,9 @@ export function createRoster(ctx) {
   // -------------------------------------------------------------------------
 
   function openImport() {
+    // The previous run's report goes with it, list and strip together, so a
+    // second file is never previewed underneath the first file's refusals.
+    ctx.clearMessage();
     state.incoming = [];
     state.skipped = [];
     el.importForm.reset();
@@ -841,23 +937,69 @@ export function createRoster(ctx) {
     const rows = state.incoming.filter((row) => row.decision !== null);
 
     setBusy(true);
+
+    // Collected locally and handed to state at the end, so the reload in the
+    // finally block cannot land between the run and the render.
+    const refused = [];
     let created = 0;
     let done = 0;
+    let unknown = 0;
     try {
-      // One call per row, each of them atomic. A row that fails leaves the
-      // rows before it written and the rows after it untouched, and nothing
-      // half-written in between, which is what running the same file again
-      // then converges on rather than doubling.
-      for (const row of rows) {
-        const result = await enrollPerson(row, answeredMatch(row));
-        if (result?.was_created) created += 1;
-        done += 1;
+      // A chunk at a time. Each row is still independently atomic on the
+      // server, so a row that fails leaves its neighbours written and comes
+      // back as a refusal rather than as the end of the run.
+      for (let at = 0; at < rows.length; at += IMPORT_CHUNK) {
+        const chunk = rows.slice(at, at + IMPORT_CHUNK);
+        const results = await enrollBatch(chunk);
+
+        // ONE RESULT PER ROW SENT, OR THE CHUNK IS NOT AN ANSWER. A response
+        // that is short, or not an array at all, would otherwise have its
+        // missing rows counted as neither written nor refused, and the officer
+        // would be told the run succeeded. Not knowing what landed is the
+        // failure this screen exists to prevent, so a chunk that does not
+        // account for every row it was given ends the run.
+        if (!Array.isArray(results) || results.length !== chunk.length) {
+          unknown = rows.length - at;
+          break;
+        }
+
+        // Input order, so a result and the row it came from share an index.
+        // The line number is read off the result, because that is the one the
+        // server will echo for a row the officer has to go and fix.
+        results.forEach((result, index) => {
+          const row = chunk[index];
+          if (result?.error) {
+            refused.push({
+              row: result.row ?? row?.row,
+              name: row ? `${row.first_name} ${row.last_name}` : '',
+              message: result.message ?? '',
+            });
+            return;
+          }
+          if (result?.was_created) created += 1;
+          done += 1;
+        });
       }
 
       const said = `${plural(created, 'member')} added, ${done} on the roster.`;
-      ctx.note(said);
-      announce(said);
-      state.incoming = [];
+      if (unknown) {
+        // Re-running is safe: the import is idempotent, so whatever did land
+        // is found rather than written again. The preview is left alone, so
+        // nothing here reads as a finished run.
+        const stalled = `${said} ${plural(unknown, 'row')} unknown. Import the file again.`;
+        ctx.note(stalled, 'warn');
+        announce(stalled);
+      } else if (refused.length) {
+        // The count of refusals is the heading over the list, so the strip
+        // carries what landed and the list carries what did not.
+        ctx.note(said, 'warn');
+        announce(`${said} ${plural(refused.length, 'row')} refused.`);
+        state.incoming = [];
+      } else {
+        ctx.note(said);
+        announce(said);
+        state.incoming = [];
+      }
     } catch (err) {
       ctx.fail(err, null);
     } finally {
@@ -868,6 +1010,10 @@ export function createRoster(ctx) {
       } catch {
         /* load() has already put its own failure on screen */
       }
+      // After the reload, because load() redraws from state and this run's
+      // refusals are the one thing on screen that outlives it.
+      state.refused = refused;
+      renderRefused();
       ctx.onRosterChanged?.();
       setBusy(false);
     }
@@ -932,6 +1078,12 @@ export function createRoster(ctx) {
       return load();
     },
     reload: load,
+    // The other half of admin.js's clearMessage(). See renderRefused().
+    clearReport() {
+      if (!state.refused.length) return;
+      state.refused = [];
+      renderRefused();
+    },
     hasLoaded: () => state.loaded,
     // For the checks, so the preview and the export can be driven without a
     // file picker in between.

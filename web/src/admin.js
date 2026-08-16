@@ -107,6 +107,13 @@ function clearMessage() {
   el.screenMessageBody.textContent = '';
   setHidden(el.screenMessageAction, true);
   el.screenMessageAction.onclick = null;
+
+  // The roster's refused-import list is the rest of this same report: the
+  // strip says what an import wrote, the list says which lines it could not.
+  // Leaving the list up after the strip has gone offers an officer a set of
+  // line numbers with nothing left on screen saying which run they came from,
+  // and the run they came from may be two files ago.
+  app.roster?.clearReport?.();
 }
 
 /** A plain confirmation, or a warning. Never an error: those go through fail(). */
@@ -122,9 +129,12 @@ function note(text, tone = 'ok') {
  * Something went wrong. The copy comes from officer-errors.js, and what the
  * button does comes from the same place, so no caller has to work out whether
  * a given failure is worth retrying.
+ *
+ * `stage` is passed by the one panel that has a code the sentence alone would
+ * have to be read to interpret: see CLAIM in officer-errors.js.
  */
-function fail(err, retry) {
-  const copy = describeOfficer(err);
+function fail(err, retry, stage) {
+  const copy = describeOfficer(err, stage);
 
   if (copy.recover === 'signin') {
     forgetSession();
