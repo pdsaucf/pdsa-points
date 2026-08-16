@@ -668,6 +668,33 @@ function memberStatusRows() {
 const WHOLE_NAME_FLOOR = 0.55;
 const VARIANT_FLOOR = 0.4;
 
+// fn_retroactive_match_candidates()'s similarity floor (migration
+// 20260814140000, section 19.1's retroactive_name_similarity setting). Not
+// modelled as a queryable app_settings row: nothing else in this mock reads
+// app_settings as a table, and every other threshold here is a plain
+// constant for the same reason.
+const RETRO_NAME_FLOOR = 0.3;
+
+/** One piece of a delimited string, 1-indexed, the way SQL's split_part() is. */
+function splitPart(str, delim, n) {
+  const parts = str.split(delim);
+  return parts[n - 1] ?? '';
+}
+
+/**
+ * fn_normalise_email() (migration 20260813100000_duplicate_people.sql),
+ * reproduced exactly rather than with the plain case-insensitive compare
+ * duplicatePairRows() below uses: a +tag and interior dots in the local part
+ * collapse, so two spellings that reach one inbox count as the same address.
+ */
+function normaliseEmailForMatch(email) {
+  const raw = String(email ?? '').trim().toLowerCase();
+  const local = splitPart(raw, '@', 1).replace(/\+.*$/, '').replace(/\./g, '');
+  const domain = splitPart(raw, '@', 2);
+  if (!local || !domain) return null;
+  return `${local}@${domain}`;
+}
+
 function duplicatePairRows() {
   const live = db.members.filter((row) => !row.archived_at && !row.merged_into_id);
   const dismissed = new Set(
@@ -1431,6 +1458,34 @@ function audit(auth, action, entityType, entityId, detail) {
 }
 
 /**
+ * The bounded walk fn_retroactive_match_candidates() and
+ * link_retroactive_matches() both open with, the same one
+ * review_member_claim() already uses (migration 18, section 18.6): follow a
+ * merge to the survivor, refuse an archived member or a chain that never
+ * resolves. Shared here because both new handlers need exactly the same
+ * three sentences the real migration raises.
+ *
+ * Lock semantics are not reproduced (this mock is single-threaded, per its
+ * own module comment), only the walk and the refusals.
+ */
+function resolveRetroTarget(memberId) {
+  let id = memberId;
+  let member = null;
+  for (let hops = 0; hops < 10; hops += 1) {
+    member = db.members.find((row) => row.id === id) ?? null;
+    if (!member) break;
+    if (!member.merged_into_id) break;
+    id = member.merged_into_id;
+  }
+  if (!member) return { error: 'PDS03', message: 'Unknown member.' };
+  if (member.merged_into_id) {
+    return { error: 'PDS03', message: 'That members record cannot be resolved.' };
+  }
+  if (member.archived_at) return { error: 'PDS03', message: 'That member is archived.' };
+  return { target: member, followedMerge: member.id !== memberId };
+}
+
+/**
  * One roster row, found or created, and enrolled for the year.
  *
  * This is the body of upsert_member_and_enroll(), lifted out so that the batch
@@ -1709,6 +1764,176 @@ export const ADMIN_RPC = {
     });
 
     json(res, 200, memberId);
+  },
+
+  // -------------------------------------------------------------------------
+  // Retroactive matching
+  // -------------------------------------------------------------------------
+  // Written against supabase/migrations/20260814140000_retroactive_matching.sql.
+  // Officer only, no anon or member access, via the same isOfficer() gate
+  // every other RPC here uses.
+
+  /** fn_retroactive_match_candidates(p_member_id uuid) returns table(...) */
+  fn_retroactive_match_candidates(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'fn_retroactive_match_candidates', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const resolved = resolveRetroTarget(body.p_member_id);
+    if (resolved.error) {
+      pds(res, resolved.error, resolved.message);
+      return;
+    }
+    const { target, followedMerge } = resolved;
+
+    const normEmail = normaliseEmailForMatch(target.email);
+    const normName = normaliseName(target.display_name);
+    const enrolledYears = new Set(
+      db.member_enrollments
+        .filter((row) => row.member_id === target.id)
+        .map((row) => row.academic_year_id),
+    );
+
+    const rows = [];
+    for (const rec of db.attendance_records) {
+      if (rec.member_id !== null || rec.status !== 'pending') continue;
+      const event = db.events.find((e) => e.id === rec.event_id);
+      if (!event || !enrolledYears.has(event.academic_year_id)) continue;
+
+      // Tier 1, an identity: the claimed email reaches the same inbox as the
+      // member's own. Tier 2, a resemblance, only checked when tier 1 does
+      // not match, so a record matching both collapses to the stronger
+      // reason without any further bookkeeping.
+      let reason = null;
+      let score = 0;
+      if (normEmail && normaliseEmailForMatch(rec.claimed_email) === normEmail) {
+        reason = 'exact_email';
+        score = 1;
+      } else {
+        const claimedNorm = normaliseName(rec.claimed_name);
+        if (normName && claimedNorm) {
+          const measured = similarity(claimedNorm, normName);
+          if (measured >= RETRO_NAME_FLOOR) {
+            reason = 'name_match';
+            score = Math.min(Number(measured.toFixed(3)), 1);
+          }
+        }
+      }
+      if (!reason) continue;
+
+      rows.push({
+        record_id: rec.id,
+        event_id: event.id,
+        event_title: event.title,
+        occurred_on: event.occurred_on,
+        claimed_name: rec.claimed_name,
+        claimed_email: rec.claimed_email,
+        reason,
+        score,
+        resolved_member_id: target.id,
+        followed_merge: followedMerge,
+      });
+    }
+
+    rows.sort((a, b) => b.score - a.score || String(b.occurred_on).localeCompare(String(a.occurred_on)));
+
+    record({
+      fn: 'fn_retroactive_match_candidates',
+      actor: auth.userId,
+      memberId: body.p_member_id,
+      resolvedMemberId: target.id,
+      rows: rows.length,
+    });
+    json(res, 200, rows);
+  },
+
+  /** link_retroactive_matches(p_member_id uuid, p_record_ids uuid[]) returns table(...) */
+  link_retroactive_matches(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'link_retroactive_matches', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const resolved = resolveRetroTarget(body.p_member_id);
+    if (resolved.error) {
+      pds(res, resolved.error, resolved.message);
+      return;
+    }
+    const { target, followedMerge } = resolved;
+
+    // Distinct and sorted, so a duplicate id in the input reports once, the
+    // same as the real function.
+    const ids = [...new Set(Array.isArray(body.p_record_ids) ? body.p_record_ids : [])].sort();
+
+    const results = ids.map((id) => {
+      const rec = db.attendance_records.find((row) => row.id === id);
+      let outcome;
+
+      if (!rec) {
+        outcome = 'not_found';
+      } else if (rec.member_id !== null) {
+        outcome = 'already_linked';
+      } else if (rec.status !== 'pending') {
+        // Most likely rejected between the preview and this call: the write
+        // re-reads status rather than trusting what the screen showed.
+        outcome = 'not_pending';
+      } else {
+        const event = db.events.find((e) => e.id === rec.event_id);
+        const enrolled =
+          event &&
+          db.member_enrollments.some(
+            (row) => row.member_id === target.id && row.academic_year_id === event.academic_year_id,
+          );
+        if (!enrolled) {
+          outcome = 'wrong_year';
+        } else {
+          // one_live_record_per_member_event: caught here rather than let a
+          // batch abort, the same non-atomic reason as every other outcome.
+          const clash = db.attendance_records.some(
+            (other) =>
+              other.id !== rec.id &&
+              other.event_id === rec.event_id &&
+              other.member_id === target.id &&
+              other.status !== 'rejected',
+          );
+          if (clash) {
+            outcome = 'conflict';
+          } else {
+            rec.member_id = target.id;
+            rec.flags = (rec.flags ?? []).filter((flag) => flag !== 'unmatched_name');
+            outcome = 'linked';
+          }
+        }
+      }
+
+      return { record_id: id, outcome, resolved_member_id: target.id, followed_merge: followedMerge };
+    });
+
+    audit(auth, 'link_retroactive_matches', 'attendance_record', null, {
+      member_id: body.p_member_id,
+      resolved_member_id: target.id,
+      followed_merge: followedMerge,
+      results,
+    });
+    record({
+      fn: 'link_retroactive_matches',
+      actor: auth.userId,
+      memberId: body.p_member_id,
+      resolvedMemberId: target.id,
+      followedMerge,
+      results,
+    });
+
+    json(res, 200, results);
   },
 
   // -------------------------------------------------------------------------

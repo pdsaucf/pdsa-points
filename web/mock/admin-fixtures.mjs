@@ -222,6 +222,93 @@ const RETURNING = [
   'rowan.vance@knights.ucf.edu',
 ];
 
+/*
+  Retroactive matching. Genuinely earlier, genuinely unmatched
+  attendance_records, for fn_retroactive_match_candidates() and
+  link_retroactive_matches() to have something real to find. Names are
+  deliberately unlike anybody else in this file, so none of them accidentally
+  raise a v_possible_duplicate_members pair or a CSV-import fuzzy match that
+  some other check depends on.
+
+  RETRO_MEMBER carries one exact_email candidate, one name_match candidate,
+  and one candidate with no genuine resemblance at all (below
+  RETRO_NAME_FLOOR, never offered), plus a third exact_email candidate held
+  back for the "rejected out from under a stale preview" outcome. It is
+  enrolled for YEAR_CURRENT only, which is what makes RECORD_RETRO_WRONG_YEAR
+  (claiming her email, but an event from YEAR_PAST) a genuine wrong_year case
+  rather than a contrived one.
+
+  RETRO_MERGE_LOSER and RETRO_MERGE_SURVIVOR are for the followed_merge path:
+  two candidates claim the loser's email, so a merge_members() call mid-test
+  can be followed on both the read and the write.
+
+  RETRO_CONFLICT_MEMBER already holds a live record for the one event
+  RECORD_RETRO_CONFLICT also claims, so linking it collides with
+  one_live_record_per_member_event the moment it is tried, the same
+  pre-existing collision merge_members() and review_records() already guard
+  against elsewhere in this file.
+*/
+const RETRO = {
+  member: 'm4000000-0000-4000-a000-000000000001',
+  mergeLoser: 'm4000000-0000-4000-a000-000000000002',
+  mergeSurvivor: 'm4000000-0000-4000-a000-000000000003',
+  conflictMember: 'm4000000-0000-4000-a000-000000000004',
+};
+
+const RETRO_MEMBERS = [
+  [RETRO.member, 'Xiomara', 'Petrenko', 'xiomara.petrenko@knights.ucf.edu'],
+  [RETRO.mergeLoser, 'Fionnuala', 'Askew', 'fionnuala.askew@knights.ucf.edu'],
+  [RETRO.mergeSurvivor, 'Yevgenia', 'Marchant', 'yevgenia.marchant@knights.ucf.edu'],
+  [RETRO.conflictMember, 'Torvald', 'Quillfeather', 'torvald.quillfeather@knights.ucf.edu'],
+];
+
+const RETRO_RECORD = {
+  email: 'r4000000-0000-4000-a000-000000000001',
+  name: 'r4000000-0000-4000-a000-000000000002',
+  tooFar: 'r4000000-0000-4000-a000-000000000003',
+  race: 'r4000000-0000-4000-a000-000000000004',
+  wrongYear: 'r4000000-0000-4000-a000-000000000005',
+  mergeA: 'r4000000-0000-4000-a000-000000000006',
+  mergeB: 'r4000000-0000-4000-a000-000000000007',
+  conflict: 'r4000000-0000-4000-a000-000000000008',
+  forAdd: 'r4000000-0000-4000-a000-000000000009',
+  forImport: 'r4000000-0000-4000-a000-00000000000a',
+  // Claims the SURVIVOR's own email, not the loser's: once merge_members()
+  // runs, fn_retroactive_match_candidates(loserId) matches against the
+  // resolved (survivor) member's identity, not the tombstone's, the same
+  // way the real migration's own RECORD.mergeCandidate does (filed under
+  // the survivor's address, asked about by the loser's old id). mergeA and
+  // mergeB above claim the LOSER's identity instead, on purpose: they are
+  // for the WRITE-side race, where a stale preview already captured their
+  // ids before the merge and link_retroactive_matches() never re-derives a
+  // match, it only re-resolves the member and re-checks the guards.
+  mergeReadSide: 'r4000000-0000-4000-a000-00000000000c',
+
+  // Held back for verify-board.mjs's own race and rendering checks, never
+  // touched by anything above. alreadyLinked claims her email at SOAP, so it
+  // can be linked to somebody ELSE first and prove already_linked does not
+  // read as this member's own success. reasonEmail and reasonName both sit
+  // at GKAS, an event no other Xiomara-claimed record above uses, so the
+  // pair can be told apart from every other candidate on her list by event
+  // title alone, and told apart from EACH OTHER by their reason text: one an
+  // identity (matching email), one a resemblance (matching name, wrong
+  // email). Together they prove that reason text survives a decision.
+  alreadyLinked: 'r4000000-0000-4000-a000-00000000000d',
+  reasonEmail: 'r4000000-0000-4000-a000-00000000000e',
+  reasonName: 'r4000000-0000-4000-a000-00000000000f',
+};
+
+// Two people nobody has heard of yet, each with one earlier check-in
+// waiting. Used only to prove an import's courtesy retro scan cannot be
+// overwritten by a slower, earlier-started import's own scan: see the
+// "an import scan" check in verify-board.mjs. Distinctive names on purpose,
+// unlike FIRST_NAMES/LAST_NAMES above, so importing them raises no fuzzy
+// match and needs no decision before the run.
+const IMPORT_RACE = {
+  first: { name: 'Perpetua Thistlewood', email: 'perpetua.thistlewood@knights.ucf.edu' },
+  second: { name: 'Cornelius Applewhite', email: 'cornelius.applewhite@knights.ucf.edu' },
+};
+
 function buildMembers() {
   const members = NAMED.map(([id, first, last, email]) => ({
     id,
@@ -283,6 +370,22 @@ function buildMembers() {
     merged_into_id: null,
     created_at: '2025-08-20T12:00:00.000Z',
     archived_at: null,
+  });
+
+  RETRO_MEMBERS.forEach(([id, first, last, email]) => {
+    members.push({
+      id,
+      first_name: first,
+      last_name: last,
+      preferred_name: null,
+      email,
+      ucf_nid: null,
+      display_name: `${first} ${last}`,
+      notes: null,
+      merged_into_id: null,
+      created_at: '2026-08-01T12:00:00.000Z',
+      archived_at: null,
+    });
   });
 
   return members;
@@ -500,6 +603,187 @@ export function buildDatabase() {
     submitted_value: 3.5,
     flags: ['outside_window'],
     submitted_at: '2026-08-09T23:40:00.000Z',
+  });
+
+  // ---- retroactive matching -------------------------------------------------
+  // Genuinely earlier, genuinely unmatched. See the RETRO comment above for
+  // what each one is for.
+
+  const HEALTH_FAIR = EVENTS[4].id;
+
+  add({
+    id: RETRO_RECORD.email,
+    event_id: GBM,
+    claimed_name: 'Xiomara Petrenko',
+    // Case-varied and with an interior dot, so this also proves the mock's
+    // normaliseEmailForMatch() ran rather than a plain lowercase compare.
+    claimed_email: 'Xiomara.Petrenko@Knights.UCF.EDU',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:20:00.000Z',
+  });
+
+  // Same name, normalised-exact, but an email that matches nobody: a
+  // resemblance, never an identity.
+  add({
+    id: RETRO_RECORD.name,
+    event_id: SOAP,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'someone.else@example.test',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-10T19:20:00.000Z',
+  });
+
+  // No genuine resemblance at all, below RETRO_NAME_FLOOR and no email match.
+  // Never offered as a candidate for anybody.
+  add({
+    id: RETRO_RECORD.tooFar,
+    event_id: GKAS,
+    claimed_name: 'Zephyr Quillon',
+    claimed_email: 'zephyr.quillon@example.test',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-09T19:20:00.000Z',
+  });
+
+  // Looks fine at preview time. Held back for the "rejected out from under a
+  // stale preview" outcome: another officer runs review_records() on it
+  // between the preview and Confirm.
+  add({
+    id: RETRO_RECORD.race,
+    event_id: HEALTH_FAIR,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'Xiomara.Petrenko@Knights.UCF.EDU',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-08T19:20:00.000Z',
+  });
+
+  // Her own email, but the event is LAST_YEAR and she is enrolled for
+  // YEAR_CURRENT only: never offered as a candidate, and a direct link
+  // attempt reports wrong_year rather than writing anything.
+  add({
+    id: RETRO_RECORD.wrongYear,
+    event_id: LAST_YEAR,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'Xiomara.Petrenko@Knights.UCF.EDU',
+    flags: ['unmatched_name'],
+    submitted_at: '2025-09-04T19:20:00.000Z',
+  });
+
+  // Two candidates claiming the merge loser's email, for the followed_merge
+  // path on both the read and the write.
+  add({
+    id: RETRO_RECORD.mergeA,
+    event_id: GBM,
+    claimed_name: 'Fionnuala Askew',
+    claimed_email: 'fionnuala.askew@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:22:00.000Z',
+  });
+  add({
+    id: RETRO_RECORD.mergeB,
+    event_id: SOAP,
+    claimed_name: 'Fionnuala Askew',
+    claimed_email: 'fionnuala.askew@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-10T19:22:00.000Z',
+  });
+
+  // Claims the survivor's own email. Never a candidate for the loser before
+  // any merge, only for the survivor, whether asked about directly or (once
+  // merged) by the loser's old id. See the RETRO_RECORD comment above.
+  add({
+    id: RETRO_RECORD.mergeReadSide,
+    event_id: GKAS,
+    claimed_name: 'Yevgenia Marchant',
+    claimed_email: 'yevgenia.marchant@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-09T19:22:00.000Z',
+  });
+
+  // Already holds a live record for GBM (below), so linking this one
+  // collides with one_live_record_per_member_event.
+  add({
+    id: RETRO_RECORD.conflict,
+    event_id: GBM,
+    claimed_name: 'Torvald Quillfeather',
+    claimed_email: 'torvald.quillfeather@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:24:00.000Z',
+  });
+  add({
+    id: 'r4000000-0000-4000-a000-00000000000b',
+    event_id: GBM,
+    member_id: RETRO.conflictMember,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2026-08-05T20:00:00.000Z',
+    submitted_at: '2026-08-05T18:00:00.000Z',
+  });
+
+  // Held back. See the RETRO_RECORD comment above for what each is for.
+  add({
+    id: RETRO_RECORD.alreadyLinked,
+    event_id: SOAP,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'Xiomara.Petrenko@Knights.UCF.EDU',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-07T19:20:00.000Z',
+  });
+  add({
+    id: RETRO_RECORD.reasonEmail,
+    event_id: GKAS,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'Xiomara.Petrenko@Knights.UCF.EDU',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-06T19:20:00.000Z',
+  });
+  add({
+    id: RETRO_RECORD.reasonName,
+    event_id: GKAS,
+    claimed_name: 'Xiomara Petrenko',
+    claimed_email: 'reason-name-only@example.test',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-06T19:21:00.000Z',
+  });
+
+  // For the import-race check: two brand-new people, each with one earlier
+  // check-in, created by two separate imports in verify-board.mjs rather
+  // than by any member fixture here.
+  add({
+    id: 'r4000000-0000-4000-a000-000000000010',
+    event_id: GBM,
+    claimed_name: IMPORT_RACE.first.name,
+    claimed_email: IMPORT_RACE.first.email,
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:30:00.000Z',
+  });
+  add({
+    id: 'r4000000-0000-4000-a000-000000000011',
+    event_id: GBM,
+    claimed_name: IMPORT_RACE.second.name,
+    claimed_email: IMPORT_RACE.second.email,
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:31:00.000Z',
+  });
+
+  // For the roster screen: an officer adding or importing somebody whose
+  // typed name matches a check-in already sitting in the queue, filed by
+  // nobody the roster has ever heard of. No member fixture behind either:
+  // they are created by the Add form and by the import itself.
+  add({
+    id: RETRO_RECORD.forAdd,
+    event_id: GBM,
+    claimed_name: 'Beatrix Hallworth',
+    claimed_email: 'beatrix.hallworth@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-11T18:26:00.000Z',
+  });
+  add({
+    id: RETRO_RECORD.forImport,
+    event_id: SOAP,
+    claimed_name: 'Endellion Marrow',
+    claimed_email: 'endellion.marrow@knights.ucf.edu',
+    flags: ['unmatched_name'],
+    submitted_at: '2026-08-10T19:26:00.000Z',
   });
 
   // ---- the routine zone ---------------------------------------------------
@@ -785,6 +1069,12 @@ export const IDS = {
   MEMBER_AARON: 'm0000000-0000-4000-a000-000000000004',
   MEMBER_ETHAN: 'm0000000-0000-4000-a000-00000000000c',
   MEMBER_RETURNING: RETURNING[0],
+  RETRO_MEMBER: RETRO.member,
+  RETRO_MERGE_LOSER: RETRO.mergeLoser,
+  RETRO_MERGE_SURVIVOR: RETRO.mergeSurvivor,
+  RETRO_CONFLICT_MEMBER: RETRO.conflictMember,
+  RETRO_RECORD,
+  IMPORT_RACE,
   RECORD_UNMATCHED_CLOSE: 'r0000000-0000-4000-a000-000000000001',
   RECORD_UNMATCHED_NEW: 'r0000000-0000-4000-a000-000000000002',
   RECORD_DUPLICATE_PHOTO: 'r0000000-0000-4000-a000-000000000003',

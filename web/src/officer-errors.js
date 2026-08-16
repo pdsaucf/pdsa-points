@@ -170,6 +170,35 @@ export function describeOfficer(err, stage) {
   };
 }
 
+/**
+ * link_retroactive_matches() outcomes, one per requested record id. This is a
+ * return value read off a row, never a raised error, so it is a lookup table
+ * of its own rather than folded into BY_CODE above.
+ *
+ * Rendered next to the specific record it is about (its event and date are
+ * already on screen beside it), so the copy here says only what happened to
+ * that one record, not the record itself again.
+ */
+const RETRO_OUTCOME = {
+  linked: 'Linked',
+  // The record's member_id was already set at write time. Most often that is
+  // a different officer, or a different flow, getting there first for
+  // somebody else entirely; the member this officer meant to link got
+  // nothing. It can also be a harmless double-submit to the same member, and
+  // the RPC response does not say which, so this stays a flag worth a look
+  // rather than a claim about whose record it now is.
+  already_linked: 'Already linked to somebody',
+  not_pending: 'Somebody already decided this one',
+  wrong_year: 'Not enrolled for that year',
+  not_found: 'No longer exists',
+  conflict: 'Already has a record for this event',
+};
+
+/** @param {string} outcome one of link_retroactive_matches()'s six outcomes */
+export function describeRetroOutcome(outcome) {
+  return RETRO_OUTCOME[outcome] ?? 'Unknown outcome.';
+}
+
 /** The sign-in screen has its own small set, because GoTrue has its own codes. */
 export function describeSignIn(err) {
   if (err instanceof NetworkError) {

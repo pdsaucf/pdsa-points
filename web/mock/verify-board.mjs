@@ -147,6 +147,7 @@ const sources = {
   'src/member.js': await readFile(`${WEB_ROOT}src/member.js`, 'utf8'),
   'src/joined.js': await readFile(`${WEB_ROOT}src/joined.js`, 'utf8'),
   'src/csv.js': await readFile(`${WEB_ROOT}src/csv.js`, 'utf8'),
+  'src/retro.js': await readFile(`${WEB_ROOT}src/retro.js`, 'utf8'),
 };
 
 await check('no em dash in anything these screens are made of', async () => {
@@ -1524,6 +1525,723 @@ await check('dismissing is the same dismissal whichever way round the pair is pa
     false,
   );
 });
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nearlier check-ins\n');
+// ---------------------------------------------------------------------------
+// fn_retroactive_match_candidates() and link_retroactive_matches()
+// (supabase/migrations/20260814140000_retroactive_matching.sql), offered on
+// the member screen and after Add/Import on the roster. Fixtures for this
+// are the RETRO block in admin-fixtures.mjs.
+
+dom.click(dom.$('tab-roster'));
+await until(() => rosterRows().length > 0, 'the roster never drew');
+
+function openMemberByName(name) {
+  const row = rosterRows().find((candidate) => candidate.textContent.includes(name));
+  assert.ok(row, `${name} is not on the roster`);
+  dom.click(row.querySelector('.board-name'));
+}
+
+async function openMemberAndWaitForRetro(name) {
+  openMemberByName(name);
+  await until(
+    () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === name,
+    `${name}'s own screen never drew`,
+  );
+  await until(() => !dom.$('member-retro').hidden, `no earlier check-ins offered for ${name}`);
+}
+
+const retroRows = () => dom.$('member-retro-body').querySelectorAll('.retro-list li');
+// Read off the outcome pill specifically, not the row's whole textContent:
+// a resolved row also carries the reason text ("Same email address", "NN%
+// name match") right beside the pill, and a plain substring search could
+// match that instead of the pill's own word.
+const retroOutcomeTexts = () =>
+  dom.$('member-retro-body').querySelectorAll('.retro-outcome').map((node) => node.textContent.trim());
+
+await check(
+  "an earlier, slower member load cannot repaint a later member's screen, or submit under the wrong id",
+  async () => {
+    const NAME_A = 'Abigail Catto';
+    const NAME_B = 'Torvald Quillfeather';
+    const ID_A = IDS.MEMBER_ABIGAIL;
+    const ID_B = IDS.RETRO_CONFLICT_MEMBER;
+
+    const rowA = rosterRows().find((row) => row.textContent.includes(NAME_A));
+    const rowB = rosterRows().find((row) => row.textContent.includes(NAME_B));
+    assert.ok(rowA, `${NAME_A} is not on the roster`);
+    assert.ok(rowB, `${NAME_B} is not on the roster`);
+
+    // Holds every request that carries A's id, wherever it appears (a
+    // select's filter, an RPC's body), until released below. This is what
+    // makes "A's own Promise.all resolves after B is already on screen"
+    // reproducible on demand, instead of hoping real localhost timing lands
+    // that way once in a while.
+    let holding = true;
+    let started = 0;
+    let finished = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      const carriesA = String(url).includes(ID_A) || String(init?.body ?? '').includes(ID_A);
+      if (carriesA) {
+        started += 1;
+        while (holding) await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      try {
+        return await realFetch(url, init);
+      } finally {
+        if (carriesA) finished += 1;
+      }
+    };
+
+    try {
+      dom.click(rowA.querySelector('.board-name')); // starts loading A; every A request now stalls
+      await until(() => started > 0, "member A's own requests never went out");
+
+      dom.click(rowB.querySelector('.board-name')); // starts loading B, unblocked
+      await until(
+        () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === NAME_B,
+        "member B's own screen never drew",
+      );
+
+      // Only now let A's held requests resolve, well after B is already
+      // showing, and give the promise chain a moment to run to the end.
+      holding = false;
+      for (let i = 0; i < 10; i += 1) {
+        const before = finished;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        if (started === finished && finished === before) break;
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      holding = false;
+    }
+
+    assert.equal(
+      dom.$('member-name').textContent.trim(),
+      NAME_B,
+      "a slower, earlier-started load for member A repainted the screen with A's data after B was already on it",
+    );
+
+    // And the write side: B's own earlier check-in, still on screen, has to
+    // submit under B's id, not whatever load() last saw at the top of its
+    // own function.
+    assert.equal(dom.$('member-retro').hidden, false, "member B's own earlier check-in never offered");
+    dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+    await until(
+      () => dom.$('member-retro-body').querySelectorAll('.retro-outcome').length > 0,
+      'linking never reported an outcome',
+    );
+
+    const calls = (await adminAudit()).calls.filter((call) => call.fn === 'link_retroactive_matches');
+    const last = calls[calls.length - 1];
+    assert.ok(last, 'the link never reached the server');
+    assert.equal(last.memberId, ID_B, 'the write went out under the wrong member id');
+
+    dom.click(dom.$('member-back'));
+  },
+);
+
+await openMemberAndWaitForRetro('Xiomara Petrenko');
+
+await check('already_linked does not render or read as a success', async () => {
+  const rows = retroRows();
+  const row = rows.find(
+    (candidate) =>
+      candidate.textContent.includes('Soap Carving') && candidate.textContent.includes('Same email address'),
+  );
+  assert.ok(row, 'the held-back candidate for this check is not offered');
+  const box = row.querySelector('input[type="checkbox"]');
+  assert.equal(box.checked, true, 'an exact email match does not default to checked');
+
+  // Every other exact-email candidate on her list defaults to checked too.
+  // Unchecked here (not submitted, not consumed) so this check proves
+  // something about THIS one record rather than about whatever else was
+  // also checked.
+  for (const candidate of rows) {
+    if (candidate === row) continue;
+    const other = candidate.querySelector('input[type="checkbox"]');
+    if (other?.checked) {
+      other.checked = false;
+      dom.fire(other, 'change');
+    }
+  }
+
+  // Another officer links this exact record to somebody else first, between
+  // this preview loading and this officer pressing the button. Ethan
+  // Wallace, not Abby Catto: the duplicate-people checks above merge Abby
+  // into Abigail, and a merged member would follow that chain here too,
+  // which would prove nothing about a genuinely different person.
+  await callRpc('link_retroactive_matches', {
+    p_member_id: IDS.MEMBER_ETHAN,
+    p_record_ids: [IDS.RETRO_RECORD.alreadyLinked],
+  });
+
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+  await until(
+    () => dom.$('member-retro-body').textContent.includes('Already linked to somebody'),
+    'the already_linked outcome never rendered',
+  );
+
+  const after = retroRows().find(
+    (candidate) =>
+      candidate.textContent.includes('Soap Carving') && candidate.textContent.includes('Already linked to somebody'),
+  );
+  assert.ok(after, 'the already_linked row is not on screen');
+  const pill = after.querySelector('.card-outcome');
+  assert.equal(pill.dataset.kind, 'error', 'already_linked was styled as a success');
+  assert.doesNotMatch(pill.textContent, /^Already linked$/, 'the wording still reads as this members own success');
+
+  const record = (await adminAudit()).attendance.find((row) => row.id === IDS.RETRO_RECORD.alreadyLinked);
+  assert.equal(record.member_id, IDS.MEMBER_ETHAN, "the other officer's link was overwritten");
+});
+
+await openMemberAndWaitForRetro('Xiomara Petrenko');
+
+await check('the certain/uncertain reason stays visible after a decision is made', async () => {
+  const rows = retroRows();
+  const emailRow = rows.find(
+    (row) => row.textContent.includes('Give Kids A Smile') && row.textContent.includes('Same email address'),
+  );
+  const nameRow = rows.find(
+    (row) => row.textContent.includes('Give Kids A Smile') && /% name match/.test(row.textContent),
+  );
+  assert.ok(emailRow, 'the held-back exact-email candidate is not offered');
+  assert.ok(nameRow, 'the held-back name-match candidate is not offered');
+
+  // Every other exact-email candidate on her list defaults to checked too.
+  // Unchecked here so this batch is exactly the pair this check is about.
+  for (const candidate of rows) {
+    if (candidate === emailRow || candidate === nameRow) continue;
+    const other = candidate.querySelector('input[type="checkbox"]');
+    if (other?.checked) {
+      other.checked = false;
+      dom.fire(other, 'change');
+    }
+  }
+
+  const emailBox = emailRow.querySelector('input[type="checkbox"]');
+  const nameBox = nameRow.querySelector('input[type="checkbox"]');
+  assert.equal(emailBox.checked, true, 'an exact email match does not default to checked');
+  nameBox.checked = true;
+  dom.fire(nameBox, 'change');
+
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+  await until(() => {
+    const after = retroRows();
+    const e = after.find(
+      (row) => row.textContent.includes('Give Kids A Smile') && row.querySelector('.retro-outcome'),
+    );
+    const n = after.find(
+      (row) =>
+        row !== e && row.textContent.includes('Give Kids A Smile') && row.querySelector('.retro-outcome'),
+    );
+    return Boolean(e && n);
+  }, 'both outcomes never rendered');
+
+  const after = retroRows();
+  const resolvedEmailRow = after.find(
+    (row) => row.textContent.includes('Give Kids A Smile') && row.textContent.includes('Same email address'),
+  );
+  const resolvedNameRow = after.find(
+    (row) => row.textContent.includes('Give Kids A Smile') && /% name match/.test(row.textContent),
+  );
+  assert.ok(resolvedEmailRow, 'the identity reason ("Same email address") disappeared once a decision was made');
+  assert.ok(resolvedNameRow, 'the resemblance reason ("NN% name match") disappeared once a decision was made');
+});
+
+dom.click(dom.$('member-back'));
+await openMemberAndWaitForRetro('Xiomara Petrenko');
+
+await check('an identity and a resemblance read differently, not just say differently', () => {
+  const rows = retroRows();
+  assert.ok(rows.length >= 2, `only ${rows.length} candidates offered`);
+
+  const emailRow = rows.find((row) => row.textContent.includes('Same email address'));
+  assert.ok(emailRow, 'the exact-email candidate is not offered');
+  const emailControl = emailRow.querySelector('.suggestion');
+  assert.equal(emailControl.dataset.certain, 'true', 'an identity match is not marked certain');
+  assert.equal(
+    emailControl.querySelector('input[type="checkbox"]').checked,
+    true,
+    'an exact email match does not default to checked',
+  );
+
+  const nameRow = rows.find((row) => /% name match/.test(row.textContent));
+  assert.ok(nameRow, 'the name-resemblance candidate is not offered');
+  const nameControl = nameRow.querySelector('.suggestion');
+  assert.equal(nameControl.dataset.certain, 'false', 'a resemblance is marked certain');
+  assert.equal(
+    nameControl.querySelector('input[type="checkbox"]').checked,
+    false,
+    'a name match defaults to checked',
+  );
+});
+
+await check('the "does not approve" line is always shown beside the link action', () => {
+  assert.match(
+    dom.$('member-retro-body').textContent,
+    /Not approved yet\./,
+    'no line tells the officer that linking is not approving',
+  );
+});
+
+await check('only the checked record gets linked, whichever one that is', async () => {
+  const rows = retroRows();
+  const emailRow = rows.find((row) => row.textContent.includes('Spring GBM 5'));
+  const nameRow = rows.find((row) => row.textContent.includes('Soap Carving'));
+  const raceRow = rows.find((row) => row.textContent.includes('Health Fair'));
+  const emailBox = emailRow.querySelector('input[type="checkbox"]');
+  const nameBox = nameRow.querySelector('input[type="checkbox"]');
+  const raceBox = raceRow.querySelector('input[type="checkbox"]');
+
+  // Flipped from the defaults on purpose: a check that only pressed Link on
+  // the untouched defaults could not tell "selection respected" from
+  // "selection ignored, exact_email always wins". The third candidate (also
+  // exact_email, also checked by default) is unchecked too, so exactly one
+  // id is submitted and this check proves something about a deliberate
+  // choice rather than about whatever the defaults happened to be.
+  emailBox.checked = false;
+  dom.fire(emailBox, 'change');
+  nameBox.checked = true;
+  dom.fire(nameBox, 'change');
+  raceBox.checked = false;
+  dom.fire(raceBox, 'change');
+
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+  await until(
+    () => retroOutcomeTexts().includes('Linked'),
+    'the outcome for the checked record never rendered',
+  );
+
+  const attendance = (await adminAudit()).attendance;
+  const linked = attendance.find((row) => row.id === IDS.RETRO_RECORD.name);
+  const untouched = attendance.find((row) => row.id === IDS.RETRO_RECORD.email);
+  const alsoUntouched = attendance.find((row) => row.id === IDS.RETRO_RECORD.race);
+  assert.equal(linked.member_id, IDS.RETRO_MEMBER, 'the checked record was not linked');
+  assert.equal(untouched.member_id, null, 'an unchecked record was linked anyway');
+  assert.equal(alsoUntouched.member_id, null, 'an unchecked record was linked anyway');
+});
+
+await check('a record decided elsewhere while linking was in progress reports its own outcome', async () => {
+  // The stale-preview race: another officer works the review queue on the
+  // exact record this screen is about to submit.
+  await callRpc('review_records', {
+    p_ids: [IDS.RETRO_RECORD.race],
+    p_decision: 'reject',
+    p_note: 'wrong event',
+  });
+
+  const raceRow = retroRows().find((row) => row.textContent.includes('Health Fair'));
+  assert.ok(raceRow, 'the race candidate is not offered');
+  const raceBox = raceRow.querySelector('input[type="checkbox"]');
+  assert.ok(raceBox, 'the race candidate is not a checkbox to begin with');
+  // Checked explicitly rather than asserted as a default: the previous check
+  // deliberately left it unchecked to keep that check's own submission to
+  // exactly one id (see the comment there).
+  raceBox.checked = true;
+  dom.fire(raceBox, 'change');
+
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+  await until(
+    () => dom.$('member-retro-body').textContent.includes('Somebody already decided this one'),
+    'the outcome for the rejected record never rendered',
+  );
+
+  const after = retroRows().find((row) => row.textContent.includes('Health Fair'));
+  assert.match(after.textContent, /Somebody already decided this one/, 'not a generic total');
+
+  const record = (await adminAudit()).attendance.find((row) => row.id === IDS.RETRO_RECORD.race);
+  assert.equal(record.member_id, null, 'a rejected record was linked anyway');
+  assert.equal(record.status, 'rejected', 'linking silently un-rejected a reviewed record');
+});
+
+dom.click(dom.$('member-back'));
+
+await check('a merge mid-flow is followed, on both the read and the write', async () => {
+  dom.click(dom.$('tab-roster'));
+  await openMemberAndWaitForRetro('Fionnuala Askew');
+
+  assert.equal(
+    dom.$('member-retro-body').textContent.includes('This member was merged'),
+    false,
+    'the merge line showed before any merge happened',
+  );
+
+  // Held back unchecked, so one candidate survives the coming write and can
+  // prove the READ side separately from the WRITE side below.
+  const held = retroRows().find((row) => row.textContent.includes('Soap Carving'));
+  assert.ok(held, 'the second merge-loser candidate is not offered');
+  const heldBox = held.querySelector('input[type="checkbox"]');
+  heldBox.checked = false;
+  dom.fire(heldBox, 'change');
+
+  // Another officer merges her away mid-flow. The first officer, still
+  // holding the stale preview, presses Link selected anyway.
+  await callRpc('merge_members', { p_from_id: IDS.RETRO_MERGE_LOSER, p_into_id: IDS.RETRO_MERGE_SURVIVOR });
+
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
+  await until(
+    () => retroOutcomeTexts().includes('Linked'),
+    'the write-side outcome never rendered',
+  );
+  assert.match(
+    dom.$('member-retro-body').textContent,
+    /This member was merged/,
+    'the write did not report the merge',
+  );
+
+  const written = (await adminAudit()).attendance.find((row) => row.id === IDS.RETRO_RECORD.mergeA);
+  assert.equal(
+    written.member_id,
+    IDS.RETRO_MERGE_SURVIVOR,
+    'linking a merged member did not land on the survivor',
+  );
+
+  // READ side: reopening the same loser id shows the merge line straight off
+  // the candidate list, before anything is linked. A fresh candidate for
+  // this, not mergeB: once merged, candidates are matched against the
+  // SURVIVOR's own identity, so a record claiming the loser's identity (like
+  // the held-back mergeB) does not resurface here, the way
+  // RECORD_RETRO_MERGE_READ_SIDE, claiming the survivor's email, does.
+  dom.click(dom.$('member-back'));
+  dom.click(dom.$('tab-roster'));
+  await openMemberAndWaitForRetro('Fionnuala Askew');
+  assert.match(
+    dom.$('member-retro-body').textContent,
+    /This member was merged/,
+    'the read never reported the merge',
+  );
+  assert.match(
+    dom.$('member-retro-body').textContent,
+    /Give Kids A Smile/,
+    'the survivor-matching candidate did not surface when asked about the loser',
+  );
+
+  // And there is a way to reach the survivor from here.
+  dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Open the current record'));
+  await until(
+    () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === 'Yevgenia Marchant',
+    'the merge line did not lead to the survivor',
+  );
+});
+
+dom.click(dom.$('member-back'));
+
+await check(
+  'adding somebody opens Earlier check-ins when there is one, and stays closed when there is not',
+  async () => {
+    dom.click(dom.$('tab-roster'));
+    await until(() => rosterRows().length > 0, 'the roster never drew');
+    assert.equal(dom.$('roster-retro-dialog').open, false, 'the dialog is already open');
+
+    // Not a roster-row-count wait: the merge two checks ago (a direct RPC
+    // call, not the roster's own Merge button) left this screen's roster
+    // list stale by one row (the tombstoned loser) until the next reload,
+    // and this Add is what triggers it. That reload removes one row and
+    // adds Beatrix, which nets to no visible change in the row COUNT even
+    // though the roster genuinely changed. The dialog opening is a signal
+    // that does not depend on that arithmetic.
+    dom.click(dom.$('roster-add'));
+    dom.$('roster-add-first').value = 'Beatrix';
+    dom.$('roster-add-last').value = 'Hallworth';
+    dom.$('roster-add-email').value = 'beatrix.hallworth@knights.ucf.edu';
+    dom.fire(dom.$('roster-add-form'), 'submit');
+
+    await until(
+      () => dom.$('roster-retro-dialog').open === true,
+      'the dialog never opened for somebody with an earlier check-in',
+    );
+    assert.match(dom.$('roster-retro-who').textContent, /Beatrix Hallworth/);
+    assert.ok(
+      rosterRows().some((row) => row.textContent.includes('Beatrix Hallworth')),
+      'Beatrix Hallworth was never actually added to the roster',
+    );
+
+    const rows = dom.$('roster-retro-body').querySelectorAll('.retro-list li');
+    assert.equal(rows.length, 1, `expected exactly one candidate, got ${rows.length}`);
+    assert.match(rows[0].textContent, /Same email address/);
+
+    dom.$('roster-retro-dialog').close();
+
+    // And adding somebody with nothing waiting does not open it at all.
+    const before2 = rosterRows().length;
+    dom.click(dom.$('roster-add'));
+    dom.$('roster-add-first').value = 'Nobody';
+    dom.$('roster-add-last').value = 'Special';
+    dom.fire(dom.$('roster-add-form'), 'submit');
+
+    // The dialog's own showModal() runs before setBusy(false), so waiting for
+    // Add to finish (the button re-enabling) is the reliable signal that the
+    // offer, whichever way it went, has already been decided one way or the
+    // other by the time this reads the dialog.
+    await until(() => rosterRows().length === before2 + 1, 'Nobody Special was never added');
+    await until(() => dom.$('roster-add').disabled === false, 'Add never finished');
+    assert.equal(dom.$('roster-retro-dialog').open, false, 'the dialog opened with nothing to offer');
+  },
+);
+
+await check('a CSV import surfaces earlier check-ins as a quiet, separate zone', async () => {
+  dom.click(dom.$('tab-roster'));
+  await until(() => rosterRows().length > 0, 'the roster never drew');
+  assert.equal(dom.$('import-retro').hidden, true, 'a stale retro zone is already showing');
+
+  dom.click(dom.$('roster-import'));
+  await chooseFile('first_name,last_name,email\nEndellion,Marrow,endellion.marrow@knights.ucf.edu\n');
+  assert.equal(dom.$('import-run').disabled, false, 'the row needs no decision, so this proves nothing');
+
+  const rosterBefore = rosterRows().length;
+  dom.fire(dom.$('import-form'), 'submit');
+  await until(() => rosterRows().length === rosterBefore + 1, 'the new member never landed');
+
+  await until(() => !dom.$('import-retro').hidden, 'the retro zone never appeared after the import');
+  assert.match(dom.$('import-retro-title').textContent, /1 member/);
+  assert.match(dom.$('import-retro-list').textContent, /Endellion Marrow/);
+  assert.match(dom.$('import-retro-list').textContent, /1 earlier check-in/);
+
+  // Visually secondary to import-refused, the way import-refused itself
+  // reads as informational next to duplicates-zone's warn treatment: it does
+  // not carry the class duplicates-title uses to signal a problem.
+  assert.doesNotMatch(dom.$('import-retro-title').className, /zone-title-warn/);
+
+  const openButton = dom.buttonNamed(dom.$('import-retro-list'), 'Open member');
+  assert.ok(openButton, 'no way to reach the member with the earlier check-in');
+  dom.click(openButton);
+  await until(
+    () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === 'Endellion Marrow',
+    'the Open member button did not reach the member',
+  );
+  // Reaching the member is itself a navigation, and clearMessage() (which
+  // openMember() calls) is what clears this zone: the same path
+  // renderRefused()'s report is cleared through, applied to both reports at
+  // once inside clearReport(). Confirmed here rather than with a second,
+  // separate check: navigating away a second time to observe it would only
+  // prove the same call happened twice.
+  assert.equal(dom.$('import-retro').hidden, true, 'the zone survived the navigation that clears it');
+});
+
+await check(
+  "an import's own courtesy scan cannot be overwritten by an earlier, slower import's stale one",
+  async () => {
+    dom.click(dom.$('tab-roster'));
+    await until(() => rosterRows().length > 0, 'the roster never drew');
+    assert.equal(dom.$('import-retro').hidden, true, 'a stale retro zone is already showing');
+
+    // The roster write for each import is fast and real. What is held back
+    // is each import's own COURTESY SCAN (fn_retroactive_match_candidates,
+    // fired unawaited once the write is done), captured here in the order
+    // the two imports start it so this check can release them in whichever
+    // order it wants rather than hope real localhost timing cooperates.
+    //
+    // responseRead[] mirrors held[] one-for-one (both are pushed to, in
+    // order, inside the same interceptor invocation): responseRead[i]
+    // resolves once held request i's Response has had its real .text()
+    // actually return, the exact call rest.js's send() makes and the last
+    // real I/O either request does. See the deterministic-wait comment
+    // below, and the check right after this one, for why that is the
+    // signal to wait for rather than a fixed sleep.
+    const held = [];
+    const responseRead = [];
+    let capturing = true;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      const isScan = String(url).includes('fn_retroactive_match_candidates');
+      const isHeld = isScan && capturing;
+      let settleRead;
+      if (isHeld) {
+        responseRead.push(
+          new Promise((resolve) => {
+            settleRead = resolve;
+          }),
+        );
+        await new Promise((resolve) => held.push(resolve));
+      }
+      const res = await realFetch(url, init);
+      if (isHeld) {
+        const originalText = res.text.bind(res);
+        res.text = async (...args) => {
+          const body = await originalText(...args);
+          settleRead();
+          return body;
+        };
+      }
+      return res;
+    };
+
+    try {
+      const before = rosterRows().length;
+
+      dom.click(dom.$('roster-import'));
+      await chooseFile(
+        `first_name,last_name,email\n${IDS.IMPORT_RACE.first.name.replace(' ', ',')},${IDS.IMPORT_RACE.first.email}\n`,
+      );
+      dom.fire(dom.$('import-form'), 'submit');
+      await until(() => rosterRows().length === before + 1, "the first import's member never landed");
+
+      dom.click(dom.$('roster-import'));
+      await chooseFile(
+        `first_name,last_name,email\n${IDS.IMPORT_RACE.second.name.replace(' ', ',')},${IDS.IMPORT_RACE.second.email}\n`,
+      );
+      dom.fire(dom.$('import-form'), 'submit');
+      await until(() => rosterRows().length === before + 2, "the second import's member never landed");
+
+      await until(() => held.length === 2, "both imports' scan calls never went out");
+
+      // The SECOND import's scan, though started second, is let through
+      // first: the exact interleaving the bug depends on real network
+      // timing to ever hit, made deterministic here.
+      held[1]();
+      await until(() => !dom.$('import-retro').hidden, "the second import's retro zone never appeared");
+      assert.match(dom.$('import-retro-list').textContent, /Cornelius Applewhite/, "the second import's own report never showed");
+      assert.doesNotMatch(
+        dom.$('import-retro-list').textContent,
+        /Perpetua Thistlewood/,
+        'this proves nothing if the first import already leaked in',
+      );
+
+      // Now let the FIRST import's held scan through, well after the
+      // second's has already rendered.
+      capturing = false;
+      held[0]();
+
+      // Deterministic wait for the first import's own held request to
+      // settle: once its response body has actually been read there is no
+      // further real I/O in scanImportRetro()'s path for it (JSON.parse,
+      // the token guard, the conditional write are all pure promise
+      // chaining), so a single macrotask boundary after that is guaranteed
+      // by the event loop's own microtask-before-macrotask ordering to land
+      // only after that whole continuation has finished, whatever the
+      // machine's speed. See the check right after this one for the same
+      // reasoning spelled out in full.
+      await responseRead[0];
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    assert.match(
+      dom.$('import-retro-list').textContent,
+      /Cornelius Applewhite/,
+      "the second import's report was overwritten",
+    );
+    assert.doesNotMatch(
+      dom.$('import-retro-list').textContent,
+      /Perpetua Thistlewood/,
+      "the first, slower import's scan repainted the zone with its own stale report",
+    );
+  },
+);
+
+await check(
+  'starting an import invalidates an earlier held scan even when the new import links nobody',
+  async () => {
+    dom.click(dom.$('tab-roster'));
+    await until(() => rosterRows().length > 0, 'the roster never drew');
+
+    // Same interception approach as the check above: hold every courtesy
+    // scan (fn_retroactive_match_candidates) so this check controls the
+    // order they resolve in, rather than hoping real timing cooperates.
+    const held = [];
+    let capturing = true;
+    const realFetch = globalThis.fetch;
+
+    // Deterministic completion signal for A's held request specifically:
+    // resolved once its Response's real .text() (the exact call rest.js's
+    // send() makes, and the last real I/O scanImportRetro() does for this
+    // request) has actually returned a value.
+    let settleARead;
+    const aResponseRead = new Promise((resolve) => {
+      settleARead = resolve;
+    });
+
+    globalThis.fetch = async (url, init) => {
+      const isScan = String(url).includes('fn_retroactive_match_candidates');
+      const isHeld = isScan && capturing;
+      if (isHeld) {
+        await new Promise((resolve) => held.push(resolve));
+      }
+      const res = await realFetch(url, init);
+      if (isHeld) {
+        const originalText = res.text.bind(res);
+        res.text = async (...args) => {
+          const body = await originalText(...args);
+          settleARead();
+          return body;
+        };
+      }
+      return res;
+    };
+
+    try {
+      // Import A links somebody real, with an earlier check-in waiting, so
+      // its held scan has something to publish if it is ever let through.
+      dom.click(dom.$('roster-import'));
+      await chooseFile(
+        `first_name,last_name,email\n${IDS.IMPORT_RACE.first.name.replace(' ', ',')},${IDS.IMPORT_RACE.first.email}\n`,
+      );
+      dom.fire(dom.$('import-form'), 'submit');
+      await until(() => held.length === 1, "import A's own scan never went out");
+
+      // While A's scan is still held, the officer reopens the dialog (which
+      // clears the zone on screen, but not the token this bug is about) and
+      // runs a second import whose only row is refused: import B links
+      // nobody at all.
+      // Row 2: the header is row 1 to whoever is looking at the file in a
+      // spreadsheet (see readRoster() in csv.js), so the one data row here
+      // is row 2.
+      refuseImportRowOnce(2);
+      dom.click(dom.$('roster-import'));
+      await chooseFile(
+        'first_name,last_name,email\nWilhelmina,Fitzgerald,wilhelmina.fitzgerald@knights.ucf.edu\n',
+      );
+      dom.fire(dom.$('import-form'), 'submit');
+      await until(() => !dom.$('import-refused').hidden, "import B's refusal never showed");
+      assert.match(dom.$('import-refused-list').textContent, /Wilhelmina Fitzgerald/);
+
+      // B linked nobody, so it never called scanImportRetro and never
+      // queued a second held request.
+      assert.equal(held.length, 1, "import B's own scan went out despite linking nobody");
+      assert.equal(
+        dom.$('import-retro').hidden,
+        true,
+        "the zone shows something before A's stale scan has even landed",
+      );
+
+      // Now let A's held scan through, well after B has already finished.
+      capturing = false;
+      held[0]();
+
+      // Wait for A's own response body to actually be read (its last real
+      // I/O for this request), then yield once via a macrotask. Node drains
+      // every currently-queued microtask, including any new microtasks that
+      // draining itself queues (i.e. an arbitrarily deep chain of further
+      // awaits), before running the next macrotask (setTimeout). Once the
+      // body is read there is no further I/O left in this path (JSON.parse,
+      // the token guard, loadCandidates()'s worker loop, Promise.all, and
+      // the conditional write are all pure promise-chaining), so this
+      // setTimeout(resolve, 0) is guaranteed by the event loop's own
+      // ordering to fire only after that entire continuation has finished,
+      // no matter how slow or fast the machine is. This is not a delay
+      // hoping timing cooperates; it is a boundary the language enforces.
+      await aResponseRead;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    assert.equal(
+      dom.$('import-retro').hidden,
+      true,
+      "import A's stale scan repainted the zone even though import B linked nobody",
+    );
+    assert.doesNotMatch(
+      dom.$('import-retro-list').textContent,
+      /Perpetua Thistlewood/,
+      "import A's stale report leaked in even though B linked nobody",
+    );
+  },
+);
 
 // ---------------------------------------------------------------------------
 process.stdout.write('\na member account reaches none of it\n');

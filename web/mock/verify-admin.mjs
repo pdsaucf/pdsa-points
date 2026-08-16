@@ -533,7 +533,11 @@ await check('a member account is refused the queue entirely', async () => {
 await check('a viewer reads the queue and is refused every decision', async () => {
   await signInAs('advisor@ucf.edu');
   const rows = await loadQueue();
-  assert.equal(rows.length, 51, `a viewer saw ${rows.length} pending records`);
+  // 51 base fixture rows, plus the 15 retroactive-matching fixtures that also
+  // sit pending and member_id null for YEAR_CURRENT (admin-fixtures.mjs's
+  // RETRO block; a sixteenth, RECORD_RETRO_WRONG_YEAR, is filed against
+  // LAST_YEAR and so does not count here).
+  assert.equal(rows.length, 66, `a viewer saw ${rows.length} pending records`);
 
   await assert.rejects(
     () => callRpc('review_records', { p_ids: [IDS.RECORD_MISSING_EVIDENCE], p_decision: 'approve' }, { attempts: 1 }),
@@ -563,7 +567,9 @@ await check('the queue is this year only, split into flagged and routine', async
   const flagged = rows.filter((row) => row.flags.length);
   const routine = rows.filter((row) => !row.flags.length);
   assert.equal(routine.length, 43, `expected 43 routine records, got ${routine.length}`);
-  assert.equal(flagged.length, 8, `expected 8 flagged records, got ${flagged.length}`);
+  // 8 base fixture flags, plus 15 unmatched_name records from the
+  // retroactive-matching fixtures (see the note above).
+  assert.equal(flagged.length, 23, `expected 23 flagged records, got ${flagged.length}`);
   for (const row of rows) {
     assert.equal(row.events.academic_year_id, IDS.YEAR_CURRENT, 'last year leaked into the queue');
   }

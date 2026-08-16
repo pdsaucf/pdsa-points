@@ -325,7 +325,10 @@ await check('a requirement can measure two categories at once', async () => {
 await check('the preview counts real members against the real rules', async () => {
   const counts = await previewOf(IDS.SET_CURRENT);
   const root = counts.get(IDS.NODES.root);
-  assert.equal(root.total, 60, `expected the 60 enrolled members, got ${root.total}`);
+  // 60 base fixture members enrolled for YEAR_CURRENT, plus the 4
+  // retroactive-matching fixture members (admin-fixtures.mjs's RETRO block),
+  // all enrolled for the same year.
+  assert.equal(root.total, 64, `expected the 64 enrolled members, got ${root.total}`);
   assert.ok(root.passing > 0 && root.passing < root.total, `${root.passing} of ${root.total}`);
 
   // Every requirement carries its own count, which is the "63 ✓" column.

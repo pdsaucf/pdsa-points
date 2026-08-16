@@ -741,6 +741,74 @@ kbd {
   grid-column: 1 / -1;
 }
 
+/* --------------------------------------------------------------------------- */
+/* Earlier check-ins (retroactive matching)                                    */
+/* --------------------------------------------------------------------------- */
+/* Reuses .suggestion and data-certain for the exact_email/name_match colour
+   language above. .suggestion-row is only a layout modifier, a checkbox row
+   instead of a button, so the certain/uncertain treatment itself stays the
+   one already defined on .suggestion. */
+
+.retro-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.retro-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestion-row {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.625rem;
+  cursor: pointer;
+}
+
+.suggestion-row input[type='checkbox'] {
+  margin-top: 0.2rem;
+}
+
+.suggestion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.retro-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--surface-sunken);
+  border-radius: 10px;
+}
+
+.retro-outcome {
+  margin: 0;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.retro-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.retro-import-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+}
+
 .thumb {
   display: block;
   width: 7.5rem;

@@ -27,6 +27,7 @@ import { select, insert, patch, callRpc } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { buildTree, flatten } from './requirement-model.js';
 import { firstJoinedOn } from './joined.js';
+import { createCandidatePicker } from './retro.js';
 import { $, h, announce, setHidden, plural, shortDate, monthYear } from './ui.js';
 
 // What the source column says, in an officer's words rather than the enum's.
@@ -73,6 +74,8 @@ export function createMember(ctx) {
     records: $('member-records'),
     recordsCount: $('member-records-count'),
     addRecord: $('member-add-record'),
+    retro: $('member-retro'),
+    retroBody: $('member-retro-body'),
     recordDialog: $('record-dialog'),
     recordForm: $('record-form'),
     recordEvent: $('record-event'),
@@ -91,6 +94,12 @@ export function createMember(ctx) {
 
   const state = {
     memberId: null,
+    // Bumped at the top of every load(). A callback that resumes after an
+    // await checks its own captured token against this before writing
+    // anything to `state` or drawing the screen, so a load an officer has
+    // already navigated away from cannot repaint the screen somebody else
+    // is now looking at. See load() and loadRetro() below.
+    loadToken: 0,
     member: null,
     joined: null,
     status: null,
@@ -103,13 +112,26 @@ export function createMember(ctx) {
     busy: false,
   };
 
+  // Earlier check-ins: a durable section, always available when a member is
+  // open, independent of the rest of this screen. See loadRetro() below for
+  // why its failure is caught on its own.
+  const retro = createCandidatePicker(ctx);
+
   // -------------------------------------------------------------------------
   // Reading
   // -------------------------------------------------------------------------
 
   async function load(memberId) {
-    state.memberId = memberId ?? state.memberId;
-    if (!state.memberId) return;
+    // Captured before anything async happens, so this call always knows
+    // whether it is still the newest one whenever it wakes back up from an
+    // await. A newer load() bumps state.loadToken again, which is the only
+    // signal this call trusts: comparing against state.memberId instead
+    // would miss the case where two different members are opened in
+    // quick succession and a third one lands in between.
+    const token = ++state.loadToken;
+    const targetId = memberId ?? state.memberId;
+    state.memberId = targetId;
+    if (!targetId) return;
 
     setHidden(el.loading, false);
     setHidden(el.body, true);
@@ -154,6 +176,12 @@ export function createMember(ctx) {
           select('profiles', { select: 'user_id,full_name' }),
         ]);
 
+      // A newer load() started and finished (or started and is still going)
+      // while this one was waiting on the network. Whatever this call has
+      // is stale the moment it arrives, so it writes nothing and draws
+      // nothing: the officer is looking at somebody else's screen now.
+      if (token !== state.loadToken) return;
+
       state.member = members[0] ?? null;
       if (!state.member) {
         setHidden(el.loading, true);
@@ -178,11 +206,39 @@ export function createMember(ctx) {
       state.categories = categories.filter((row) => !row.archived_at || used.has(row.id));
 
       state.checklist = await loadChecklist(state.status?.requirement_set_id ?? null);
+      // The checklist RPC is its own await, and a newer load() can just as
+      // easily outlive this one while it is in flight.
+      if (token !== state.loadToken) return;
 
       render();
+      await loadRetro(targetId, token);
     } catch (err) {
+      // A stale error must not clobber the message strip for whatever load
+      // actually won the race.
+      if (token !== state.loadToken) return;
       setHidden(el.loading, true);
       ctx.fail(err, () => load());
+    }
+  }
+
+  /**
+   * Earlier check-ins that might belong to this member, in a try/catch of its
+   * own rather than inside the Promise.all above. A failure here degrades
+   * silently: the section stays hidden and the rest of the member screen,
+   * already rendered, is unaffected. Surfacing an error for a section that is
+   * a bonus offer rather than a fact about this member would make a routine
+   * screen look broken over something the officer never asked to see.
+   */
+  async function loadRetro(targetId, token) {
+    try {
+      const rows = await retro.load(targetId);
+      // load()'s own await can be outlived by a newer load() too, so the
+      // same token guards this section's writes.
+      if (token !== state.loadToken) return;
+      setHidden(el.retro, rows.length === 0);
+    } catch {
+      if (token !== state.loadToken) return;
+      setHidden(el.retro, true);
     }
   }
 
@@ -246,6 +302,10 @@ export function createMember(ctx) {
     setHidden(el.honorary, !state.status?.is_honorary);
     setHidden(el.edit, !ctx.canReview);
     setHidden(el.addRecord, !ctx.canReview);
+    // Hidden until loadRetro() (called right after this) says otherwise, so a
+    // section left over from whoever was open before is never shown against
+    // this member even for the moment it takes to fetch.
+    setHidden(el.retro, true);
 
     renderProgress();
     renderChecklist();
@@ -525,6 +585,7 @@ export function createMember(ctx) {
   // -------------------------------------------------------------------------
 
   function wire() {
+    el.retroBody.append(retro.root);
     el.back.addEventListener('click', () => ctx.closeMember());
     el.addRecord.addEventListener('click', openRecordDialog);
     el.edit.addEventListener('click', openEditDialog);

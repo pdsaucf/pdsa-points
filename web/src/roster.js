@@ -63,6 +63,7 @@ import { READ_ONLY } from './officer-errors.js';
 import { normaliseName, rankMembers, similarity } from './match.js';
 import { csvFilename, downloadCsv, readRoster } from './csv.js';
 import { firstJoinedIndex } from './joined.js';
+import { createCandidatePicker, loadCandidates as loadRetroCandidates } from './retro.js';
 import { $, h, announce, setHidden, plural, monthYear } from './ui.js';
 
 // Above this, an incoming name is close enough to somebody on the roster that
@@ -84,6 +85,14 @@ const FUZZY_FLOOR = 0.3;
 // rows, and re-running the same file writes nothing for the ones that already
 // landed, so pressing Import again is the recovery.
 const IMPORT_CHUNK = 100;
+
+// How many members an import checks for earlier check-ins at once, after the
+// roster write itself is done. This is a courtesy scan, not the write the
+// rest of the run depends on, so it runs at a modest, fixed concurrency
+// rather than either one request at a time (slow on a 355-row file) or all at
+// once (a burst the same size as the import itself, for a feature nobody is
+// waiting on).
+const IMPORT_RETRO_CONCURRENCY = 4;
 
 /**
  * What the duplicate view found, in an officer's words.
@@ -175,6 +184,10 @@ export function createRoster(ctx) {
     refusedTitle: $('import-refused-title'),
     refusedList: $('import-refused-list'),
 
+    retroZone: $('import-retro'),
+    retroTitle: $('import-retro-title'),
+    retroList: $('import-retro-list'),
+
     duplicatesZone: $('duplicates-zone'),
     duplicatesTitle: $('duplicates-title'),
     duplicatesList: $('duplicates-list'),
@@ -185,6 +198,10 @@ export function createRoster(ctx) {
     addLast: $('roster-add-last'),
     addEmail: $('roster-add-email'),
     addError: $('roster-add-error'),
+
+    retroDialog: $('roster-retro-dialog'),
+    retroWho: $('roster-retro-who'),
+    retroBody: $('roster-retro-body'),
 
     removeDialog: $('roster-remove-dialog'),
     removeForm: $('roster-remove-form'),
@@ -215,10 +232,25 @@ export function createRoster(ctx) {
     incoming: [], // the import preview, once a file has been read
     skipped: [],
     refused: [], // the lines the last import could not write, and why
+    retroImport: [], // members from the last import who have earlier check-ins
+    // Claimed by runImport() itself, not by scanImportRetro(): ownership sits
+    // with the import because starting one has to invalidate any earlier
+    // in-flight scan whatever THIS import goes on to produce, including a
+    // run that links nobody and never calls scanImportRetro() at all. A
+    // token owned by the scan would only ever be bumped by a run that reached
+    // that call, so a no-op import could not invalidate a slower, still-open
+    // scan from before it. A scan whose captured token has been superseded by
+    // the time it resolves writes nothing: see runImport() and
+    // scanImportRetro() below.
+    retroScanToken: 0,
     removing: null,
     busy: false,
     loaded: false,
   };
+
+  // The dialog after Add. See addMember() and runImport() for the two places
+  // this gets used.
+  const retro = createCandidatePicker(ctx);
 
   // -------------------------------------------------------------------------
   // Reading
@@ -351,6 +383,7 @@ export function createRoster(ctx) {
     setHidden(el.table, rows.length === 0);
 
     renderRefused();
+    renderRetroZone();
     renderDuplicates();
 
     if (!rows.length) {
@@ -432,6 +465,35 @@ export function createRoster(ctx) {
           'li',
           { class: 'problem' },
           [`Row ${entry.row}`, entry.name, entry.message].filter(Boolean).join(' · '),
+        ),
+      ),
+    );
+  }
+
+  /**
+   * Members the last import created or matched who also have earlier
+   * free-text check-ins waiting to be linked. A courtesy pointer, not a
+   * refusal, so it says how many and offers a way to go look rather than a
+   * count of anything wrong. Cleared the same places renderRefused() is: see
+   * the note above that function.
+   */
+  function renderRetroZone() {
+    const rows = state.retroImport;
+    setHidden(el.retroZone, rows.length === 0);
+    el.retroTitle.textContent = rows.length
+      ? `${plural(rows.length, 'member')} with earlier check-ins`
+      : '';
+    el.retroList.replaceChildren(
+      ...rows.map((row) =>
+        h(
+          'li',
+          { class: 'retro-import-row' },
+          h('span', {}, `${row.name} · ${plural(row.count, 'earlier check-in')}`),
+          h(
+            'button',
+            { type: 'button', class: 'button button-small', onClick: () => ctx.openMember(row.id) },
+            'Open member',
+          ),
         ),
       ),
     );
@@ -712,10 +774,30 @@ export function createRoster(ctx) {
       announce(said);
       await load();
       ctx.onRosterChanged?.();
+      await offerRetroForNewMember(result?.member_id, name);
     } catch (err) {
       ctx.fail(err, null);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * The moment this offer is worth the most: somebody was just found or
+   * created, and their earlier free-text check-ins, if any, are sitting
+   * unresolved right now. A failed lookup here is not worth interrupting Add
+   * over, so it is swallowed the same way loadRetro() on the member screen
+   * swallows one: this is a bonus offer, not a fact Add depends on.
+   */
+  async function offerRetroForNewMember(memberId, name) {
+    if (!memberId) return;
+    try {
+      const rows = await retro.load(memberId);
+      if (!rows.length) return;
+      el.retroWho.textContent = name;
+      el.retroDialog.showModal();
+    } catch {
+      /* silent: Add already succeeded and said so */
     }
   }
 
@@ -934,6 +1016,13 @@ export function createRoster(ctx) {
     if (undecided().length) return;
     el.importDialog.close();
 
+    // Starting an import invalidates any earlier in-flight scan, regardless
+    // of what this new import goes on to produce. Bumped here rather than
+    // inside scanImportRetro() itself, because a run that links nobody at
+    // all never calls that function and would otherwise leave the token
+    // untouched: see scanImportRetro() for the read side of this guard.
+    const scanToken = ++state.retroScanToken;
+
     const rows = state.incoming.filter((row) => row.decision !== null);
 
     setBusy(true);
@@ -941,6 +1030,9 @@ export function createRoster(ctx) {
     // Collected locally and handed to state at the end, so the reload in the
     // finally block cannot land between the run and the render.
     const refused = [];
+    // Every row that resolved to somebody, whether created or matched. Scanned
+    // for earlier check-ins once the run itself is done; see scanImportRetro().
+    const linkedIds = new Set();
     let created = 0;
     let done = 0;
     let unknown = 0;
@@ -978,6 +1070,7 @@ export function createRoster(ctx) {
           }
           if (result?.was_created) created += 1;
           done += 1;
+          if (result?.member_id) linkedIds.add(result.member_id);
         });
       }
 
@@ -1017,6 +1110,58 @@ export function createRoster(ctx) {
       ctx.onRosterChanged?.();
       setBusy(false);
     }
+
+    // Not awaited: the import summary above is already on screen, and this is
+    // a courtesy scan over however many rows just landed, not a write anybody
+    // is waiting on. See scanImportRetro() for the concurrency. Nothing to
+    // look up for zero rows, so this stays conditional; the token bump above
+    // is what has to be unconditional.
+    if (linkedIds.size) scanImportRetro([...linkedIds], scanToken);
+  }
+
+  /**
+   * Which of the members this import just touched also have earlier
+   * check-ins waiting. IMPORT_RETRO_CONCURRENCY requests in flight at once,
+   * a fixed worker pool rather than one at a time (too slow over a real
+   * 355-row file) or all at once (a burst the same size as the import
+   * itself, for a feature nobody is waiting on). A member whose lookup fails
+   * is left out rather than reported as a problem: this scan is a bonus on
+   * top of a run that already succeeded.
+   */
+  async function scanImportRetro(memberIds, token) {
+    // token is the value runImport() bumped state.retroScanToken to right
+    // before starting this run, captured there rather than here: a second
+    // import started while this scan is still running has to invalidate it
+    // even if that second import goes on to link nobody and never reaches
+    // this function at all. This run's own eventual write below checks
+    // against the current value rather than assume it is still the only one
+    // going.
+    const nameOf = new Map(state.everyMember.map((member) => [member.id, member.display_name]));
+    const queue = [...memberIds];
+    const found = [];
+
+    async function worker() {
+      while (queue.length) {
+        const id = queue.shift();
+        try {
+          const rows = await loadRetroCandidates(id);
+          if (rows.length) found.push({ id, name: nameOf.get(id) ?? '', count: rows.length });
+        } catch {
+          /* left out, not reported: see the note above */
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(IMPORT_RETRO_CONCURRENCY, queue.length) }, worker),
+    );
+
+    // A newer import's own scan already ran, or is still running: this run's
+    // report is stale and must not overwrite whatever is on screen now.
+    if (token !== state.retroScanToken) return;
+
+    state.retroImport = found;
+    renderRetroZone();
   }
 
   // -------------------------------------------------------------------------
@@ -1055,6 +1200,7 @@ export function createRoster(ctx) {
   }
 
   function wire() {
+    el.retroBody.append(retro.root);
     el.search.addEventListener('input', () => {
       state.query = el.search.value;
       render();
@@ -1067,7 +1213,7 @@ export function createRoster(ctx) {
     el.importForm.addEventListener('submit', runImport);
     el.exportButton.addEventListener('click', exportCsv);
 
-    for (const dialog of [el.addDialog, el.removeDialog, el.importDialog]) {
+    for (const dialog of [el.addDialog, el.removeDialog, el.importDialog, el.retroDialog]) {
       dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
     }
   }
@@ -1078,11 +1224,15 @@ export function createRoster(ctx) {
       return load();
     },
     reload: load,
-    // The other half of admin.js's clearMessage(). See renderRefused().
+    // The other half of admin.js's clearMessage(). See renderRefused() and
+    // renderRetroZone(): both are a report from the last run, cleared the
+    // same way and in the same places.
     clearReport() {
-      if (!state.refused.length) return;
+      if (!state.refused.length && !state.retroImport.length) return;
       state.refused = [];
+      state.retroImport = [];
       renderRefused();
+      renderRetroZone();
     },
     hasLoaded: () => state.loaded,
     // For the checks, so the preview and the export can be driven without a

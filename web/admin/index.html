@@ -289,6 +289,17 @@
           <ul id="import-refused-list" class="problem-list"></ul>
         </section>
 
+        <!--
+          Members this import created or matched who also have earlier
+          free-text check-ins waiting to be linked. Informational, not a
+          problem: plain zone-title, not zone-title-warn, the way
+          import-refused reads and duplicates-zone does not.
+        -->
+        <section id="import-retro" class="zone" hidden aria-labelledby="import-retro-title">
+          <h2 id="import-retro-title" class="zone-title"></h2>
+          <ul id="import-retro-list" class="problem-list"></ul>
+        </section>
+
         <section id="duplicates-zone" class="zone" hidden aria-labelledby="duplicates-title">
           <h2 id="duplicates-title" class="zone-title zone-title-warn"></h2>
           <div id="duplicates-list" class="dupe-list"></div>
@@ -376,6 +387,16 @@
               </thead>
               <tbody id="member-records"></tbody>
             </table>
+          </section>
+
+          <!--
+            Earlier check-ins: unresolved free-text check-ins that might be
+            this member's, from before they were on the roster. Hidden
+            entirely when there is nothing to offer. See web/src/retro.js.
+          -->
+          <section id="member-retro" class="member-block" hidden aria-labelledby="member-retro-title">
+            <h3 id="member-retro-title" class="zone-title">Earlier check-ins</h3>
+            <div id="member-retro-body"></div>
           </section>
         </div>
       </main>
@@ -616,6 +637,20 @@
           <button type="submit" class="button button-primary">Add</button>
         </div>
       </form>
+    </dialog>
+
+    <!--
+      Earlier check-ins found for somebody just added to the roster. Closing
+      without linking is a normal path: this same list is always reachable
+      later from the member's own screen. See web/src/retro.js.
+    -->
+    <dialog id="roster-retro-dialog" class="dialog">
+      <h2 class="dialog-title">Earlier check-ins</h2>
+      <p id="roster-retro-who" class="muted small"></p>
+      <div id="roster-retro-body"></div>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Close</button>
+      </div>
     </dialog>
 
     <!-- Off this year's roster. The person and their records both stay. -->
