@@ -233,6 +233,19 @@ await check('the unit word comes from the categories, and is honest about a mix'
   assert.equal(model.unitWord(hours), 'hours');
   assert.equal(model.unitWord([...events, ...hours]), '');
   assert.equal(model.unitWord([]), '');
+
+  // Two categories can share `unit` and still disagree on unit_label: 'hours'
+  // labelled 'hour' on one row and 'session' on another. kinds.size is 1 there,
+  // so the mixed-unit branch above does not catch it on its own, and without a
+  // separate check on labels.size this used to fall through to UNIT_WORD.hours
+  // and print "hours" for a category nobody called that. Same dishonesty as
+  // the mixed-unit case, same answer: nothing.
+  const sessions = [{ unit: 'hours', unit_label: 'session' }];
+  assert.equal(
+    model.unitWord([...hours, ...sessions]),
+    '',
+    'a disagreeing pair of labels on the same unit printed a word instead of nothing',
+  );
 });
 
 await check('moving a row reports only the rows that actually moved', () => {

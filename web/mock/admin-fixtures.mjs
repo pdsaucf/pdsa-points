@@ -95,6 +95,36 @@ const EVENTS = [
     location: 'Student Union 316',
     is_published: true,
   },
+  {
+    /*
+      THE ONE EVENT THAT COUNTS FOR TWO CATEGORIES.
+
+      docs/04-member-ui.md calls this out as mattering more than it looks: an
+      event that earns credit twice has to show both categories in a member's
+      record list, or counting twice reads as a bug. Nothing else in these
+      fixtures had two, so a portal that drew only the first category would
+      have looked correct on every screen there is.
+
+      It carries no attendance records on purpose, so every number on the
+      board, in the preview and in the queue is exactly what it was before this
+      event existed. The only screens that can see it are the ones that list
+      events to pick from.
+
+      One of its two categories reads a number off the submission, which is the
+      second thing the portal needs: a missing-credit request for this event
+      has to ask for hours, and the label for that field has to come from the
+      category rather than from anything in the client.
+
+      Last in the array, because EVENTS[3] is read by name below and by
+      IDS.EVENT_LAST_YEAR.
+    */
+    id: 'e0000000-0000-4000-a000-000000000004',
+    academic_year_id: YEAR_CURRENT,
+    title: 'Health Fair',
+    occurred_on: '2026-08-08',
+    location: 'Memory Mall',
+    is_published: true,
+  },
 ];
 
 const EVENT_CATEGORIES = [
@@ -102,6 +132,9 @@ const EVENT_CATEGORIES = [
   { event_id: EVENTS[1].id, category_id: CATEGORIES[2].id, credit_mode: 'fixed', fixed_credit: 1 },
   { event_id: EVENTS[2].id, category_id: CATEGORIES[1].id, credit_mode: 'from_submission', fixed_credit: 1 },
   { event_id: EVENTS[3].id, category_id: CATEGORIES[0].id, credit_mode: 'fixed', fixed_credit: 1 },
+  // Health Fair: Tabling, and Volunteering hours off the submission.
+  { event_id: EVENTS[4].id, category_id: CATEGORIES[3].id, credit_mode: 'fixed', fixed_credit: 1 },
+  { event_id: EVENTS[4].id, category_id: CATEGORIES[1].id, credit_mode: 'from_submission', fixed_credit: 1 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -349,6 +382,9 @@ export function buildDatabase() {
       reviewed_by: null,
       reviewed_at: null,
       review_note: null,
+      // The member's own words, added by migration 18. Only
+      // request_missing_credit() writes it, so every fixture row carries null.
+      member_note: null,
       created_at: record.submitted_at,
       ...record,
     };
@@ -740,8 +776,14 @@ export const IDS = {
   USERS,
   EVENT_GBM: EVENTS[0].id,
   EVENT_SOAP: EVENTS[1].id,
+  EVENT_GKAS: EVENTS[2].id,
   EVENT_LAST_YEAR: EVENTS[3].id,
+  EVENT_TWO_CATEGORIES: EVENTS[4].id,
   MEMBER_ABIGAIL: 'm0000000-0000-4000-a000-000000000001',
+  MEMBER_ABBY: 'm0000000-0000-4000-a000-000000000002',
+  MEMBER_PRIYA: 'm0000000-0000-4000-a000-000000000005',
+  MEMBER_AARON: 'm0000000-0000-4000-a000-000000000004',
+  MEMBER_ETHAN: 'm0000000-0000-4000-a000-00000000000c',
   MEMBER_RETURNING: RETURNING[0],
   RECORD_UNMATCHED_CLOSE: 'r0000000-0000-4000-a000-000000000001',
   RECORD_UNMATCHED_NEW: 'r0000000-0000-4000-a000-000000000002',

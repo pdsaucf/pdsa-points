@@ -6,6 +6,11 @@
 // a sentence reads with, and turning a validation code into copy an officer can
 // act on.
 //
+// SHARED WITH THE MEMBER PORTAL, which draws the published set as the member's
+// own progress list and therefore needs the same tree and the same unit word:
+// buildTree(), flatten() and unitWord() are read by web/src/portal-progress.js.
+// The validation copy below is the officer's half and is not.
+//
 // THE VOCABULARY RULE, WHICH IS THE POINT OF THIS FILE EXISTING AT ALL.
 // The database calls these rows nodes, and calls a measured one a threshold.
 // docs/03-admin-ui.md says neither word ever reaches a screen, so the officer
@@ -42,6 +47,15 @@ const UNIT_WORD = {
  * different units: "at least 3 events" would be a lie about a rule that adds
  * hours to event counts, and the officer needs to see that rather than read a
  * confident wrong word.
+ *
+ * SAME RULE FOR DISAGREEING LABELS ON THE SAME UNIT. Two categories can share
+ * `unit = 'hours'` and still be labelled differently ('hour' on one,
+ * 'session' on another): kinds.size is 1 so the mixed-unit guard above does
+ * not fire, and without a separate check this fell through to
+ * UNIT_WORD['hours'], printing "hours" for a category the club called
+ * sessions. That is the identical dishonesty the mixed-unit branch exists to
+ * refuse, so it gets the identical answer: nothing, rather than a third word
+ * that matches neither label.
  */
 export function unitWord(categories) {
   const kinds = new Set();
@@ -52,6 +66,7 @@ export function unitWord(categories) {
     if (category.unit_label) labels.add(category.unit_label);
   }
   if (kinds.size !== 1) return '';
+  if (labels.size > 1) return '';
   if (labels.size === 1) return pluralUnit([...labels][0]);
   return UNIT_WORD[[...kinds][0]] ?? '';
 }

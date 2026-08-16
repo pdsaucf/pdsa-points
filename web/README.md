@@ -1,12 +1,15 @@
 # web/ · the frontend
 
-Two surfaces, one static directory, no build step.
+Three surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
   This is **P1**.
 - **`/admin/`** the officer screens, behind a magic-link sign-in: the review queue and
   account claims (**P2**), the requirements editor and categories (**P3**), and the
   progress board, member detail and roster (**P4**).
+- **`/me/`** the member portal, behind the same sign-in: their own progress, their own
+  records, and the claim flow for an account that is not linked to a roster row yet
+  (**P5**).
 
 ```
 web/
@@ -14,6 +17,7 @@ web/
 
   c/index.html               the check-in page, served at /c/?e=<token>
   admin/index.html           the review queue, served at /admin/
+  me/index.html              the member portal, served at /me/
 
   src/api.js                 fetch against PostgREST and Storage, with retries
   src/checkin.js             the check-in flow
@@ -38,11 +42,32 @@ web/
   src/officer-errors.js      every PDS* code, written from the officer's side
   src/ui.js                  the DOM helpers
 
+  src/portal.js              the member portal shell: sign-in, and which screen
+  src/portal-claim.js        "which of these is you", waiting, declined
+  src/portal-progress.js     their progress, their records, "something's missing?"
+  src/member-errors.js       every PDS* code, written from the member's side
+
   assets/css/checkin.css     the check-in stylesheet
   assets/css/admin.css       the admin stylesheet
+  assets/css/portal.css      the member portal stylesheet
   assets/fonts/public-sans/  Public Sans goes here (see the README in that folder)
   mock/                      a local stand-in for Supabase, for development
 ```
+
+## What the member portal shares, and what it deliberately does not
+
+`auth.js`, `rest.js`, `api.js`, `ui.js`, `format.js` and `requirement-model.js` are all
+used by both signed-in surfaces. Nothing was forked to make `/me/` work. One argument
+was added: `sendMagicLink()` takes `createUser`, because the officer screens must refuse
+an address an admin never provisioned and the portal must accept one. Signing in there
+IS the account being made, since the imported roster carries 355 members with no email
+on file.
+
+`officer-errors.js` is **not** shared, and `member-errors.js` is not a copy of it. The
+same PDS code means a different thing to each audience and needs a different next step
+from each: PDS05 tells an officer that somebody else holds a live record for that event,
+and tells a member that the event is already on their list. "Reload the queue" is not a
+sentence a member should ever read.
 
 ## Why there is still no framework, and no supabase-js
 
@@ -114,15 +139,17 @@ npm run verify               # the check-in checks
 npm run verify:admin         # the review queue checks
 npm run verify:requirements  # the rule editor checks
 npm run verify:board         # the board, member, roster and merge checks
-npm run check                # em dash gate, then all four suites
+npm run verify:portal        # the member portal: four screens, claims, missing credit
+npm run check                # em dash gate, then all five suites
 ```
 
-`verify:board` is the one suite that mounts the shipped page rather than only
-the modules. `mock/dom.mjs` parses `admin/index.html`, `admin.js`'s own
-`start()` runs against it, and what is asserted is the rendered DOM, so an id
-that stops matching between the markup and a module fails there rather than in
-front of an officer. It is a deliberate subset of a DOM: no layout, no CSS, and
-a selector it cannot parse throws instead of quietly matching nothing.
+`verify:board` and `verify:portal` are the two suites that mount the shipped page
+rather than only the modules. `mock/dom.mjs` parses `admin/index.html` or
+`me/index.html`, the page's own `start()` runs against it, and what is asserted is
+the rendered DOM, so an id that stops matching between the markup and a module
+fails there rather than in front of somebody. It is a deliberate subset of a DOM:
+no layout, no CSS, and a selector it cannot parse throws instead of quietly
+matching nothing.
 
 `npm run mock` prints one URL per scenario. Each check-in token is a different
 event:
@@ -169,6 +196,22 @@ returns. Four accounts exist, and the differences between them are the point:
 | `advisor@ucf.edu` | viewer | reads the queue, decides nothing, and sees no account claims |
 | `priya@knights.ucf.edu` | member | refused, and told where their own points are |
 | anything else | none | no link is sent, and the form says the same thing either way |
+
+### The member portal, locally
+
+Same sign-in, at `http://localhost:8787/me/`, and the address decides which of the
+four screens opens:
+
+| address | screen |
+|---|---|
+| `priya@knights.ucf.edu` | matches a roster row by email, so it links itself: progress and records |
+| `a.catto.2027@knights.ucf.edu` | a claim already waiting for an officer |
+| `ewallace99@gmail.com` | a claim, until an officer declines it from `/admin/`, then the reason |
+| anything else | no account yet. One is created, and the screen asks which name is theirs |
+
+The last row is the difference from the queue: the portal signs in with
+`create_user`, so an address nobody provisioned gets an account with no roster row
+attached and sees nothing but the claim screen until an officer confirms it.
 
 The fixtures put 43 routine check-ins and one of every triage flag into the
 queue, so no branch of the card renderer is unexercised.

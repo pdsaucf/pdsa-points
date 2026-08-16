@@ -34,6 +34,20 @@ const refreshTokens = new Map(); // refresh token -> { userId, email }
 const magicLinks = new Map(); // email -> the URL the email would contain
 const auditCalls = []; // every officer-side request, for the checks to read
 
+// auth.users rows that were not in the fixtures.
+//
+// The member portal signs in with create_user, because docs/04-member-ui.md
+// has 355 members arriving with no email on file: the first sign-in IS the
+// account being made. So an address this mock has never seen gets an auth user
+// and NO profiles row, which is exactly the state start_portal_session() has to
+// bootstrap and the state every member-scoped policy reads as "nothing".
+const newAccounts = new Map(); // email -> { user_id }
+
+// fn_rate_limit_check(), keyed the same way and counted per calendar minute,
+// because that is what makes a full bucket clear on its own rather than ease
+// off. Two of the six portal functions are limited: see 18.9 of the migration.
+const rateCounters = new Map(); // `${bucket}:${minute}` -> count
+
 // ---------------------------------------------------------------------------
 // One injected failure
 // ---------------------------------------------------------------------------
@@ -110,6 +124,8 @@ export function resetAdmin() {
   sessions.clear();
   refreshTokens.clear();
   magicLinks.clear();
+  newAccounts.clear();
+  rateCounters.clear();
   auditCalls.length = 0;
   pendingFailure = null;
   pendingRowRefusal = null;
@@ -215,7 +231,12 @@ export function resolveAuth(req, anonKey) {
  * schema, auth.users is not in it, and no view in P0 surfaces this column.
  */
 const emailOfUser = (userId) =>
-  Object.entries(ACCOUNTS).find(([, account]) => account.user_id === userId)?.[0] ?? null;
+  Object.entries(ACCOUNTS).find(([, account]) => account.user_id === userId)?.[0] ??
+  [...newAccounts.entries()].find(([, account]) => account.user_id === userId)?.[0] ??
+  null;
+
+/** An auth.users row, whether it came from the fixtures or from a first sign-in. */
+const accountFor = (email) => ACCOUNTS[email] ?? newAccounts.get(email) ?? null;
 
 const isStaff = (auth) => auth.kind === 'user' && STAFF_ROLES.includes(auth.role);
 const isOfficer = (auth) => auth.kind === 'user' && OFFICER_ROLES.includes(auth.role);
@@ -232,12 +253,27 @@ export function handleAuth(req, res, url, body, helpers) {
   if (path === '/auth/v1/otp') {
     const email = String(body?.email ?? '').trim().toLowerCase();
     const redirectTo = url.searchParams.get('redirect_to') ?? 'http://localhost/admin/';
-    const account = ACCOUNTS[email];
+    let account = accountFor(email);
+    const known = Boolean(account);
+
+    // THE ONE PLACE THE TWO SIGN-INS DIFFER. The officer screens send
+    // create_user: false, so an address nobody provisioned gets nothing and is
+    // told nothing (admin.js). The member portal sends create_user: true,
+    // because there the first sign-in is the account being created: docs/04
+    // has 355 members with no email on file, and an admin cannot provision
+    // accounts for people whose addresses the club does not hold.
+    //
+    // The account created here has no profiles row and no member_id, which is
+    // the state that reads nothing at all until start_portal_session() runs.
+    if (!account && body?.create_user) {
+      account = { user_id: `u9000000-0000-4000-a000-${randomBytes(6).toString('hex')}` };
+      newAccounts.set(email, account);
+    }
 
     // Answered the same way whether or not the address has an account. GoTrue
     // does this so a sign-in form cannot be used to test which addresses
     // exist, and the copy in admin.js is written to match.
-    record({ fn: 'auth.otp', email, known: Boolean(account), create_user: body?.create_user });
+    record({ fn: 'auth.otp', email, known, create_user: body?.create_user });
 
     if (account) {
       const session = issueSession(account.user_id, email);
@@ -995,10 +1031,39 @@ const INSERT_DEFAULTS = {
     reviewed_by: null,
     reviewed_at: null,
     review_note: null,
+    // The member's own words. request_missing_credit() is its only writer, so
+    // an officer's insert leaves it null.
+    member_note: null,
     ...row,
     status: 'pending',
   }),
 };
+
+/**
+ * fn_rate_limit_check(p_key, p_max_per_minute), in the mock.
+ *
+ * Counted per calendar minute exactly as the SQL counts it, so a full bucket
+ * clears when the minute rolls over rather than easing off, which is the
+ * behaviour api.js's second retry budget is written against.
+ *
+ * @returns {boolean} false when the caller has been refused and answered
+ */
+function rateLimited(res, helpers, key, maxPerMinute) {
+  const bucket = `${key}:${Math.floor(Date.now() / 60_000)}`;
+  const count = rateCounters.get(bucket) ?? 0;
+  if (count >= maxPerMinute) {
+    record({ fn: 'fn_rate_limit_check', key, outcome: 'PDS09' });
+    helpers.pds(res, 'PDS09', 'Too many requests. Please wait a moment and try again.');
+    return true;
+  }
+  rateCounters.set(bucket, count + 1);
+  return false;
+}
+
+// 18.9 of the migration, as rows in app_settings there and as the same two
+// numbers here. Raising one is a settings edit rather than a deploy.
+const CLAIM_SEARCH_MAX_PER_MIN = 30;
+const MISSING_CREDIT_MAX_PER_MIN = 5;
 
 function runInsert(table, payload, auth) {
   const allowed = WRITE_POLICY[table];
@@ -1936,6 +2001,444 @@ export const ADMIN_RPC = {
     record({ fn: 'dismiss_duplicate_pair', actor: auth.userId, memberA: first, memberB: second });
 
     json(res, 200, null);
+  },
+
+  // -------------------------------------------------------------------------
+  // The member portal
+  // -------------------------------------------------------------------------
+  // The four functions of migration 18 that the portal calls and no officer
+  // screen does. Written against the same file as the two below it, and held
+  // to the same standard: a mock that is more forgiving than Postgres is a lie
+  // that ships, so every refusal the SQL makes is made here, for the reason the
+  // SQL makes it.
+
+  /**
+   * start_portal_session() returns jsonb
+   *
+   * The only call in this product that an account the database has never seen
+   * can make, and the one that decides which of four screens the portal draws.
+   *
+   *   * it creates the profiles row, with role `member` written out rather than
+   *     left to the column default, which is `viewer` and is read-only STAFF.
+   *     A mock that defaulted it would let a privilege bug through
+   *   * it never changes a role that already exists, so an officer who opens
+   *     /me comes out an officer
+   *   * it auto-links when the address matches exactly one live, unmerged,
+   *     unclaimed roster row. That is the common path once officers collect
+   *     emails, and it is the path nobody waits on
+   *   * it returns the most recent claim in ANY status, because a rejected one
+   *     is a screen too
+   */
+  start_portal_session(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    // Not a role check at all: this function's whole job is to serve a caller
+    // who has no role yet. All it needs is an end user.
+    if (auth.kind !== 'user') {
+      record({ fn: 'start_portal_session', outcome: 'PDS07', role: auth.kind });
+      pds(res, 'PDS07', 'Sign in first.');
+      return;
+    }
+
+    const email = String(auth.email ?? '').trim().toLowerCase() || null;
+    let profile = db.profiles.find((row) => row.user_id === auth.userId) ?? null;
+    let created = false;
+    let linked = false;
+
+    if (!profile) {
+      profile = {
+        user_id: auth.userId,
+        member_id: null,
+        full_name: null,
+        role: 'member',
+        created_at: new Date().toISOString(),
+      };
+      db.profiles.push(profile);
+      created = true;
+    }
+
+    if (!profile.member_id && email) {
+      // members.email is citext UNIQUE, so "matches exactly one live member" is
+      // the index's guarantee rather than this filter's. The three exclusions
+      // are the ones that matter: an archived or merged row is not a person to
+      // link to, and a row another profile holds is somebody else's record.
+      const member = db.members.find(
+        (row) =>
+          String(row.email ?? '').toLowerCase() === email &&
+          !row.archived_at &&
+          !row.merged_into_id &&
+          !db.profiles.some((other) => other.member_id === row.id),
+      );
+      if (member) {
+        profile.member_id = member.id;
+        linked = true;
+      }
+    }
+
+    // Audited only when something changed. The portal calls this on every load,
+    // and an audit row per page view would bury the rows that mean something.
+    if (created || linked) {
+      audit(auth, 'start_portal_session', 'profile', null, {
+        created_profile: created,
+        auto_linked: linked,
+        member_id: profile.member_id,
+      });
+    }
+    record({
+      fn: 'start_portal_session',
+      actor: auth.userId,
+      created,
+      linked,
+      memberId: profile.member_id,
+    });
+
+    const member = db.members.find((row) => row.id === profile.member_id) ?? null;
+
+    // The most recent claim in any status. At most one can be live:
+    // one_live_claim_per_user says so.
+    const claim =
+      [...db.member_claims]
+        .filter((row) => row.user_id === auth.userId)
+        .filter((row) => db.members.some((m) => m.id === row.member_id)) // join members
+        .sort(
+          (a, b) =>
+            String(b.requested_at).localeCompare(String(a.requested_at)) ||
+            String(a.id).localeCompare(String(b.id)),
+        )[0] ?? null;
+
+    json(res, 200, {
+      user_id: auth.userId,
+      role: profile.role,
+      member_id: profile.member_id,
+      member_name: member?.display_name ?? null,
+      auto_linked: linked,
+      claim: claim
+        ? {
+            id: claim.id,
+            status: claim.status,
+            member_id: claim.member_id,
+            member_name:
+              db.members.find((row) => row.id === claim.member_id)?.display_name ?? null,
+            requested_at: claim.requested_at,
+            review_note: claim.review_note ?? null,
+          }
+        : null,
+    });
+  },
+
+  /**
+   * search_roster_for_claim(p_q text) returns table (id, display_name)
+   *
+   * Bounded on all four sides the migration bounds it on, because each one is
+   * a way a member could read a roster they are not allowed to read:
+   *
+   *   WHO       a signed-in account with a profiles row that is not yet linked.
+   *             Not "is a member": an officer who is also a member has to be
+   *             able to claim their own row.
+   *   WHAT      id and display_name. No email, no student id, no join date, no
+   *             total, nothing about progress.
+   *   HOW MUCH  ten rows, three letters minimum.
+   *   HOW OFTEN rate limited per caller.
+   *
+   * And it hides anybody already spoken for, so a name on the list is a name
+   * that can be claimed. Without that, two people pick Abigail Catto and the
+   * second one is refused after they have already chosen.
+   */
+  search_roster_for_claim(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (auth.kind !== 'user') {
+      pds(res, 'PDS07', 'Sign in first.');
+      return;
+    }
+
+    const profile = db.profiles.find((row) => row.user_id === auth.userId) ?? null;
+    if (!profile) {
+      // start_portal_session() creates that row, and the portal calls it before
+      // it can render this screen. A caller with no row has not come through
+      // the front door.
+      pds(res, 'PDS07', 'Start a portal session first.');
+      return;
+    }
+    if (profile.member_id) {
+      pds(res, 'PDS07', 'This account is already linked to a member.');
+      return;
+    }
+
+    const q = String(body.p_q ?? '').trim();
+    if (q.length < 3) {
+      // The same floor search_members() holds on the check-in page: a
+      // one-letter query is a way to walk the roster alphabetically.
+      pds(res, 'PDS03', 'Type at least three letters of your name.');
+      return;
+    }
+
+    if (rateLimited(res, helpers, `claim_search:${auth.userId}`, CLAIM_SEARCH_MAX_PER_MIN)) return;
+
+    const needle = q.toLowerCase();
+    const rows = db.members
+      .filter((member) => {
+        if (member.archived_at || member.merged_into_id) return false;
+        if (db.profiles.some((row) => row.member_id === member.id)) return false;
+        if (db.member_claims.some((row) => row.member_id === member.id && row.status !== 'rejected')) {
+          return false;
+        }
+        // `ilike '%q%' or display_name % q`: contained, or close enough for the
+        // trigram operator. similarity() here is the same measure the duplicate
+        // view stands in with, and 0.3 is pg_trgm's own default threshold.
+        return (
+          member.display_name.toLowerCase().includes(needle) ||
+          similarity(member.display_name, q) >= 0.3
+        );
+      })
+      .sort((a, b) => {
+        const aPrefix = a.display_name.toLowerCase().startsWith(needle) ? 0 : 1;
+        const bPrefix = b.display_name.toLowerCase().startsWith(needle) ? 0 : 1;
+        return (
+          aPrefix - bPrefix ||
+          similarity(b.display_name, q) - similarity(a.display_name, q) ||
+          a.display_name.localeCompare(b.display_name)
+        );
+      })
+      .slice(0, 10)
+      .map((member) => ({ id: member.id, display_name: member.display_name }));
+
+    record({ fn: 'search_roster_for_claim', actor: auth.userId, q, rows: rows.length });
+    json(res, 200, rows);
+  },
+
+  /**
+   * file_member_claim(p_member_id uuid, p_note text) returns jsonb
+   *
+   * The two partial unique indexes from migration 03 are the real guard, and
+   * this does not try to be a second one: liveClaimConflict() below is those
+   * two indexes written as predicates, and which one fires is what decides the
+   * code. They are two codes because they are two situations.
+   *
+   *   one_live_claim_per_user    the caller already asked and is waiting. Not a
+   *                              mistake, and nothing for them to do.
+   *   one_live_claim_per_member  somebody else is claiming that person, which
+   *                              is the wrong row picked or two roster rows for
+   *                              one human. An officer has to look.
+   *
+   * Deliberately NOT refused for a member another profile already holds:
+   * file_member_claim() does not check that either. search_roster_for_claim()
+   * hides them, and review_member_claim() refuses at approval, which is the
+   * step that actually grants the read.
+   */
+  file_member_claim(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (auth.kind !== 'user') {
+      pds(res, 'PDS07', 'Sign in first.');
+      return;
+    }
+
+    const profile = db.profiles.find((row) => row.user_id === auth.userId) ?? null;
+    if (!profile) {
+      pds(res, 'PDS07', 'Start a portal session first.');
+      return;
+    }
+    if (profile.member_id) {
+      pds(res, 'PDS07', 'This account is already linked to a member.');
+      return;
+    }
+
+    const member = db.members.find(
+      (row) => row.id === body.p_member_id && !row.archived_at && !row.merged_into_id,
+    );
+    if (!member) {
+      pds(res, 'PDS03', 'Unknown member.');
+      return;
+    }
+
+    const note = String(body.p_note ?? '').trim() || null;
+    // A bound on what one caller can write into a column an officer reads. It
+    // is also a check constraint on the column, because claims_insert_own lets
+    // a claim be POSTed straight to the table without coming through here.
+    if (note && note.length > 500) {
+      pds(res, 'PDS03', 'That note is too long.');
+      return;
+    }
+
+    // Which index would fire, read in the order Postgres would check them.
+    const conflict = db.member_claims.some(
+      (row) => row.user_id === auth.userId && row.status !== 'rejected',
+    )
+      ? 'one_live_claim_per_user'
+      : db.member_claims.some(
+            (row) => row.member_id === member.id && row.status !== 'rejected',
+          )
+        ? 'one_live_claim_per_member'
+        : null;
+
+    if (conflict === 'one_live_claim_per_user') {
+      record({ fn: 'file_member_claim', actor: auth.userId, outcome: 'PDS13' });
+      pds(res, 'PDS13', 'You already have a claim waiting.');
+      return;
+    }
+    if (conflict === 'one_live_claim_per_member') {
+      record({ fn: 'file_member_claim', actor: auth.userId, outcome: 'PDS14' });
+      pds(res, 'PDS14', 'Somebody has already claimed that member.');
+      return;
+    }
+
+    const claim = {
+      id: uuid('k9000000-0000-4000-a000-'),
+      user_id: auth.userId,
+      member_id: member.id,
+      status: 'pending',
+      note,
+      requested_at: new Date().toISOString(),
+      reviewed_by: null,
+      reviewed_at: null,
+      review_note: null,
+    };
+    db.member_claims.push(claim);
+
+    record({ fn: 'file_member_claim', actor: auth.userId, claimId: claim.id, memberId: member.id });
+    json(res, 200, {
+      claim_id: claim.id,
+      status: 'pending',
+      member_id: member.id,
+      member_name: member.display_name,
+    });
+  },
+
+  /**
+   * request_missing_credit(p_event_id uuid, p_note text, p_value numeric)
+   *   returns jsonb
+   *
+   * INVARIANT 6 IS THE WHOLE DESIGN. This files a request, not a credit. There
+   * is no argument by which a caller could reach the status column: it is
+   * forced pending, sourced member_request, flagged member_requested, and it
+   * lands in the same review queue as a scanned check-in.
+   *
+   * Every refusal below is a refusal rather than a flag, and the migration says
+   * why: submit_checkin() lets an unenrolled member through because somebody
+   * physically standing at an event is evidence. Nobody is standing anywhere
+   * here, so an event in a year they are not on the roster for is a mistake at
+   * the point of asking.
+   */
+  request_missing_credit(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (auth.kind !== 'user') {
+      pds(res, 'PDS07', 'Sign in first.');
+      return;
+    }
+
+    const profile = db.profiles.find((row) => row.user_id === auth.userId) ?? null;
+    if (!profile || !profile.member_id) {
+      record({ fn: 'request_missing_credit', outcome: 'PDS07', actor: auth.userId });
+      pds(res, 'PDS07', 'This account is not linked to a member yet.');
+      return;
+    }
+
+    // Placed here so a caller cannot spend somebody else's allowance, and
+    // cannot spend their own on arguments that were never going to be accepted.
+    if (rateLimited(res, helpers, `missing_credit:${auth.userId}`, MISSING_CREDIT_MAX_PER_MIN)) {
+      return;
+    }
+
+    const note = String(body.p_note ?? '').trim() || null;
+    if (!note) {
+      pds(res, 'PDS03', 'Say what is missing.');
+      return;
+    }
+    if (note.length > 500) {
+      pds(res, 'PDS03', 'That note is too long.');
+      return;
+    }
+
+    const event = db.events.find((row) => row.id === body.p_event_id && row.is_published) ?? null;
+    if (!event) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+
+    // The same definition of enrolled that submit_checkin() uses for its
+    // not_enrolled flag, so the two paths agree about who is on this year's
+    // roster.
+    const enrolled = db.member_enrollments.some(
+      (row) =>
+        row.member_id === profile.member_id &&
+        row.academic_year_id === event.academic_year_id &&
+        row.status === 'active',
+    );
+    if (!enrolled) {
+      record({ fn: 'request_missing_credit', outcome: 'PDS03 not enrolled', actor: auth.userId });
+      pds(res, 'PDS03', 'You are not on the roster for that year.');
+      return;
+    }
+
+    const needsValue = db.event_categories.some(
+      (row) => row.event_id === event.id && row.credit_mode === 'from_submission',
+    );
+    let value = body.p_value ?? null;
+    if (needsValue && (value === null || value === undefined)) {
+      pds(res, 'PDS03', 'This event needs a number (hours, for example) before it can be submitted.');
+      return;
+    }
+    if (needsValue && Number(value) < 0) {
+      pds(res, 'PDS03', 'That value cannot be negative.');
+      return;
+    }
+    if (!needsValue) value = null; // ignore a value nobody asked for
+
+    // one_live_record_per_member_event. The member already has a live record
+    // for this event, which is usually the answer they were looking for: it is
+    // there, it is just not approved yet.
+    const clash = db.attendance_records.some(
+      (row) =>
+        row.event_id === event.id &&
+        row.member_id === profile.member_id &&
+        row.status !== 'rejected',
+    );
+    if (clash) {
+      record({ fn: 'request_missing_credit', outcome: 'PDS05', actor: auth.userId });
+      pds(res, 'PDS05', 'You already have a record for that event.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const created = {
+      id: uuid('r9000000-0000-4000-a000-'),
+      event_id: event.id,
+      member_id: profile.member_id,
+      claimed_name: null,
+      claimed_email: null,
+      status: 'pending', // forced, never an argument
+      source: 'member_request', // forced, never an argument
+      submitted_value: value,
+      flags: ['member_requested'],
+      member_note: note,
+      submitted_at: now,
+      created_at: now,
+      reviewed_by: null,
+      reviewed_at: null,
+      review_note: null,
+    };
+    db.attendance_records.push(created);
+
+    record({
+      fn: 'request_missing_credit',
+      actor: auth.userId,
+      memberId: profile.member_id,
+      eventId: event.id,
+      recordId: created.id,
+      value,
+    });
+
+    json(res, 200, {
+      record_id: created.id,
+      status: 'pending',
+      flags: created.flags,
+    });
   },
 
   // -------------------------------------------------------------------------

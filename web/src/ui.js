@@ -1,9 +1,10 @@
-// The four DOM helpers the admin screens share.
+// The DOM helpers every signed-in screen shares: the admin app, and the member
+// portal at /me, which uses the same h() and the same announce().
 //
 // Everything here builds nodes and sets textContent. There is no innerHTML in
 // this codebase and no template string that becomes markup, which matters more
-// than usual on this screen: it renders a name a stranger typed into a phone at
-// an event, and that string arrives with no sanitising anywhere between the
+// than usual on these screens: they render a name a stranger typed into a phone
+// at an event, and that string arrives with no sanitising anywhere between the
 // keyboard and here.
 
 export const $ = (id) => document.getElementById(id);

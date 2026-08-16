@@ -1,0 +1,678 @@
+/* ---------------------------------------------------------------------------
+   Member portal styles, for /me.
+
+   Written for the same phone the check-in page was written for, and mostly the
+   same shapes: one column, 48px tap targets, no layout that only works above
+   320px. What is different is that this screen is read rather than filled in,
+   so it carries a list of figures and those figures have to line up.
+   --------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Public Sans, self hosted.
+
+   THE WOFF2 FILES ARE NOT IN THE REPO YET. Until somebody drops them into
+   web/assets/fonts/public-sans/, this @font-face resolves to nothing and every
+   rule below falls through to ui-sans-serif, which is the intended behaviour
+   rather than a broken page: font-display: swap means text is readable from
+   the first paint either way. No Google Fonts link, and nothing served from
+   anybody else's host.
+   --------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Public Sans';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2-variations'),
+       url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2');
+}
+
+/* ---------------------------------------------------------------------------
+   Brand tokens, sampled from the club logo.
+
+   THIS BLOCK IS DUPLICATED VERBATIM FROM checkin.css AND admin.css. Three
+   surfaces, one product, and no build step that could share a file between
+   them, so the guard against drift is a check rather than an import:
+   mock/verify-portal.mjs compares this block against checkin.css value for
+   value, in both schemes, exactly as mock/verify-admin.mjs already compares
+   the other two.
+
+   GOLD IS A FILL, NEVER A FOREGROUND. #e6c845 is 1.57:1 on this page
+   background, so it carries text only as a background with --gold-ink on top,
+   and it carries a line only when that line is thick enough to read as a bar.
+   Checked in mock/verify-portal.mjs.
+   --------------------------------------------------------------------------- */
+:root {
+  --font: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
+
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --ink: #2a2721;
+  --ink-muted: #6b6456;
+  --line: #e3ded3;
+  --line-strong: #c9c1b2;
+
+  --accent: #59328f;
+  --accent-ink: #ffffff;
+  --accent-soft: #f0eaf7;
+
+  --gold: #e6c845;
+  --gold-ink: #2a2721;
+  --gold-soft: #fbf3d8;
+
+  --danger: #8a1f16;
+  --danger-soft: #fbeae6;
+  --ok: #1c5c34;
+  --ok-soft: #eaf3ea;
+
+  --focus: #1573c4;
+
+  --radius: 12px;
+  --tap: 48px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14120e;
+    --surface: #1e1b16;
+    --ink: #f2efe8;
+    --ink-muted: #a8a091;
+    --line: #332e26;
+    --line-strong: #4a4338;
+
+    --accent: #b79bdf;
+    --accent-ink: #1b1226;
+    --accent-soft: #2a2135;
+
+    --gold: #e6c845;
+    --gold-ink: #241f14;
+    --gold-soft: #2e2716;
+
+    --danger: #ffb3ab;
+    --danger-soft: #33191a;
+    --ok: #9fe0b8;
+    --ok-soft: #16271b;
+
+    --focus: #7cc0f5;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Every view and field below sets `display`, which outranks the user agent's
+   `[hidden] { display: none }`. The page uses the hidden attribute as its only
+   visibility mechanism, so it wins here. */
+[hidden] {
+  display: none !important;
+}
+
+html {
+  /* 16px inputs, so iOS Safari does not zoom when a field takes focus. */
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.45;
+  /* This whole screen is a column of figures, and a proportional 1 among 9s is
+     the difference between scanning and reading. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  /* A bar, not a hairline: 3px so the gold reads as a deliberate edge. */
+  border-top: 3px solid var(--gold);
+}
+
+.app {
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 26rem) {
+  .app {
+    padding-top: 2rem;
+  }
+}
+
+.brand-row {
+  display: flex;
+  margin: 0 0 0.75rem;
+}
+
+.emblem {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.who {
+  margin: 0;
+  font-weight: 600;
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.view-centred {
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding-top: 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.body {
+  margin: 0;
+  color: var(--ink);
+}
+
+.muted {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.small {
+  font-size: 0.875rem;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Panels and fields                                                            */
+/* --------------------------------------------------------------------------- */
+
+.panel,
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.label {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.input,
+.select {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  appearance: none;
+}
+
+.textarea {
+  min-height: 5rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.input-number {
+  max-width: 9rem;
+}
+
+.input::placeholder {
+  color: var(--ink-muted);
+}
+
+/* --------------------------------------------------------------------------- */
+/* The roster search                                                            */
+/* --------------------------------------------------------------------------- */
+
+/* A fixed height, not a minimum, for the reason the check-in page gives: a well
+   that grows when results arrive moves the button a thumb is already travelling
+   towards. */
+.results-well {
+  height: 11rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.result:hover {
+  background: var(--accent-soft);
+}
+
+.hint {
+  display: flex;
+  align-items: center;
+  min-height: 3.25rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+}
+
+.chosen-name {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Progress                                                                     */
+/* --------------------------------------------------------------------------- */
+
+.progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.figures {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decorative. The figures line says the same thing in words, because a fill on
+   its own is nothing to a screen reader and nothing to somebody who cannot
+   tell the two colours apart. */
+.bar {
+  height: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Gold as a fill with the gold ink on top, which is the only way it can carry
+   a word at 1.57:1 against the page. */
+.state {
+  align-self: flex-start;
+  margin: 0;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--gold-ink);
+  background: var(--gold);
+  border-radius: 999px;
+}
+
+.checklist {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.check-row:last-child {
+  border-bottom: 0;
+}
+
+.check-row[data-depth='2'] {
+  padding-left: 1.5rem;
+}
+
+.check-mark {
+  width: 1rem;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+.check-row[data-met='true'] .check-mark {
+  color: var(--ok);
+}
+
+.check-label {
+  flex: 1 1 auto;
+}
+
+.check-figures {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.points {
+  margin: 0.75rem 0 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Records                                                                      */
+/* --------------------------------------------------------------------------- */
+
+.records-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.records {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.record:last-child {
+  border-bottom: 0;
+}
+
+.record-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.record-date {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.record-title {
+  font-weight: 600;
+}
+
+.record-categories {
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.record-status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.record[data-status='approved'] .record-status {
+  color: var(--ok);
+}
+
+.record[data-status='rejected'] .record-status {
+  color: var(--danger);
+}
+
+.record-note,
+.quote {
+  flex: 1 0 100%;
+  margin: 0.25rem 0 0;
+  padding-left: 0.75rem;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  border-left: 2px solid var(--line-strong);
+}
+
+/* --------------------------------------------------------------------------- */
+/* Something's missing                                                          */
+/* --------------------------------------------------------------------------- */
+
+.missing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.875rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* A label above its field, rather than a label beside it: the number box is
+   9rem wide and an inline label would sit next to it on its own baseline. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.missing-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Buttons                                                                      */
+/* --------------------------------------------------------------------------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  padding: 0.625rem 1rem;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.full {
+  width: 100%;
+}
+
+.button-primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.button-secondary {
+  background: var(--surface);
+}
+
+.button-quiet {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border-color: transparent;
+  text-decoration: underline;
+}
+
+.button[disabled] {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* A ring that clears the control on both schemes, and never only a colour
+   change. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Messages                                                                     */
+/* --------------------------------------------------------------------------- */
+
+.message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 1rem;
+  padding: 0.875rem 1rem;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+}
+
+.message-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.message-body {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.note {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  color: var(--ok);
+  background: var(--ok-soft);
+  border: 1px solid var(--ok);
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+
+.notice {
+  display: block;
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--accent-soft);
+  border-radius: 10px;
+  font-size: 0.9375rem;
+}
+
+.notice-title {
+  font-weight: 600;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Utility                                                                      */
+/* --------------------------------------------------------------------------- */
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,4 +1,10 @@
-// Officer sign-in, and the session behind every request the admin screens make.
+// Sign-in, and the session behind every request a signed-in screen makes.
+//
+// SHARED WITH THE MEMBER PORTAL. This was written for the officer screens and
+// is not officer-specific: magic-link sign-in, the redirect fragment, storage,
+// expiry-aware refresh and sign-out are the same on /me as on /admin/. The one
+// thing that differs is whether signing in may create the account, which is now
+// an argument to sendMagicLink() with the officer answer as its default.
 //
 // WHY THIS IS NOT @supabase/supabase-js
 //
@@ -225,20 +231,35 @@ async function authFetch(path, { method = 'POST', body, accessToken, opts = {} }
 /**
  * Sends the magic link.
  *
- * `create_user: false` is the load-bearing argument. Officer accounts are
- * provisioned by an admin, and without this any address on earth could sign
- * itself up. The account it created would land on `profiles.role` default
- * 'viewer' and therefore see nothing, but "anyone can create a row in your
- * auth.users" is not a property worth having.
+ * `create_user` IS THE ONE THING THE TWO SIGN-INS DISAGREE ABOUT, and it
+ * defaults to the officer answer.
+ *
+ * The officer screens send false. Officer accounts are provisioned by an admin,
+ * and without this any address on earth could sign itself up. The account it
+ * created would land on `profiles.role` default 'viewer' and therefore see
+ * nothing, but "anyone can create a row in your auth.users" is not a property
+ * worth having.
+ *
+ * The member portal sends true, because there the first sign-in IS the account
+ * being created. docs/04-member-ui.md is explicit about why: the imported
+ * roster carries names and no email addresses, so 355 members arrive with
+ * `email IS NULL` and there is nobody for an admin to provision an account for.
+ * What that account can then see is decided entirely by the portal's own RPCs:
+ * start_portal_session() writes role `member` rather than the viewer default,
+ * and until an officer confirms a claim, `profiles.member_id` stays null and
+ * every member-scoped policy in migration 11 matches no row. A stranger who
+ * signs in gets a screen that asks who they are and nothing else.
  *
  * The reply is deliberately not inspected for whether the address exists.
- * GoTrue answers 200 either way for exactly that reason, and the copy in the
- * UI matches: "if that address has an officer account, the link is on its way".
+ * GoTrue answers 200 either way for exactly that reason, and the copy on both
+ * screens is written to match.
+ *
+ * @param {{createUser?: boolean}} [opts] also carries the retry options
  */
 export async function sendMagicLink(email, redirectTo, opts = {}) {
   const query = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : '';
   await authFetch(`/auth/v1/otp${query}`, {
-    body: { email: String(email).trim(), create_user: false },
+    body: { email: String(email).trim(), create_user: opts.createUser === true },
     opts,
   });
   return true;
