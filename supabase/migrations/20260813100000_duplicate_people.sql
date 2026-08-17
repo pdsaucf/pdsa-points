@@ -219,12 +219,18 @@ language plpgsql
 stable
 security definer
 set search_path = public, extensions, pg_temp
-set pg_trgm.similarity_threshold = 0.25
 as $$
 declare
   v_whole   numeric;
   v_variant numeric;
 begin
+  -- Same pin as before (see the comment above), but set_config() rather than
+  -- a function-level SET: Supabase's migration role is not permitted to
+  -- ALTER FUNCTION ... SET on an extension-owned GUC, only to SET it at
+  -- runtime. The `true` third argument scopes it to this transaction, which
+  -- is what a function-level SET would have done anyway.
+  perform set_config('pg_trgm.similarity_threshold', '0.25', true);
+
   if not coalesce(fn_is_staff(), auth.uid() is null) then
     return;
   end if;

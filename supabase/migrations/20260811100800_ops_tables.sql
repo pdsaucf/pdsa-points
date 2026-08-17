@@ -6,6 +6,12 @@
 -- for the anonymous RPCs.
 -- ===========================================================================
 
+-- gen_random_bytes() below is pgcrypto, which Supabase installs into the
+-- extensions schema rather than public. Postgres ignores a schema in
+-- search_path that does not exist, so this is also correct on the plain
+-- Postgres the test suite runs against, where pgcrypto lands in public.
+set search_path = public, extensions, pg_temp;
+
 create table purge_runs (
   id               uuid primary key default gen_random_uuid(),
   performed_by     uuid references auth.users,
