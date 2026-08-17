@@ -185,29 +185,41 @@ what replaces hand-copying 69 names into two tabs.
 │ │ ⠿ Clinical Workshops       at least [  5 ] events              56 ✓ ⋯│ │
 │ │ ⠿ Socials                  at least [  6 ] events              61 ✓ ⋯│ │
 │ │ ⠿ Tabling                  at least [  2 ] events              58 ✓ ⋯│ │
-│ │ ⠿ Editorial Points, meet ( ◉ all ○ at least [ ] ) of:            ⋯│    │
-│ │     ⠿ Speaking   at least [ 1 ] from  ⟨Journal Club⟩ ⟨Media Speaking⟩│ │
-│ │     ⠿ Writing    at least [ 1 ] from  ⟨PDSA Post⟩ ⟨Media Writing⟩    │ │
+│ │ ⠿ Speaking     at least [ 1 ] from ⟨Journal Club⟩ ⟨Media Speaking⟩ ⋯│ │
+│ │ ⠿ Writing      at least [ 1 ] from ⟨PDSA Post⟩ ⟨Media Writing⟩     ⋯│ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
-│ [+ Add requirement]  [+ Add group]                                       │
+│ [ Add requirement ] [ New event category ]  [ Discard draft ] [ Publish ]│
 │                                                                          │
 │ Preview with today's data:  45 of 355 members would qualify  ( was 45 )  │
-│                                     [ Save draft ]  [ Publish changes ]  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-Everything an officer needs is on one screen, and it reads as sentences. The tree
-structure is expressed purely as indentation and a drag handle. Nobody is told they
-are editing a node graph.
+Everything an officer needs is on one screen, and it reads as sentences. Nobody is
+told they are editing a node graph.
 
-Three details that matter:
+**The list is flat.** The editor makes no groups and nothing nests. A requirement
+already spans categories, so "Editorial Points, being Speaking and Writing" is two
+ordinary rows measuring two categories each, and the level of nesting that shape
+seemed to need bought nothing except a tree an officer had to hold in their head.
+The root still carries "must meet all" or "must meet at least 8 of", because that is
+the rule for the set as a whole. Sets written before this can still hold a group:
+those rows carry **Ungroup**, which lifts what is inside them to the top level and
+then deletes the empty group. Groups are never deleted with requirements still in
+them, because `parent_id` cascades.
+
+Four details that matter:
 
 - **"at least 1 from ⟨Journal Club⟩ ⟨Media Speaking⟩"** is how the multi-category
-  threshold surfaces. Adding a fourth editorial source is dragging in a chip.
+  threshold surfaces. Adding a fourth source is one chip.
+- **A category is made from inside a rule.** The picker on every requirement ends in
+  "New event category", and the one it creates is attached to that requirement. It is
+  the same row the categories screen manages, not a second kind of thing.
 - **The live preview** ("45 of 355 would qualify, was 45") is the safety rail. Nobody
   changes a threshold blind, because the consequence is on screen before publishing.
-- **Publish is explicit.** Drafts change nothing; publishing bumps the version and
-  freezes the previous one, so last year's results never silently re-compute.
+- **Publish is explicit, and Discard draft is the way back.** Edits save as they are
+  made, so undoing them means throwing the draft away: the published set is a
+  separate row, and members go on being judged by it. Publishing bumps the version
+  and freezes the previous one, so last year's results never silently re-compute.
 
 ---
 

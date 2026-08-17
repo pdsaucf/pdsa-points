@@ -14,13 +14,20 @@
 // THE VOCABULARY RULE, WHICH IS THE POINT OF THIS FILE EXISTING AT ALL.
 // The database calls these rows nodes, and calls a measured one a threshold.
 // docs/03-admin-ui.md says neither word ever reaches a screen, so the officer
-// side of the product has exactly two words: a REQUIREMENT is one measured
-// line, a GROUP holds other lines. The translation happens here and nowhere
-// else, which is why the copy below is data rather than string literals spread
-// through the renderer.
+// side of the product has exactly one word: a REQUIREMENT is one measured line.
+// The translation happens here and nowhere else, which is why the copy below is
+// data rather than string literals spread through the renderer.
+//
+// THE RULE LIST IS FLAT. The tree in the database still holds a root group,
+// which is what "must meet all" and "must meet at least 8" are stored in, but
+// the editor no longer creates groups inside it and nothing nests. Nesting was
+// the only part of this screen nobody could read out loud, and the one rule it
+// existed for ("Editorial Points, being Speaking and Writing") is two ordinary
+// requirements. Sets written before that can still hold a group, so buildTree()
+// and flatten() stay recursive and ungroupInto() takes one apart in place.
 //
 // The category name is not the requirement's name. "Speaking" measures Journal
-// Club and Media Speaking together, which is the compound editorial rule from
+// Club and Media Speaking together, which is the compound rule from
 // docs/00-spreadsheet-findings.md and the reason a requirement carries a list
 // of categories rather than one.
 
@@ -118,24 +125,28 @@ export function flatten(root, depth = 0, out = []) {
 }
 
 /**
- * Every group a row could be moved into: not itself, and not its own children.
- * Moving a group inside itself is the one edit that would make the tree
- * unreadable rather than merely wrong, so the option is never offered.
+ * Taking a group apart: where each of its children lands once the group itself
+ * is gone.
+ *
+ * The editor no longer makes groups (see the note at the top of this file), so
+ * the only ones left are in sets written before that, and the whole point of an
+ * ungroup is that nothing measured is lost on the way. Removing the group
+ * outright would take its children with it, because parent_id cascades, so the
+ * children are moved to the root first and the group is deleted after.
+ *
+ * Order is preserved: the children arrive at the end of the root in the order
+ * they had inside the group.
+ *
+ * @returns {Array<{id: string, parent_id: string, sort_order: number}>}
  */
-export function movableInto(root, item) {
-  const out = [];
-  const walk = (node, depth) => {
-    if (node.type !== 'group') return;
-    if (node.id !== item.id && !contains(item, node.id)) out.push({ item: node, depth });
-    for (const child of node.children) walk(child, depth + 1);
-  };
-  walk(root, 0);
-  return out;
-}
-
-function contains(item, id) {
-  if (item.id === id) return true;
-  return (item.children ?? []).some((child) => contains(child, id));
+export function ungroupInto(root, group) {
+  if (!root || !group || group.id === root.id) return [];
+  let order = nextOrder(root.children);
+  return [...(group.children ?? [])].sort(byOrder).map((child) => {
+    const row = { id: child.id, parent_id: root.id, sort_order: order };
+    order += ORDER_STEP;
+    return row;
+  });
 }
 
 /**

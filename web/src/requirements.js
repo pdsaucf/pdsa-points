@@ -4,9 +4,19 @@
 //
 // IT HAS TO READ AS SENTENCES. The tree in the database is a graph of nodes,
 // and nobody using this screen is ever told that. A measured line is a
-// REQUIREMENT, a line that holds other lines is a GROUP, and the words "node",
-// "threshold" and "schema" are absent from every string below. The vocabulary
-// itself lives in requirement-model.js so it can be checked in one place.
+// REQUIREMENT, and the words "node", "threshold" and "schema" are absent from
+// every string below. The vocabulary itself lives in requirement-model.js so it
+// can be checked in one place.
+//
+// THE LIST IS FLAT, AND THIS SCREEN NEVER MAKES A GROUP. The root still carries
+// "must meet all" or "must meet at least 8 of", because that is the rule for
+// the set as a whole. Below it, every row is one requirement measuring one or
+// more categories, and nothing nests. A requirement already spans categories
+// ("Speaking" is Journal Club plus Media Speaking), so the compound rule that
+// nesting existed for is one ordinary row, and the second level bought nothing
+// but a tree an officer had to hold in their head. Sets written before this can
+// still hold a group: those rows render, and carry Ungroup, which lifts what is
+// inside them up to the top and then deletes the empty group.
 //
 // EDITS SAVE AS THEY ARE MADE, AND THERE IS NO "SAVE DRAFT" BUTTON.
 // The wireframe in docs/03-admin-ui.md draws one, next to a live preview of who
@@ -32,9 +42,9 @@ import { READ_ONLY } from './officer-errors.js';
 import {
   buildTree,
   flatten,
-  movableInto,
   nextOrder,
   reorderWithin,
+  ungroupInto,
   problemsByNode,
   preferredSet,
   setMeta,
@@ -43,6 +53,7 @@ import {
   isEditable,
   unitWord,
 } from './requirement-model.js';
+import { UNIT_LABEL, uniqueSlug } from './category-model.js';
 import { $, h, announce, setHidden, plural } from './ui.js';
 
 const NODE_SELECT = [
@@ -72,6 +83,9 @@ const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
 const ONLY_ADMIN_PUBLISHES = 'Only an admin can publish.';
 
+// The last option in every category picker, which is not a category.
+const NEW_CATEGORY = 'new';
+
 export function createRequirements(ctx) {
   const el = {
     loading: $('loading-requirements'),
@@ -92,7 +106,9 @@ export function createRequirements(ctx) {
     tree: $('rule-tree'),
     footer: $('rule-footer'),
     addRequirement: $('add-requirement'),
-    addGroup: $('add-group'),
+    newCategory: $('new-category'),
+    discardDraft: $('discard-draft'),
+    publishBottom: $('publish-bottom'),
     previewLine: $('preview-line'),
     saveState: $('save-state'),
     empty: $('empty-requirements'),
@@ -103,6 +119,15 @@ export function createRequirements(ctx) {
     publishMeta: $('publish-meta'),
     publishPreview: $('publish-preview'),
     publishProblems: $('publish-problems'),
+    discardDialog: $('discard-dialog'),
+    discardForm: $('discard-form'),
+    discardMeta: $('discard-meta'),
+    discardEffect: $('discard-effect'),
+    categoryDialog: $('new-category-dialog'),
+    categoryForm: $('new-category-form'),
+    categoryName: $('new-category-name'),
+    categoryUnit: $('new-category-unit'),
+    categoryError: $('new-category-error'),
   };
 
   const state = {
@@ -252,11 +277,9 @@ export function createRequirements(ctx) {
 
     const published = state.set?.status === 'published';
     setHidden(el.editAsDraft, !published || !ctx.canReview);
-    el.editAsDraft.disabled = state.inFlight > 0;
 
     const draft = isEditable(state.set);
     setHidden(el.publish, !draft || !ctx.canReview);
-    el.publish.disabled = !ctx.canPublish || state.inFlight > 0;
 
     // An officer is told why, rather than left pressing a button that answers
     // with a refusal from the database.
@@ -269,8 +292,11 @@ export function createRequirements(ctx) {
     setHidden(el.publishNote, !note);
 
     setHidden(el.footer, !canEdit());
-    el.addRequirement.disabled = !canEdit();
-    el.addGroup.disabled = !canEdit();
+
+    // The same button as the one in the header, so that a long list does not
+    // send an officer back to the top to publish what they just finished.
+    setHidden(el.publishBottom, !draft || !ctx.canReview);
+    paintBusy();
   }
 
   /** One entry per other year that has a set worth copying. */
@@ -331,7 +357,23 @@ export function createRequirements(ctx) {
     const rows = flatten(state.root).slice(1); // the root is the sentence above
     if (!rows.length) {
       el.tree.replaceChildren(
-        h('p', { class: 'muted rule-empty' }, 'No requirements yet.'),
+        h(
+          'div',
+          { class: 'rule-empty' },
+          h('p', { class: 'muted' }, 'No requirements yet.'),
+          canEdit()
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'button',
+                  disabled: state.inFlight > 0,
+                  onClick: addRequirement,
+                },
+                'Add requirement',
+              )
+            : null,
+        ),
       );
       return;
     }
@@ -350,7 +392,7 @@ export function createRequirements(ctx) {
 
     const line = h('div', { class: 'rule-line' });
     line.append(labelField(item));
-    if (item.type === 'group') line.append(...groupControl(item), ' of:');
+    if (item.type === 'group') line.append('must meet ', ...groupControl(item), ' of:');
     else line.append(...thresholdControl(item));
 
     const count = h('span', { class: 'rule-count' });
@@ -378,8 +420,12 @@ export function createRequirements(ctx) {
   }
 
   /**
-   * "must meet ( all / at least [N] ) of". This is the control that turns
-   * "every category" into "any 8 of 10" without anybody touching SQL.
+   * "( all / at least [N] )". This is the control that turns "every category"
+   * into "any 8 of 10" without anybody touching SQL.
+   *
+   * The words around it belong to the caller, because the sentence differs:
+   * the root reads "A member must meet all of the following", and a leftover
+   * group reads "Editorial Points must meet all of".
    */
   function groupControl(item) {
     const all = item.min_children_passing === null || item.min_children_passing === undefined;
@@ -418,7 +464,6 @@ export function createRequirements(ctx) {
       h(
         'span',
         { class: 'rule-mode' },
-        'must meet ',
         // The two handlers reach straight into the number box rather than
         // redrawing the row, because redrawing takes the focus out of whatever
         // the officer is in the middle of.
@@ -503,25 +548,39 @@ export function createRequirements(ctx) {
     return chip;
   }
 
+  /**
+   * The picker that attaches a category to a requirement, with the way to
+   * create one at the bottom of it.
+   *
+   * A rule for something the club has never tracked is the ordinary reason an
+   * officer opens this screen, and sending them to the categories tab to make
+   * it loses the half written rule they were looking at. The new category is
+   * attached to this requirement the moment it exists.
+   */
   function addCategoryControl(item) {
     const available = state.categories.filter(
       (category) => !category.archived_at && !item.categoryIds.includes(category.id),
     );
-    if (!available.length) return h('span', { class: 'muted small' }, 'All categories used');
 
     return h(
       'select',
       {
         class: 'select select-quiet chip-add',
-        'aria-label': 'Add a category',
+        'aria-label': 'Add an event category',
         onChange: (event) => {
-          const category = state.categoryById.get(event.target.value);
+          const value = event.target.value;
           event.target.value = '';
+          if (value === NEW_CATEGORY) {
+            newCategory(item);
+            return;
+          }
+          const category = state.categoryById.get(value);
           if (category) addCategory(item, category);
         },
       },
-      h('option', { value: '' }, 'Add category'),
+      h('option', { value: '' }, 'Add event category'),
       ...available.map((category) => h('option', { value: category.id }, category.name)),
+      h('option', { value: NEW_CATEGORY }, 'New event category…'),
     );
   }
 
@@ -556,36 +615,12 @@ export function createRequirements(ctx) {
       ),
     );
 
-    const targets = movableInto(state.root, item).filter(
-      (entry) => entry.item.id !== item.parent_id,
-    );
-    if (targets.length) {
-      actions.append(
-        h(
-          'select',
-          {
-            class: 'select select-quiet',
-            'aria-label': `Move ${item.label} into another group`,
-            onChange: (event) => {
-              const to = event.target.value;
-              event.target.value = '';
-              if (to) moveTo(item, to);
-            },
-          },
-          h('option', { value: '' }, 'Move to'),
-          ...targets.map((entry) =>
-            h('option', { value: entry.item.id }, entry.depth === 0 ? 'Top level' : entry.item.label),
-          ),
-        ),
-      );
-    }
-
+    // Only a set written before the list went flat still holds one of these,
+    // and Ungroup is how it stops holding it: what is inside comes up to the
+    // top level, in order, and the group itself goes.
     if (item.type === 'group') {
       actions.append(
-        button('Add requirement', `Add a requirement inside ${item.label}`, () =>
-          addChild(item, 'threshold'),
-        ),
-        button('Add group', `Add a group inside ${item.label}`, () => addChild(item, 'group')),
+        button('Ungroup', `Move what is inside ${item.label} to the top`, () => ungroup(item)),
       );
     }
 
@@ -723,6 +758,24 @@ export function createRequirements(ctx) {
     state.inFlight += on ? 1 : -1;
     if (state.inFlight < 0) state.inFlight = 0;
     el.saveState.textContent = state.inFlight > 0 ? 'Saving…' : said ?? '';
+    paintBusy();
+  }
+
+  /**
+   * The buttons that are the same for the whole screen, held against whatever
+   * is in flight. The row buttons are not here: Up on the first row is disabled
+   * for a reason that has nothing to do with saving, and re-enabling everything
+   * would lose it. Rows are redrawn once a write lands instead.
+   */
+  function paintBusy() {
+    const busy = state.inFlight > 0;
+    const editable = canEdit();
+    el.addRequirement.disabled = !editable || busy;
+    el.newCategory.disabled = !editable || busy;
+    el.discardDraft.disabled = !editable || busy;
+    el.editAsDraft.disabled = busy;
+    el.publish.disabled = !ctx.canPublish || busy;
+    el.publishBottom.disabled = el.publish.disabled;
   }
 
   /**
@@ -770,24 +823,25 @@ export function createRequirements(ctx) {
     }
   }
 
-  async function addChild(parent, type) {
+  /** One more line at the end of the list. There is no other shape to add. */
+  async function addRequirement() {
+    if (!state.root) return;
     setSaving(true);
     try {
-      const label = type === 'group' ? 'New group' : 'New requirement';
       const rows = await insert('requirement_nodes', [
         {
           requirement_set_id: state.set.id,
-          parent_id: parent.id,
-          type,
-          label,
-          sort_order: nextOrder(parent.children),
+          parent_id: state.root.id,
+          type: 'threshold',
+          label: 'New requirement',
+          sort_order: nextOrder(state.root.children),
           // A requirement has to carry a number from the moment it exists: the
           // check constraint on the table refuses one without.
-          ...(type === 'threshold' ? { min_value: 1 } : {}),
+          min_value: 1,
         },
       ]);
       if (!rows?.length) throw new Error('nothing came back');
-      await reloadTree(`Added ${label.toLowerCase()}.`);
+      await reloadTree('Added a requirement.');
       focusRow(rows[0].id);
     } catch (err) {
       setSaving(false);
@@ -830,27 +884,120 @@ export function createRequirements(ctx) {
     }
   }
 
-  async function moveTo(item, parentId) {
-    const parent = state.byId.get(parentId);
-    if (!parent) return;
+  /**
+   * Taking a leftover group apart.
+   *
+   * The children move to the top level FIRST and the group is deleted after,
+   * because parent_id cascades: deleting it while they are still inside would
+   * take the requirements with it, which is the one outcome an officer pressing
+   * a button called Ungroup cannot be shown.
+   */
+  async function ungroup(item) {
     setSaving(true);
     try {
-      const rows = await patch(
-        'requirement_nodes',
-        { id: `eq.${item.id}` },
-        { parent_id: parentId, sort_order: nextOrder(parent.children) },
-      );
+      for (const move of ungroupInto(state.root, item)) {
+        await patch(
+          'requirement_nodes',
+          { id: `eq.${move.id}` },
+          { parent_id: move.parent_id, sort_order: move.sort_order },
+        );
+      }
+      const rows = await remove('requirement_nodes', { id: `eq.${item.id}` });
       if (!rows.length) {
         setSaving(false);
         ctx.note(NOT_CHANGED, 'warn');
         return;
       }
-      await reloadTree(`Moved into ${parent.label}.`);
-      focusRow(item.id);
+      await reloadTree(`Ungrouped ${item.label}.`);
     } catch (err) {
       setSaving(false);
       ctx.fail(err, null);
     }
+  }
+
+  /**
+   * A category that does not exist yet, made without leaving the rule.
+   *
+   * `item` is the requirement whose picker asked for it, if one did: the new
+   * category is attached to it straight away, because an officer who typed
+   * "Journal Club" into a rule meant that rule to measure it.
+   */
+  async function newCategory(item = null) {
+    const made = await askForCategory();
+    if (!made) return;
+
+    let category = null;
+    setSaving(true);
+    try {
+      const rows = await insert('categories', [
+        {
+          slug: uniqueSlug(
+            made.name,
+            state.categories.map((row) => row.slug),
+          ),
+          name: made.name,
+          unit: made.unit,
+          unit_label: UNIT_LABEL[made.unit] ?? null,
+          counts_toward_point_total: true,
+          sort_order: nextOrder(state.categories),
+        },
+      ]);
+      category = rows?.[0];
+      if (!category) throw new Error('nothing came back');
+    } catch (err) {
+      setSaving(false);
+      ctx.fail(err, null);
+      return;
+    }
+
+    state.categories.push(category);
+    state.categoryById.set(category.id, category);
+    // The categories screen is showing the same rows, so it re-reads them.
+    ctx.onCategoriesChanged?.();
+    setSaving(false, `${category.name} added.`);
+
+    if (item) {
+      await addCategory(item, category);
+      return;
+    }
+    renderTree();
+    announce(`${category.name} added.`);
+  }
+
+  function askForCategory() {
+    el.categoryName.value = '';
+    el.categoryUnit.value = 'event_count';
+    setHidden(el.categoryError, true);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        el.categoryForm.removeEventListener('submit', onSubmit);
+        el.categoryDialog.removeEventListener('close', onClose);
+        resolve(value);
+      };
+      // A nameless category would be a chip with nothing written on it, so the
+      // submit is refused rather than the dialog closing on a blank field.
+      const onSubmit = (event) => {
+        const name = el.categoryName.value.trim();
+        if (!name) {
+          event.preventDefault();
+          setHidden(el.categoryError, false);
+          el.categoryName.focus();
+          return;
+        }
+        el.categoryDialog.close();
+        finish({ name, unit: el.categoryUnit.value });
+      };
+      const onClose = () => finish(null);
+
+      el.categoryForm.addEventListener('submit', onSubmit);
+      el.categoryDialog.addEventListener('close', onClose, { once: true });
+      el.categoryDialog.showModal();
+      el.categoryName.focus();
+    });
   }
 
   async function addCategory(item, category) {
@@ -885,12 +1032,19 @@ export function createRequirements(ctx) {
     }
   }
 
-  /** Re-read what the database now holds, redraw, and ask for a fresh preview. */
+  /**
+   * Re-read what the database now holds, redraw, and ask for a fresh preview.
+   *
+   * The save is marked finished BEFORE the redraw, because a row draws its Up,
+   * Down and Remove buttons disabled while a write is in flight, and a redraw
+   * that happened first would leave every one of them disabled with nothing
+   * left to re-enable them.
+   */
   async function reloadTree(said) {
     try {
       await loadTree();
-      renderTree();
       setSaving(false, said);
+      renderTree();
       if (said) announce(said);
       refreshPreview();
     } catch (err) {
@@ -1019,37 +1173,89 @@ export function createRequirements(ctx) {
   }
 
   function confirmPublish() {
+    const root = state.root ? state.counts.get(state.root.id) : null;
+    const problems = [...state.problems.values()].flat();
+
+    el.publishTitle.textContent = `Publish version ${state.set.version}`;
+    el.publishMeta.textContent = `${ctx.year.label} · ${state.set.name}`;
+    el.publishPreview.textContent = root
+      ? `${root.passing} of ${root.total} members would qualify.`
+      : '';
+    el.publishProblems.replaceChildren(...problems.map(problemItem));
+    setHidden(el.publishProblems, problems.length === 0);
+
+    return decide(el.publishDialog, el.publishForm);
+  }
+
+  /**
+   * Throwing the draft away, which is what "cancel my changes" means on a
+   * screen that has already saved every one of them.
+   *
+   * Only the draft goes. The published set is a separate row and is what
+   * members go on being judged by, which is the line the dialog states before
+   * anybody presses anything.
+   */
+  async function discardDraft() {
+    if (!isEditable(state.set)) return;
+
+    const published = state.sets.find(
+      (row) => row.status === 'published' && row.id !== state.set.id,
+    );
+    el.discardMeta.textContent = `${ctx.year.label} · ${setMeta(state.set)}`;
+    el.discardEffect.textContent = published
+      ? `Members stay judged by version ${published.version}.`
+      : 'Nothing is published for this year, so nobody qualifies until one is.';
+
+    if (!(await decide(el.discardDialog, el.discardForm))) return;
+
+    const version = state.set.version;
+    setSaving(true);
+    try {
+      // The nodes go with it: requirement_nodes cascades from the set.
+      const rows = await remove('requirement_sets', { id: `eq.${state.set.id}` });
+      if (!rows.length) {
+        setSaving(false);
+        ctx.note(NOT_CHANGED, 'warn');
+        return;
+      }
+      setSaving(false);
+      const said = `Discarded version ${version}.`;
+      ctx.note(said);
+      announce(said);
+      state.chosenSetId = null;
+      await load();
+    } catch (err) {
+      setSaving(false);
+      ctx.fail(err, null);
+    }
+  }
+
+  /**
+   * A dialog that answers true when it is submitted and false when it is
+   * dismissed.
+   *
+   * Same guard as the review queue's dialogs: close() fires its event as a
+   * queued task, so the cancel path can still run after submit decided.
+   */
+  function decide(dialog, form) {
     return new Promise((resolve) => {
-      const root = state.root ? state.counts.get(state.root.id) : null;
-      const problems = [...state.problems.values()].flat();
-
-      el.publishTitle.textContent = `Publish version ${state.set.version}`;
-      el.publishMeta.textContent = `${ctx.year.label} · ${state.set.name}`;
-      el.publishPreview.textContent = root
-        ? `${root.passing} of ${root.total} members would qualify.`
-        : '';
-      el.publishProblems.replaceChildren(...problems.map(problemItem));
-      setHidden(el.publishProblems, problems.length === 0);
-
-      // Same guard as the review queue's dialogs: close() fires its event as a
-      // queued task, so the cancel path can still run after submit decided.
       let settled = false;
       const finish = (value) => {
         if (settled) return;
         settled = true;
-        el.publishForm.removeEventListener('submit', onSubmit);
-        el.publishDialog.removeEventListener('close', onClose);
+        form.removeEventListener('submit', onSubmit);
+        dialog.removeEventListener('close', onClose);
         resolve(value);
       };
       const onSubmit = () => {
-        el.publishDialog.close();
+        dialog.close();
         finish(true);
       };
       const onClose = () => finish(false);
 
-      el.publishForm.addEventListener('submit', onSubmit);
-      el.publishDialog.addEventListener('close', onClose, { once: true });
-      el.publishDialog.showModal();
+      form.addEventListener('submit', onSubmit);
+      dialog.addEventListener('close', onClose, { once: true });
+      dialog.showModal();
     });
   }
 
@@ -1076,13 +1282,15 @@ export function createRequirements(ctx) {
     });
 
     el.publish.addEventListener('click', publish);
+    el.publishBottom.addEventListener('click', publish);
 
-    el.addRequirement.addEventListener('click', () => state.root && addChild(state.root, 'threshold'));
-    el.addGroup.addEventListener('click', () => state.root && addChild(state.root, 'group'));
+    el.addRequirement.addEventListener('click', addRequirement);
+    el.newCategory.addEventListener('click', () => newCategory(null));
+    el.discardDraft.addEventListener('click', discardDraft);
 
-    el.publishDialog
-      .querySelector('[data-close]')
-      ?.addEventListener('click', () => el.publishDialog.close());
+    for (const dialog of [el.publishDialog, el.discardDialog, el.categoryDialog]) {
+      dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
+    }
   }
 
   return {

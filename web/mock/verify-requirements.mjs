@@ -263,16 +263,35 @@ await check('moving a row reports only the rows that actually moved', () => {
   assert.deepEqual(model.reorderWithin(siblings, 'c', 1), [], 'the last row moved down');
 });
 
-await check('a group is never offered a move into itself', () => {
+// Ungrouping an old set is the one edit that touches several rows at once, and
+// the failure it has to be held against is silent: a group deleted with its
+// children still inside takes them with it (parent_id cascades), and the screen
+// would look tidy afterwards with two requirements missing.
+await check('ungrouping lifts every child to the top, in order', () => {
   const rows = [
     { id: 'root', parent_id: null, type: 'group', label: 'Honorary Member', sort_order: 0 },
-    { id: 'g1', parent_id: 'root', type: 'group', label: 'Editorial Points', sort_order: 10 },
-    { id: 'g2', parent_id: 'g1', type: 'group', label: 'Inside', sort_order: 10 },
-    { id: 't1', parent_id: 'g2', type: 'threshold', label: 'Speaking', sort_order: 10 },
+    { id: 'gbm', parent_id: 'root', type: 'threshold', label: 'GBMs', sort_order: 10 },
+    { id: 'g1', parent_id: 'root', type: 'group', label: 'Editorial Points', sort_order: 20 },
+    { id: 'w', parent_id: 'g1', type: 'threshold', label: 'Writing', sort_order: 20 },
+    { id: 's', parent_id: 'g1', type: 'threshold', label: 'Speaking', sort_order: 10 },
   ];
   const { root, byId } = model.buildTree(rows, 'root');
-  const targets = model.movableInto(root, byId.get('g1')).map((entry) => entry.item.id);
-  assert.deepEqual(targets, ['root'], 'a group could be moved inside itself or its own child');
+  const moves = model.ungroupInto(root, byId.get('g1'));
+
+  assert.deepEqual(
+    moves.map((move) => move.id),
+    ['s', 'w'],
+    'the children came up in the wrong order, or one was left behind',
+  );
+  assert.ok(
+    moves.every((move) => move.parent_id === 'root'),
+    'a child landed somewhere other than the top level',
+  );
+  assert.ok(
+    moves.every((move) => move.sort_order > 20),
+    'a child landed on top of a requirement that was already there',
+  );
+  assert.deepEqual(model.ungroupInto(root, root), [], 'the root offered to ungroup itself');
 });
 
 await check('the newest draft is what the screen opens on', () => {

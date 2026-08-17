@@ -1123,14 +1123,35 @@ kbd {
   font-size: 0.8125rem;
 }
 
+/* Adding is on the left, the two that end the draft are on the right, so that
+   the button an officer presses forty times and the button they press once are
+   never next to each other. */
+
 .rule-footer {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
 
+.rule-footer-end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
 .rule-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
   padding: 1rem 0;
+}
+
+.rule-empty p {
+  margin: 0;
 }
 
 /* The categories a requirement adds up. First class rather than hidden behind

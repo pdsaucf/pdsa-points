@@ -19,24 +19,11 @@
 import { select, insert, patch } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { reorderWithin, nextOrder } from './requirement-model.js';
+import { UNIT_LABEL, UNIT_NAME, uniqueSlug } from './category-model.js';
 import { $, h, announce, setHidden, plural } from './ui.js';
 
 const CATEGORY_SELECT =
   'id,slug,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at';
-
-// The singular word a threshold reads with. 'hours' is the only unit whose
-// sentence needs one; an event count reads "9 events" from the unit itself.
-const UNIT_LABEL = {
-  event_count: null,
-  hours: 'hour',
-  points: 'point',
-};
-
-const UNIT_NAME = {
-  event_count: 'Events',
-  hours: 'Hours',
-  points: 'Points',
-};
 
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
@@ -294,7 +281,7 @@ export function createCategories(ctx) {
     try {
       const rows = await insert('categories', [
         {
-          slug: uniqueSlug(name),
+          slug: uniqueSlug(name, state.categories.map((row) => row.slug)),
           name,
           unit,
           unit_label: UNIT_LABEL[unit] ?? null,
@@ -315,26 +302,6 @@ export function createCategories(ctx) {
     } finally {
       setBusy(false);
     }
-  }
-
-  /**
-   * The stable key. Never shown, never reused, and unique across retired ones
-   * too: a slug that came back for a second category would attach this year's
-   * credit to a name last year's rules already measure.
-   */
-  function uniqueSlug(name) {
-    const base =
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 40) || 'category';
-    const taken = new Set(state.categories.map((row) => row.slug));
-    if (!taken.has(base)) return base;
-    for (let n = 2; n < 100; n += 1) {
-      if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
-    }
-    return `${base}-${Date.now()}`;
   }
 
   // -------------------------------------------------------------------------

@@ -444,9 +444,22 @@
         <div id="requirements-body" hidden>
           <p id="root-sentence" class="rule-sentence"></p>
           <div id="rule-tree" class="rule-tree"></div>
+          <!--
+            The list is flat. There is no "Add group": nesting was the only part
+            of this screen that could not be read out loud, and the rule it
+            existed for is two ordinary requirements.
+          -->
           <div id="rule-footer" class="rule-footer">
             <button id="add-requirement" type="button" class="button">Add requirement</button>
-            <button id="add-group" type="button" class="button">Add group</button>
+            <button id="new-category" type="button" class="button">New event category</button>
+            <div class="rule-footer-end">
+              <button id="discard-draft" type="button" class="button button-danger">
+                Discard draft
+              </button>
+              <button id="publish-bottom" type="button" class="button button-primary">
+                Publish
+              </button>
+            </div>
           </div>
 
           <div class="preview-bar">
@@ -677,6 +690,57 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button id="publish-confirm" type="submit" class="button button-primary">Publish</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      A draft is deleted outright, so it is confirmed. What the officer needs to
+      know is which rules go on judging members afterwards, which is the one
+      line the dialog fills in.
+    -->
+    <dialog id="discard-dialog" class="dialog">
+      <form id="discard-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Discard draft</h2>
+        <p id="discard-meta" class="muted small"></p>
+        <p id="discard-effect"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="discard-confirm" type="submit" class="button button-danger">Discard</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      A category made from inside a rule. Same row the categories screen writes,
+      so it appears there too, and it is added to the requirement that asked for
+      it rather than being left for the officer to attach by hand.
+    -->
+    <dialog id="new-category-dialog" class="dialog">
+      <form id="new-category-form" method="dialog" novalidate>
+        <h2 class="dialog-title">New event category</h2>
+        <label class="label" for="new-category-name">Name</label>
+        <input
+          id="new-category-name"
+          class="input"
+          type="text"
+          maxlength="60"
+          autocomplete="off"
+          placeholder="Journal Club"
+          required
+        />
+        <label class="label" for="new-category-unit">Measured in</label>
+        <select id="new-category-unit" class="select">
+          <option value="event_count">Events</option>
+          <option value="hours">Hours</option>
+          <option value="points">Points</option>
+        </select>
+        <p id="new-category-error" class="field-error" hidden>Type a name.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="new-category-confirm" type="submit" class="button button-primary">
+            Add
+          </button>
         </div>
       </form>
     </dialog>

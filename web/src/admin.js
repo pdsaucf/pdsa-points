@@ -352,6 +352,11 @@ function context() {
     onRosterChanged: () => {
       app.progress?.reload();
     },
+    // The requirements screen can make a category, so the screen that manages
+    // them re-reads rather than showing a list that is one row short.
+    onCategoriesChanged: () => {
+      app.categories?.reload();
+    },
   };
 }
 
