@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDSA UCF</title>
+    <meta name="robots" content="noindex" />
+    <!--
+      There is no page at the root. A member reaches this site through a QR
+      code that already carries a token in the query string, so the redirect
+      keeps it rather than dropping straight to /c/ with no event picked.
+    -->
+    <script>
+      window.location.replace('/c/' + window.location.search);
+    </script>
+  </head>
+  <body>
+    <p><a href="/c/">Continue</a></p>
+  </body>
+</html>

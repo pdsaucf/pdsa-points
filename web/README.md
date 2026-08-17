@@ -13,6 +13,7 @@ Three surfaces, one static directory, no build step.
 
 ```
 web/
+  index.html                 redirect to /c/, keeping the query string
   config.js                  Supabase URL and anon key. Public by design.
 
   c/index.html               the check-in page, served at /c/?e=<token>
