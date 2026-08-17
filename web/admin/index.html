@@ -458,6 +458,12 @@
         Categories are what requirements measure. They archive and never
         delete, so every reference from a rule or an event stays resolvable
         (invariant 4).
+
+        A category is a name and an order. It carried a unit picker and a
+        "Counts toward points" checkbox until migration 22, and neither did
+        anything: the unit only ever changed a word beside a number, and the
+        checkbox was false for Volunteering hours alone. There is one unit and
+        it is points.
       -->
       <main id="panel-categories" class="panel-view" hidden>
         <form id="category-form" class="toolbar" novalidate>
@@ -471,14 +477,6 @@
               autocomplete="off"
               placeholder="Journal Club"
             />
-          </div>
-          <div class="toolbar-field toolbar-field-narrow">
-            <label class="label" for="category-unit">Measured in</label>
-            <select id="category-unit" class="select">
-              <option value="event_count">Events</option>
-              <option value="hours">Hours</option>
-              <option value="points">Points</option>
-            </select>
           </div>
           <button id="category-add" type="submit" class="button button-primary">Add</button>
         </form>
@@ -677,12 +675,6 @@
           placeholder="Journal Club"
           required
         />
-        <label class="label" for="new-category-unit">Measured in</label>
-        <select id="new-category-unit" class="select">
-          <option value="event_count">Events</option>
-          <option value="hours">Hours</option>
-          <option value="points">Points</option>
-        </select>
         <p id="new-category-error" class="field-error" hidden>Type a name.</p>
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>

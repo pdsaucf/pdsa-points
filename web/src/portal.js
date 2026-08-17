@@ -30,10 +30,8 @@
 //                    per-attempt timeout. The check-in page uses the same one.
 //   src/ui.js        the DOM helpers, including announce(), so this page talks
 //                    to a screen reader the way the admin app does.
-//   src/format.js    pluralUnit, so the word beside a number comes from the
-//                    category and nothing in the client knows the word "hours".
-//   src/requirement-model.js  buildTree, flatten and unitWord. The requirement
-//                    list is the published rule set, drawn.
+//   src/requirement-model.js  buildTree and flatten. The requirement list is
+//                    the published rule set, drawn.
 
 import { IS_CONFIGURED } from '../config.js';
 import { rpc } from './api.js';

@@ -644,12 +644,10 @@ function evaluateSet(setId, memberId, index) {
 /**
  * v_member_status: the point total and the honorary flag, per member per year.
  *
- * point_total sums only the categories flagged as counting toward it, which is
- * what reproduces a Total column that excludes Volunteering hours while still
- * requiring them for Honorary. is_honorary is the root requirement's verdict.
+ * point_total is every category's credit added up: one unit, and it is points.
+ * is_honorary is the root requirement's verdict.
  */
 function memberStatusRows() {
-  const countsToward = new Map(db.categories.map((row) => [row.id, row.counts_toward_point_total]));
   const indexByYear = new Map();
   const out = [];
 
@@ -659,10 +657,11 @@ function memberStatusRows() {
     const index = indexByYear.get(yearId);
     const totals = index.get(enrollment.member_id) ?? new Map();
 
+    // Every category's credit is points. There used to be a
+    // counts_toward_point_total flag here, false for Volunteering hours alone,
+    // and migration 22 dropped it with the unit it existed for.
     let points = 0;
-    for (const [categoryId, total] of totals) {
-      if (countsToward.get(categoryId)) points += total;
-    }
+    for (const total of totals.values()) points += total;
 
     const set = publishedSetFor(yearId);
     const root = set
@@ -1079,9 +1078,6 @@ const uuid = (prefix) => `${prefix}${randomBytes(6).toString('hex')}`;
 const INSERT_DEFAULTS = {
   categories: (row) => ({
     id: uuid('c9000000-0000-4000-a000-'),
-    unit: 'event_count',
-    unit_label: null,
-    counts_toward_point_total: true,
     sort_order: 0,
     created_at: new Date().toISOString(),
     archived_at: null,
@@ -3492,10 +3488,6 @@ export const ADMIN_RPC = {
             );
           }
         }
-        const units = new Set(categories.map((category) => category.unit));
-        if (units.size > 1) {
-          say('mixed_units', node.id, 'This requirement adds up more than one kind of unit.');
-        }
       } else {
         const children = childrenOf(node.id);
         if (!children.length) {
@@ -3602,9 +3594,6 @@ export const ADMIN_RPC = {
       .map((row) => ({
         id: row.id,
         name: row.name,
-        unit: row.unit,
-        unit_label: row.unit_label ?? null,
-        counts_toward_point_total: row.counts_toward_point_total,
         total: totals.get(row.id) ?? 0,
       }));
 
@@ -3695,9 +3684,6 @@ export const ADMIN_RPC = {
         .map((row) => ({
           id: row.id,
           name: row.name,
-          unit: row.unit,
-          unit_label: row.unit_label ?? null,
-          counts_toward_point_total: row.counts_toward_point_total,
         })),
       members: rows,
     });
@@ -3739,8 +3725,6 @@ export const ADMIN_RPC = {
                 .map((category) => ({
                   id: category.id,
                   name: category.name,
-                  unit: category.unit,
-                  unit_label: category.unit_label ?? null,
                 })),
             }))
         : [],

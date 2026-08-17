@@ -15,15 +15,29 @@
 // "Dental School Visits" rewrites nothing and is not a decision anybody needs
 // to be warned about. The slug is generated once, at creation, and is never
 // shown: it is an identifier, and an officer has no use for it.
+//
+// A CATEGORY IS A NAME AND AN ORDER, AND THAT IS THE WHOLE SCREEN. It used to
+// carry two more controls, and migration 22 removed both because neither did
+// anything:
+//
+//   the unit picker     events, hours or points. It changed the word beside a
+//                       number and nothing else, the club stopped tracking
+//                       hours, and there is no arithmetic anywhere that ever
+//                       branched on it. Whether the member types the number is
+//                       credit_mode on the event, which is a different question
+//                       asked in a different place.
+//   Counts toward points  false for exactly one category ever, Volunteering,
+//                       because 29.5 hours could not honestly be added to a
+//                       count of events. With hours gone it was a checkbox whose
+//                       only remaining use was making somebody's total wrong.
 
 import { select, insert, patch } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { reorderWithin, nextOrder } from './requirement-model.js';
-import { UNIT_LABEL, UNIT_NAME, uniqueSlug } from './category-model.js';
+import { uniqueSlug } from './category-model.js';
 import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
-const CATEGORY_SELECT =
-  'id,slug,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at';
+const CATEGORY_SELECT = 'id,slug,name,sort_order,archived_at';
 
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
@@ -31,7 +45,6 @@ export function createCategories(ctx) {
   const el = {
     form: $('category-form'),
     name: $('category-name'),
-    unit: $('category-unit'),
     add: $('category-add'),
     error: $('category-error'),
     loading: $('loading-categories'),
@@ -99,32 +112,6 @@ export function createCategories(ctx) {
         'aria-label': 'Category name',
         onChange: (event) => rename(category, event.target.value),
       }),
-
-      h(
-        'select',
-        {
-          class: 'select select-quiet',
-          disabled: !ctx.canReview,
-          'aria-label': `What ${category.name} is measured in`,
-          onChange: (event) => setUnit(category, event.target.value),
-        },
-        ...Object.entries(UNIT_NAME).map(([value, label]) =>
-          h('option', { value, selected: category.unit === value }, label),
-        ),
-      ),
-
-      h(
-        'label',
-        { class: 'category-toggle' },
-        h('input', {
-          type: 'checkbox',
-          checked: category.counts_toward_point_total,
-          disabled: !ctx.canReview,
-          onChange: (event) =>
-            write(category, { counts_toward_point_total: event.target.checked }, ''),
-        }),
-        'Counts toward points',
-      ),
     );
 
     const actions = h('div', { class: 'rule-actions' });
@@ -166,7 +153,6 @@ export function createCategories(ctx) {
       'div',
       { class: 'category-row category-row-retired', dataset: { id: category.id } },
       h('span', { class: 'category-name' }, category.name),
-      h('span', { class: 'muted small' }, UNIT_NAME[category.unit] ?? ''),
       h(
         'div',
         { class: 'rule-actions' },
@@ -231,10 +217,6 @@ export function createCategories(ctx) {
     write(category, { name }, '');
   }
 
-  function setUnit(category, unit) {
-    write(category, { unit, unit_label: UNIT_LABEL[unit] ?? null }, '');
-  }
-
   async function move(category, delta) {
     const changes = reorderWithin(active(), category.id, delta);
     if (!changes.length) return;
@@ -266,16 +248,15 @@ export function createCategories(ctx) {
     }
     setHidden(el.error, true);
 
-    const unit = el.unit.value;
     setBusy(true);
     try {
       const rows = await insert('categories', [
         {
-          slug: uniqueSlug(name, state.categories.map((row) => row.slug)),
+          slug: uniqueSlug(
+            name,
+            state.categories.map((row) => row.slug),
+          ),
           name,
-          unit,
-          unit_label: UNIT_LABEL[unit] ?? null,
-          counts_toward_point_total: true,
           sort_order: nextOrder(state.categories),
         },
       ]);

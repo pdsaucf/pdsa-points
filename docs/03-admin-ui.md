@@ -141,11 +141,10 @@ what replaces hand-copying 69 names into two tabs.
 │ │ Clinical Workshops   credit [ 1   ] fixed                        [x] │ │
 │ │ Socials              credit [ 1   ] fixed                        [x] │ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
-│   (a Volunteering category would instead offer: "ask the member")        │
+│   (credit [ ask the member ] is the other mode: they type the number)    │
 │                                                                          │
 │ Check-in form                                                            │
 │   ☑ Require photo:  ◉ member shirt   ○ receipt   ○ other                 │
-│   ☐ Ask for hours                                                        │
 │   Window  [2026-03-05 17:00] → [2026-03-05 21:00]                        │
 │                                                                          │
 │ Approval    ○ Approve automatically    ◉ Send to review queue            │
@@ -167,11 +166,11 @@ what replaces hand-copying 69 names into two tabs.
 │ To be an Honorary Member, a member must meet  ( ◉ all  ○ at least [ ] )  │
 │ of the following:                                                        │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
-│ │ ⠿ GBMs                     at least [  9 ] events              63 ✓ ⋯│ │
-│ │ ⠿ Volunteering             at least [ 25 ] hours               66 ✓ ⋯│ │
-│ │ ⠿ Clinical Workshops       at least [  5 ] events              56 ✓ ⋯│ │
-│ │ ⠿ Socials                  at least [  6 ] events              61 ✓ ⋯│ │
-│ │ ⠿ Tabling                  at least [  2 ] events              58 ✓ ⋯│ │
+│ │ ⠿ GBMs                     at least [  9 ] from ⟨GBMs⟩         63 ✓ ⋯│ │
+│ │ ⠿ Volunteering             at least [ 25 ] from ⟨Volunteering⟩  66 ✓ ⋯│ │
+│ │ ⠿ Clinical Workshops       at least [  5 ] from ⟨Clinical…⟩     56 ✓ ⋯│ │
+│ │ ⠿ Socials                  at least [  6 ] from ⟨Socials⟩       61 ✓ ⋯│ │
+│ │ ⠿ Tabling                  at least [  2 ] from ⟨Tabling⟩       58 ✓ ⋯│ │
 │ │ ⠿ Speaking     at least [ 1 ] from ⟨Journal Club⟩ ⟨Media Speaking⟩ ⋯│ │
 │ │ ⠿ Writing      at least [ 1 ] from ⟨PDSA Post⟩ ⟨Media Writing⟩     ⋯│ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
@@ -183,6 +182,13 @@ what replaces hand-copying 69 names into two tabs.
 
 Everything an officer needs is on one screen, and it reads as sentences. Nobody is
 told they are editing a node graph.
+
+**A category is a name.** The categories screen is a list of names in an order, with
+Retire on each. It carried a "Measured in" picker (Events, Hours, Points) and a "Counts
+toward points" checkbox until migration 22; the picker only ever changed the word beside
+a number, and the checkbox was false for Volunteering hours alone. There is one unit and
+it is points, so a requirement reads "at least 9 from GBMs" and the chips say what is
+being counted.
 
 **The list is flat.** The editor makes no groups and nothing nests. A requirement
 already spans categories, so "Editorial Points, being Speaking and Writing" is two

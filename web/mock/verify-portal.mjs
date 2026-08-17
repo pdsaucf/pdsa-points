@@ -418,24 +418,32 @@ await check('the blurb is on the page, and it is the words the club asked for', 
   assert.match(body, /To reach Honorary Member status, certain requirements must be met\./);
 });
 
-await check('the number a requirement asks for is beside it, in the unit it counts', async () => {
+await check('the number a requirement asks for is beside it, with no noun on it', async () => {
+  // This check used to require the word: "25 hours" for an hours category and
+  // "9 events" for an event count, from the unit column. Migration 22 dropped
+  // that column, because all three of its values were one behaviour, so the
+  // number stands on its own and the requirement's own name says what is being
+  // counted. A noun here would be the client inventing one.
   const published = await rpc('portal_requirements', {});
-  const hours = published.nodes.find((node) =>
-    (node.categories ?? []).some((category) => category.unit === 'hours'),
-  );
-  assert.ok(hours, 'the fixture has no requirement measured in hours');
+  const measured = published.nodes.filter((node) => node.type === 'threshold');
+  assert.ok(measured.length > 0, 'the fixture publishes no measured requirement');
 
-  const row = [...honoraryRows()].find((node) => node.textContent.includes(hours.label));
-  assert.ok(row, `${hours.label} is not in the box`);
-  assert.match(row.textContent, /hours/, 'the hours requirement does not say hours');
+  for (const node of measured) {
+    const row = [...honoraryRows()].find((li) => li.textContent.includes(node.label));
+    assert.ok(row, `${node.label} is not in the box`);
+    const need = row.querySelector('.honorary-need');
+    assert.ok(need, `${node.label} does not say what it asks for`);
+    assert.match(
+      need.textContent.trim(),
+      /^\d+(\.\d+)?$/,
+      `${node.label} asks for "${need.textContent.trim()}", which is not just a number`,
+    );
+  }
 
-  const events = published.nodes.find(
-    (node) =>
-      node.type === 'threshold' &&
-      (node.categories ?? []).every((category) => category.unit === 'event_count'),
-  );
-  const eventRow = [...honoraryRows()].find((node) => node.textContent.includes(events.label));
-  assert.match(eventRow.textContent, /events/, 'an event count does not say events');
+  const box = dom.$('honorary').textContent;
+  for (const noun of ['events', 'hours']) {
+    assert.doesNotMatch(box, new RegExp(`\\d\\s*${noun}\\b`, 'i'), `the box still counts in ${noun}`);
+  }
 });
 
 await check('a requirement measuring two categories names both', async () => {
@@ -728,10 +736,15 @@ await check('tapping a row opens the breakdown behind that total, and only one a
 });
 
 await check('the breakdown adds up to the total on the row', async () => {
+  // Every category's credit is points now, so this holds for every one of them
+  // rather than for the ones a flag admitted. That flag was false for
+  // Volunteering hours alone, and migration 22 dropped it with the unit.
   const board = await rpc('portal_leaderboard', {});
-  const counted = board.categories.filter((row) => row.counts_toward_point_total);
   for (const member of board.members.slice(0, 5)) {
-    const sum = counted.reduce((acc, row) => acc + Number(member.totals?.[row.id] ?? 0), 0);
+    const sum = board.categories.reduce(
+      (acc, row) => acc + Number(member.totals?.[row.id] ?? 0),
+      0,
+    );
     assert.equal(
       sum,
       Number(member.point_total),

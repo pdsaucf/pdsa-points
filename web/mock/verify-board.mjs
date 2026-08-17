@@ -501,31 +501,43 @@ await check('the star is on exactly the members the server calls honorary', () =
   assert.deepEqual([...drawn].sort(), [...expected].sort());
 });
 
-await check('the visible cells deliberately do not add up to the visible points', async () => {
-  // THE CHECK THAT MAKES THE ONE ABOVE MEAN SOMETHING. Volunteering hours are
-  // shown in a column and are excluded from the point total, because
-  // counts_toward_point_total is false on that category and the total is summed
-  // in Postgres. A board that added up its own columns would agree with itself
-  // and disagree with the club's actual Total column, which is the exact defect
-  // docs/00-spreadsheet-findings.md verified against 355 members.
-  const names = headings();
-  let disagreements = 0;
-
-  for (const row of bodyRows()) {
-    const cells = cellsOf(row);
-    const points = Number(cells[0].textContent.trim());
-    let sum = 0;
-    for (let i = 1; i < cells.length - 1; i += 1) {
-      sum += Number(cells[i].querySelector('.board-value').textContent.trim());
-    }
-    if (sum !== points) disagreements += 1;
-  }
-
-  assert.ok(names.includes('Volunteering'), 'the Volunteering column is not on the board');
-  assert.ok(
-    disagreements > 20,
-    `${disagreements} members' columns disagree with their point total, which is too few to prove the total is not being summed here`,
+await check('every point total on the board is the one Postgres holds', async () => {
+  // WHAT THIS CHECK USED TO BE, AND WHY IT CHANGED. It asserted that the visible
+  // columns deliberately DID NOT add up to the visible total, for more than
+  // twenty members. That disagreement was Volunteering: its hours were shown in
+  // a column and excluded from the total, because adding 29.5 hours to a count
+  // of events is not a number (docs/00-spreadsheet-findings.md, finding 4). A
+  // board that summed its own columns therefore could not agree with the club's
+  // real Total column, and the disagreement was the proof.
+  //
+  // Migration 22 removed both the unit and the flag: there is one unit, every
+  // category's credit is points, and the columns now add up to the total by
+  // construction. So that proof is gone, and this is what replaces it: the total
+  // on every row is compared against v_member_status, member by member. A board
+  // that summed its own columns would pass this on today's data and fail the
+  // moment any credit exists that the visible columns cannot see, which is what
+  // retiring a category mid-year does. The source scan above is the other half.
+  const held = new Map(
+    (
+      await select('v_member_status', {
+        select: 'member_id,point_total',
+        filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+      })
+    ).map((row) => [row.member_id, Number(row.point_total)]),
   );
+
+  let compared = 0;
+  for (const row of bodyRows()) {
+    const drawn = Number(cellsOf(row)[0].textContent.trim());
+    const server = held.get(row.dataset.member);
+    assert.equal(
+      drawn,
+      server,
+      `${row.querySelectorAll('th')[0].textContent.trim()} is drawn ${drawn} and the server says ${server}`,
+    );
+    compared += 1;
+  }
+  assert.ok(compared > 20, `only ${compared} rows were compared, so the board is not drawn`);
 });
 
 await check('a category threshold met shows as met, and one short of it does not', async () => {

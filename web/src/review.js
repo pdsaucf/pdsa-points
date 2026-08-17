@@ -28,7 +28,6 @@ import { select, insert, callRpc, signPhotoUrls, RpcError } from './rest.js';
 import { describeOfficer, READ_ONLY } from './officer-errors.js';
 import { FLAG_COPY, actionsFor, approveLabel, knownFlags, primaryFlag } from './flags.js';
 import { rankMembers, splitName } from './match.js';
-import { pluralUnit } from './format.js';
 import { $, h, announce, setHidden, plural, shortDate, clockTime } from './ui.js';
 
 // A full GBM is 167 people. Painting 167 tiles before the officer has looked at
@@ -51,7 +50,7 @@ const RECORD_SELECT = [
   'members(id,display_name)',
   // !inner so the year filter below narrows the records rather than just
   // blanking the embedded event on the ones from another year.
-  'events!inner(id,title,occurred_on,academic_year_id,event_categories(credit_mode,categories(name,unit,unit_label)))',
+  'events!inner(id,title,occurred_on,academic_year_id,event_categories(credit_mode,categories(name)))',
   'attendance_evidence(id,kind,object_path,sha256)',
 ].join(',');
 
@@ -279,8 +278,7 @@ export function createReview(ctx) {
     );
     const category = link?.categories;
     if (!category) return `Entered ${record.submitted_value}`;
-    const unit = pluralUnit(category.unit_label ?? category.unit);
-    return `${category.name}: ${record.submitted_value} ${unit}`.trim();
+    return `${category.name}: ${record.submitted_value}`.trim();
   }
 
   function photoUrl(record) {

@@ -4,19 +4,14 @@
 
 export const ACADEMIC_YEAR_ID = 'a0000000-0000-4000-a000-000000000001';
 
+// A category is an id and a name. get_checkin_context() carried a unit until
+// migration 22, which dropped the column: there is one unit, and the field a
+// member types a number into is labelled from the category itself.
 const CATEGORY = {
-  gbms: { id: 'c0000000-0000-4000-a000-000000000001', name: 'GBMs', unit: 'event_count' },
-  volunteering: {
-    id: 'c0000000-0000-4000-a000-000000000002',
-    name: 'Volunteering',
-    unit: 'hours',
-  },
-  socials: { id: 'c0000000-0000-4000-a000-000000000005', name: 'Socials', unit: 'event_count' },
-  partial: {
-    id: 'c0000000-0000-4000-a000-000000000008',
-    name: 'Partial Proceeds',
-    unit: 'event_count',
-  },
+  gbms: { id: 'c0000000-0000-4000-a000-000000000001', name: 'GBMs' },
+  volunteering: { id: 'c0000000-0000-4000-a000-000000000002', name: 'Volunteering' },
+  socials: { id: 'c0000000-0000-4000-a000-000000000005', name: 'Socials' },
+  partial: { id: 'c0000000-0000-4000-a000-000000000008', name: 'Partial Proceeds' },
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -41,7 +36,7 @@ export const EVENTS = {
     evidence_requirements: [],
   },
 
-  // Volunteering: the event collects a number, labelled from the category.
+  // An event that collects a number, labelled from the category.
   vol: {
     event: {
       id: 'e0000000-0000-4000-a000-000000000002',
@@ -54,8 +49,6 @@ export const EVENTS = {
     collect_value: {
       category_id: CATEGORY.volunteering.id,
       category: 'Volunteering',
-      unit: 'hours',
-      unit_label: 'hour',
     },
     evidence_requirements: [],
   },

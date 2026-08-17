@@ -54,7 +54,7 @@ const RECORD_SELECT = [
   'reviewed_by',
   'reviewed_at',
   'review_note',
-  'events!inner(id,title,occurred_on,academic_year_id,event_categories(credit_mode,fixed_credit,categories(id,name,unit,unit_label)))',
+  'events!inner(id,title,occurred_on,academic_year_id,event_categories(credit_mode,fixed_credit,categories(id,name)))',
 ].join(',');
 
 export function createMember(ctx) {
@@ -153,7 +153,7 @@ export function createMember(ctx) {
             filters: { member_id: `eq.${state.memberId}` },
           }),
           select('categories', {
-            select: 'id,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at',
+            select: 'id,name,sort_order,archived_at',
             order: 'sort_order.asc',
           }),
           select('v_member_status', {
@@ -410,8 +410,7 @@ export function createMember(ctx) {
           link.credit_mode === 'fixed'
             ? Number(link.fixed_credit ?? 0)
             : Number(record.submitted_value ?? 0);
-        const unit = category.unit_label ? ` ${category.unit_label}${credit === 1 ? '' : 's'}` : '';
-        return `${number(credit)} ${category.name ?? ''}${unit}`.trim();
+        return `${number(credit)} ${category.name ?? ''}`.trim();
       })
       .join(' · ');
   }
@@ -427,7 +426,7 @@ export function createMember(ctx) {
     if (!state.events.length) {
       try {
         state.events = await select('events', {
-          select: 'id,title,occurred_on,event_categories(credit_mode,categories(id,name,unit_label))',
+          select: 'id,title,occurred_on,event_categories(credit_mode,categories(id,name))',
           filters: { academic_year_id: `eq.${ctx.year.id}` },
           order: 'occurred_on.desc',
         });
@@ -468,9 +467,9 @@ export function createMember(ctx) {
     );
     setHidden(el.recordValueField, !link);
     if (link) {
-      const category = link.categories ?? {};
-      const unit = category.unit_label ? `${category.unit_label}s` : 'amount';
-      el.recordValueLabel.textContent = `${category.name} ${unit}`;
+      // The category is the label: there is one unit, and what the number
+      // means is named by the category it is credit for.
+      el.recordValueLabel.textContent = (link.categories ?? {}).name ?? 'Amount';
     }
   }
 

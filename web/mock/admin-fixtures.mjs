@@ -47,17 +47,17 @@ export const UNKNOWN_EMAIL = 'stranger@example.com';
 // is the one that does not count toward the point total, which is the verified
 // behaviour of the old Total column (docs/00-spreadsheet-findings.md).
 const CATEGORIES = [
-  { id: 'c0000000-0000-4000-a000-000000000001', slug: 'gbms', name: 'GBMs', unit: 'event_count', unit_label: null, sort_order: 10, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-000000000002', slug: 'volunteering', name: 'Volunteering', unit: 'hours', unit_label: 'hour', sort_order: 20, counts_toward_point_total: false },
-  { id: 'c0000000-0000-4000-a000-000000000005', slug: 'socials', name: 'Socials', unit: 'event_count', unit_label: null, sort_order: 30, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-000000000009', slug: 'tabling', name: 'Tabling', unit: 'event_count', unit_label: null, sort_order: 40, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-00000000000a', slug: 'journal-club', name: 'Journal Club', unit: 'event_count', unit_label: null, sort_order: 50, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-00000000000c', slug: 'media-speaking', name: 'Media Speaking', unit: 'event_count', unit_label: null, sort_order: 60, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-00000000000b', slug: 'pdsa-post', name: 'PDSA Post', unit: 'event_count', unit_label: null, sort_order: 70, counts_toward_point_total: true },
-  { id: 'c0000000-0000-4000-a000-00000000000d', slug: 'media-writing', name: 'Media Writing', unit: 'event_count', unit_label: null, sort_order: 80, counts_toward_point_total: true },
+  { id: 'c0000000-0000-4000-a000-000000000001', slug: 'gbms', name: 'GBMs', sort_order: 10 },
+  { id: 'c0000000-0000-4000-a000-000000000002', slug: 'volunteering', name: 'Volunteering', sort_order: 20 },
+  { id: 'c0000000-0000-4000-a000-000000000005', slug: 'socials', name: 'Socials', sort_order: 30 },
+  { id: 'c0000000-0000-4000-a000-000000000009', slug: 'tabling', name: 'Tabling', sort_order: 40 },
+  { id: 'c0000000-0000-4000-a000-00000000000a', slug: 'journal-club', name: 'Journal Club', sort_order: 50 },
+  { id: 'c0000000-0000-4000-a000-00000000000c', slug: 'media-speaking', name: 'Media Speaking', sort_order: 60 },
+  { id: 'c0000000-0000-4000-a000-00000000000b', slug: 'pdsa-post', name: 'PDSA Post', sort_order: 70 },
+  { id: 'c0000000-0000-4000-a000-00000000000d', slug: 'media-writing', name: 'Media Writing', sort_order: 80 },
   // Already retired. It is what the dead "President Workshops" tab in the old
   // spreadsheet became: nothing measures it, and nothing may delete it either.
-  { id: 'c0000000-0000-4000-a000-0000000000ff', slug: 'president-workshops', name: 'President Workshops', unit: 'event_count', unit_label: null, sort_order: 90, counts_toward_point_total: true, archived_at: '2026-06-01T00:00:00.000Z' },
+  { id: 'c0000000-0000-4000-a000-0000000000ff', slug: 'president-workshops', name: 'President Workshops', sort_order: 90, archived_at: '2026-06-01T00:00:00.000Z' },
 ];
 
 const EVENTS = [

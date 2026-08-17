@@ -81,13 +81,13 @@ holds when the caller is a stranger with a phone.
 │  [ My points ]  [ Leaderboard ]  │
 │                                  │
 │  Abigail Catto      10 of 11 met │
-│  ✓ GBMs             9 of 9 events│
-│  ✓ Volunteering  29.5 of 25 hours│
+│  ✓ GBMs                9 of 9    │
+│  ✓ Volunteering     29.5 of 25   │
 │  ○ Clinical Workshops  4 of 5    │
-│  ✓ Socials          7 of 6 events│
-│  ✓ Tabling          2 of 2 events│
-│  ✓ Speaking         1 of 1 event │
-│  ✓ Writing          1 of 1 event │
+│  ✓ Socials             7 of 6    │
+│  ✓ Tabling             2 of 2    │
+│  ✓ Speaking            1 of 1    │
+│  ✓ Writing             1 of 1    │
 │                                  │
 │  45 points          [ Not you? ] │
 │                                  │
@@ -101,10 +101,10 @@ holds when the caller is a stranger with a phone.
 │ │ certain requirements must be │ │
 │ │ met.                         │ │
 │ │                              │ │
-│ │ GBMs                9 events │ │
-│ │ Volunteering       25 hours  │ │
-│ │ Socials             6 events │ │
-│ │ Speaking            1 event  │ │
+│ │ GBMs                     9   │ │
+│ │ Volunteering            25   │ │
+│ │ Socials                  6   │ │
+│ │ Speaking                 1   │ │
 │ │   Journal Club,              │ │
 │ │   Media Speaking             │ │
 │ └──────────────────────────────┘ │
@@ -130,7 +130,7 @@ the common case for somebody who followed a link from a group chat.
 │   6  Hannah Cheng        ★   23  │
 │  12  Leah Ortiz              19  │
 │        GBMs               12     │
-│        Volunteering  45 hours    │
+│        Volunteering       45     │
 │        Socials             9     │
 │        Tabling             3     │
 └──────────────────────────────────┘

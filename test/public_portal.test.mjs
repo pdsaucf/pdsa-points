@@ -167,6 +167,11 @@ test('every live category is on the scorecard, with this years total in it', asy
       [MEMBERS.ada, YEAR_2026, category.id],
     );
     assert.equal(Number(category.total), Number(total), `${category.name} disagrees with the view`);
+    assert.deepEqual(
+      Object.keys(category).sort(),
+      ['id', 'name', 'total'],
+      'a category on the scorecard carries something beyond its name and its total',
+    );
   }
 });
 
@@ -192,8 +197,7 @@ test('last years credit is not this years total', async () => {
   const card = await scorecard(MEMBERS.ada);
   const thisYear = await db.val(
     `select coalesce(sum(t.total), 0) from v_member_category_totals t
-     join categories c on c.id = t.category_id
-     where t.member_id = $1 and t.academic_year_id = $2 and c.counts_toward_point_total`,
+     where t.member_id = $1 and t.academic_year_id = $2`,
     [MEMBERS.ada, YEAR_2026],
   );
   assert.equal(Number(card.point_total), Number(thisYear));
@@ -288,8 +292,8 @@ test('the breakdown ships with the list and agrees with the totals view', async 
     );
   }
 
-  const counted = board.categories.filter((row) => row.counts_toward_point_total);
-  const sum = counted.reduce((acc, row) => acc + Number(ada.totals[row.id] ?? 0), 0);
+  // Every category, not a subset: one unit, and all of it is points.
+  const sum = board.categories.reduce((acc, row) => acc + Number(ada.totals[row.id] ?? 0), 0);
   assert.equal(sum, Number(ada.point_total), 'the breakdown does not add up to the total shown');
 });
 

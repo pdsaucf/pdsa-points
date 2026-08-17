@@ -121,7 +121,12 @@ test('too early and too late are distinct codes, not one code and two sentences'
   await db.exec(`delete from events where id = '22222222-0000-4000-a000-0000000000e9'`);
 });
 
-test('an event that collects hours says so, and names the unit', async () => {
+test('an event that collects a number says which category it is for', async () => {
+  // The category is the whole answer. It used to carry a unit and a unit_label
+  // beside it, for a field that read "Volunteering hours"; migration 22 dropped
+  // both, because the three units were one behaviour and the club does not count
+  // hours. The field reads "Volunteering", and whether it appears at all is
+  // credit_mode = 'from_submission', which is untouched.
   await db.exec(`
     update events set checkin_opens_at = now() - interval '1 hour',
                       checkin_closes_at = now() + interval '1 hour'
@@ -133,9 +138,15 @@ test('an event that collects hours says so, and names the unit', async () => {
   await db.asOwner();
 
   assert.equal(ctx.collect_value.category, 'Volunteering');
-  assert.equal(ctx.collect_value.unit, 'hours');
-  assert.equal(ctx.collect_value.unit_label, 'hour');
-  assert.equal(ctx.categories.length, 2); // hours and a social, one event
+  assert.deepEqual(
+    Object.keys(ctx.collect_value).sort(),
+    ['category', 'category_id'],
+    'the context carries something about the number beyond which category it is for',
+  );
+  assert.equal(ctx.categories.length, 2); // two categories, one event
+  for (const category of ctx.categories) {
+    assert.deepEqual(Object.keys(category).sort(), ['id', 'name']);
+  }
 });
 
 test('search_members returns names only, capped, and needs three letters', async () => {

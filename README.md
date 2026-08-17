@@ -82,6 +82,7 @@ feature, so each one can be read on its own.
 | `..._storage_ops.sql` | the purge flow, the storage screen's figures, and the keep-alive ping |
 | `..._name_is_the_identity.sql` | `upsert_member_and_enroll()` resolves a row by name when nothing else identifies it. A member has no email address any more, and the email tier was what made a re-run of an interrupted import land on the rows the first attempt wrote |
 | `..._public_member_portal.sql` | the four functions the member portal is made of, callable by `anon`: `portal_find_members()`, `portal_scorecard()`, `portal_leaderboard()`, `portal_requirements()` |
+| `..._one_unit_called_points.sql` | drops `categories.unit`, `categories.unit_label`, the `unit_type` enum and `counts_toward_point_total`. The unit never changed any arithmetic and the flag was false for Volunteering hours alone, so there is one unit and it is points |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
@@ -95,10 +96,10 @@ carried over from 2025-2026 and are expected to be reviewed.
 Nothing about categories, thresholds or the honorary rule lives in code. They
 are rows.
 
-- A **category** is a row in `categories`. Its `unit` changes labelling only.
-  Its `counts_toward_point_total` flag decides whether its credit is a point.
-  Volunteering is the one category measured in hours and the one that is not a
-  point, and those are two independent flags rather than one rule about units.
+- A **category** is a row in `categories`: a name and an order, nothing else.
+  Every category's credit is points. Whether a member types the number or gets a
+  fixed amount for attending is `event_categories.credit_mode`, which is a
+  property of the event.
 - A **rule** is a tree in `requirement_nodes`. A `threshold` node passes when
   the sum of credit over one or more categories reaches `min_value`. A `group`
   node passes when at least `min_children_passing` of its children pass, or

@@ -7,10 +7,11 @@ Grounded in [00-spreadsheet-findings.md](00-spreadsheet-findings.md).
 
 1. **An event is defined exactly once.** Categories attach to it by foreign key. The
    `PDSA Post` mislabelling and the `#REF!` tab are both unrepresentable.
-2. **One summation path.** Every approved attendance record yields a numeric *credit*
-   per category it counts for. Category progress is always `SUM(credit)`. Event
-   counts, hours and points differ only in where the number comes from and how it's
-   labelled. No branching in the evaluator.
+2. **One summation path, and one unit.** Every approved attendance record yields a
+   numeric *credit* per category it counts for. Category progress is always
+   `SUM(credit)`, and all of it is points. Where the number comes from is
+   `event_categories.credit_mode`: a fixed amount for attending, or one the member
+   types. No branching in the evaluator.
 3. **Rules are rows, not code.** Thresholds, groupings, and the overall Honorary rule
    all live in two tables. Changing "all 10 categories" to "any 8 of 10" is one
    integer update.
@@ -127,35 +128,38 @@ create table profiles (
 - `admin`: everything, including managing officers and editing published rulesets.
 - `officer`: review queue, events, roster, manual attendance entry.
 - `viewer`: read-only board (useful for an advisor or an incoming officer).
-- `member`: their own progress and their own records, nothing else. See
-  [04-member-ui.md](04-member-ui.md), which also covers `member_claims` and the
-  account-claim flow that links an auth user to a roster row.
+- `member`: a role that still exists in the enum and that nothing issues any more.
+  The portal is not an account: see [04-member-ui.md](04-member-ui.md).
 
 ## 3. Categories
 
 ```sql
-create type unit_type as enum ('event_count','hours','points');
-
 create table categories (
-  id                        uuid primary key default gen_random_uuid(),
-  slug                      text not null unique,   -- stable key, never reused
-  name                      text not null,          -- display name, freely renameable
-  unit                      unit_type not null default 'event_count',
-  unit_label                text,                   -- 'hour' → "25 hours"
-  counts_toward_point_total boolean not null default true,
-  sort_order                int not null default 0,
-  created_at                timestamptz not null default now(),
-  archived_at               timestamptz             -- retire, never delete
+  id           uuid primary key default gen_random_uuid(),
+  slug         text not null unique,   -- stable key, never reused
+  name         text not null,          -- display name, freely renameable
+  sort_order   int not null default 0,
+  created_at   timestamptz not null default now(),
+  archived_at  timestamptz             -- retire, never delete
 );
 ```
+
+**A category is a name and an order.** It carried two more columns until migration 22,
+a `unit` enum (`event_count | hours | points`) and a `counts_toward_point_total` flag,
+and both are gone because neither did anything:
+
+- the **unit** only ever chose the word printed beside a number. The evaluator never
+  branched on it, and it did not decide where the number came from either: that is
+  `event_categories.credit_mode`. So "Events" and "Points" were two words for one
+  behaviour, and the club stopped tracking hours.
+- the **flag** was false for exactly one category ever, Volunteering, because 29.5
+  hours could not honestly be added to a count of events. With hours gone, its only
+  remaining use was making a member's point total quietly wrong.
 
 `slug` is the identity; `name` is a label. Renaming "Visits" → "Dental School Visits"
 is cosmetic and rewrites nothing. `archived_at` retires a category, and because
 `requirement_node_categories.category_id` and `event_categories.category_id` are
 `on delete restrict`, the `#REF!` failure mode cannot occur.
-
-`counts_toward_point_total = false` on Volunteering reproduces the verified `Total`
-column exactly.
 
 ## 4. Events
 
@@ -208,9 +212,11 @@ Why this shape:
 - **Soap Carving** is one row with two `event_categories` links (Clinical Workshop,
   fixed 1 · Social, fixed 1). The 69/69 duplication in the sheet becomes structurally
   impossible.
-- **A volunteering event** links to Volunteering with `credit_mode='from_submission'`
-  (member enters hours) and could *also* link to Socials with `fixed_credit = 1`.
-  Different units, same event, no special-casing.
+- **An event that asks the member for a number** links to its category with
+  `credit_mode='from_submission'` and could *also* link to Socials with
+  `fixed_credit = 1`. Two credit modes, same event, no special-casing. This is the
+  distinction the `unit` column was mistaken for: whether a member types the number
+  is a property of the event, not of the category.
 - **A double-credit GBM** is `fixed_credit = 2`. No schema change.
 - `checkin_token` is separate from the PK so it can be **rotated** if a QR image leaks,
   and `checkin_opens_at/closes_at` mean a photographed QR code is useless next week.
@@ -230,7 +236,7 @@ create table attendance_records (
   claimed_email    citext,
   status           attendance_status_t not null default 'pending',
   source           attendance_source_t not null default 'self_checkin',
-  submitted_value  numeric(6,2),          -- hours/points when credit_mode='from_submission'
+  submitted_value  numeric(6,2),          -- the number the member typed, when credit_mode='from_submission'
   flags            text[] not null default '{}',   -- triage signals, see below
   submitted_at     timestamptz not null default now(),
   reviewed_by      uuid references auth.users,
@@ -441,8 +447,8 @@ create view v_member_category_totals as
   355 members × ~13 nodes this is microseconds; if it ever isn't, the same function
   backs a refreshed `member_status_cache` table without any caller changing.
 - `v_member_status` → `(member_id, academic_year_id, point_total, is_honorary)`.
-  `point_total` sums categories where `counts_toward_point_total`, reproducing the old
-  `Total` tab; `is_honorary` is the root node's `passed`.
+  `point_total` is every category's credit added up, since all of it is points;
+  `is_honorary` is the root node's `passed`.
 - `v_config_warnings` → the anti-drift lint, surfaced as a dashboard banner:
   active category with no rule in the current year's set · rule pointing at an archived
   category · event with zero categories · event with an evidence requirement but
@@ -674,7 +680,7 @@ The whole current year imports cleanly as history: 355 members, 134 events,
 4,811 records with `source = 'import'` and `status = 'approved'`, under a published
 `2025-2026` requirement set carrying the verified thresholds. Two honest caveats:
 
-- **Volunteering hours have no provenance.** The sheet stores only a per-member total,
+- **Volunteering hours had no provenance.** The sheet stores only a per-member total,
   so it imports as one synthetic "Volunteering (imported 2025-26 total)" event per
   member. Going forward, volunteering is real events with hours attached.
 - **Soap Carving** merges into a single event with two category links, and the

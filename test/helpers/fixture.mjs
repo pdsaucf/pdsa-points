@@ -84,37 +84,38 @@ export const USERS = {
 // ---------------------------------------------------------------------------
 // Expected results, derived by hand from the attendance table further down.
 //
-// point_total sums every category flagged counts_toward_point_total, which is
-// all thirteen except Volunteering. Volunteering hours are required for
-// Honorary but are never a point, which is the distinction the old Total tab
-// made and the reason the flag is per category rather than per unit.
+// point_total is every category's credit added up. It used to exclude
+// Volunteering, whose credit arrives as a number the member types and which the
+// old Total tab could not add to a count of events; migration 22 dropped the
+// unit and the flag together, so the numbers below are larger than they were by
+// exactly each member's Volunteering credit.
 // ---------------------------------------------------------------------------
 
 export const EXPECTED = {
   // member          point_total  is_honorary   how the total is made up
   ada: {
-    pointTotal: 46, // 10 gbm + 6 clin + 5 nonclin + 6 social + 5 visits
+    pointTotal: 76, // 10 gbm + 30 vol + 6 clin + 5 nonclin + 6 social + 5 visits
     isHonorary: true, //  + 5 fund + 5 proceeds + 2 tabling + 1 jc + 1 write
   },
   barnaby: {
-    pointTotal: 43, // 9 + 4 + 5 + 6 + 5 + 5 + 5 + 2 + 1 jc + 1 post
+    pointTotal: 83, // 9 + 40 vol + 4 + 5 + 6 + 5 + 5 + 5 + 2 + 1 jc + 1 post
     isHonorary: false, // fails Clinical Workshops (4 of 5) and nothing else
   },
   cressida: {
-    pointTotal: 44, // 9 + 5 + 5 + 6 + 5 + 5 + 5 + 2 + 1 jc + 1 write
+    pointTotal: 69, // 9 + 25 vol + 5 + 5 + 6 + 5 + 5 + 5 + 2 + 1 jc + 1 write
     isHonorary: true, // every single threshold met exactly, none exceeded
   },
   dorian: { pointTotal: 0, isHonorary: false },
   edda: {
-    pointTotal: 1, // one social from vol_social; the 25 hours are not points
+    pointTotal: 26, // 12.5 + 12.5 vol, and one social from vol_social
     isHonorary: false,
   },
   fergus: {
-    pointTotal: 5, // 1 gbm + 1 clin + 1 social + 2 tabling
+    pointTotal: 5, // 1 gbm + 1 clin + 1 social + 2 tabling, and no vol
     isHonorary: false,
   },
   greta: {
-    pointTotal: 3, // 1 clin + 2 social; the 3 hours are not points
+    pointTotal: 6, // 1 clin + 2 social + 3 vol
     isHonorary: false,
   },
   hamish: { pointTotal: 0, isHonorary: false }, // rejected and pending only
@@ -285,9 +286,9 @@ insert into event_categories (event_id, category_id, credit_mode, fixed_credit) 
   ('${EVENTS.soap}',        '${CAT.clinical}',      'fixed', 1),
   ('${EVENTS.soap}',        '${CAT.socials}',       'fixed', 1),
 
-  -- one event, two categories, DIFFERENT credit modes: the member types their
-  -- hours, and the same attendance also earns one social. Different units,
-  -- same event, no special-casing anywhere in the evaluator.
+  -- one event, two categories, DIFFERENT credit modes: the member types the
+  -- number for one of them and the same attendance earns a fixed 1 for the
+  -- other, on one event, with no special-casing anywhere in the evaluator.
   ('${EVENTS.volDay}',      '${CAT.volunteering}',  'from_submission', 0),
   ('${EVENTS.volSocial}',   '${CAT.volunteering}',  'from_submission', 0),
   ('${EVENTS.volSocial}',   '${CAT.socials}',       'fixed', 1);

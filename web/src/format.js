@@ -40,28 +40,20 @@ export function firstName(displayName) {
 }
 
 /**
- * The number field label, built from whatever the event actually collects.
- * Nothing here knows the word "hours": `collect_value` carries the category
- * name and the unit label, and a Volunteering event is the only reason those
- * currently say "hour".
+ * The number field label, for an event that collects one.
  *
- * `unit_label` is singular in the schema ('hour'), and the field asks for a
- * quantity, so it is pluralised for the label. A label that already ends in an
- * "s" is left alone.
+ * The category is the label. There is no unit to append: migration 22 dropped
+ * the column, because "events", "hours" and "points" were three words for one
+ * behaviour, and what the number means is named by the category it is credit
+ * for. "Partial Proceeds" over a number field asks the question.
+ *
+ * `collect_value` is null unless one of the event's categories is
+ * credit_mode = 'from_submission', which is the only thing that makes a member
+ * type a number at all.
  */
-export function pluralUnit(unitLabel) {
-  const label = String(unitLabel ?? '').trim();
-  if (!label) return '';
-  return /s$/i.test(label) ? label : `${label}s`;
-}
-
 export function valueFieldLabel(collectValue) {
   if (!collectValue) return '';
-  const unit = pluralUnit(collectValue.unit_label);
-  const category = String(collectValue.category ?? '').trim();
-  if (unit && category) return `${category} ${unit}`;
-  if (unit) return unit.charAt(0).toUpperCase() + unit.slice(1);
-  return category || 'Amount';
+  return String(collectValue.category ?? '').trim() || 'Amount';
 }
 
 /** '184 KB', for the photo status line. */

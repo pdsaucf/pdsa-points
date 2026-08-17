@@ -82,7 +82,7 @@ export function createProgress(ctx) {
       // per member.
       const [categories, enrollments, status, totals, targets] = await Promise.all([
         select('categories', {
-          select: 'id,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at',
+          select: 'id,name,sort_order,archived_at',
           order: 'sort_order.asc',
         }),
         select('member_enrollments', {

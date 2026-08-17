@@ -119,7 +119,9 @@ Breaking any of these reintroduces a problem the design exists to solve:
 
 1. **Nothing is hardcoded about categories, thresholds, or the Honorary rule.** They are
    rows. A category name, a threshold, which categories exist, and the overall pass rule
-   all change from the admin UI with no deploy.
+   all change from the admin UI with no deploy. A category is a name and an order: there
+   is one unit, it is points, and every category's credit counts toward the total.
+   Whether a member types the number is `event_categories.credit_mode`, per event.
 2. **Honorary status is computed in Postgres**, never in client JS.
 3. **The anonymous pages touch no table.** The check-in page and the member portal call
    `SECURITY DEFINER` RPCs only. An anonymous caller can never set `status`.

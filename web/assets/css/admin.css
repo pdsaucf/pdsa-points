@@ -1304,11 +1304,10 @@ kbd {
   font-weight: 600;
 }
 
-.category-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8125rem;
+/* The row is a name and its actions, so the actions take the rest of the line.
+   Nothing sits between them any more: see the note in web/src/categories.js. */
+.category-row .rule-actions {
+  margin-left: auto;
 }
 
 .toolbar-field-narrow {

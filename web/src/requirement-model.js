@@ -2,14 +2,21 @@
 //
 // Everything on the requirements screen that can be reasoned about without a
 // browser lives here: turning the flat rows PostgREST returns into a tree,
-// working out the order and the nesting a move produces, choosing the unit word
-// a sentence reads with, and turning a validation code into copy an officer can
-// act on.
+// working out the order a move produces, and turning a validation code into
+// copy an officer can act on.
 //
 // SHARED WITH THE MEMBER PORTAL, which draws the published set as the member's
-// own progress list and therefore needs the same tree and the same unit word:
-// buildTree(), flatten() and unitWord() are read by web/src/portal-progress.js.
-// The validation copy below is the officer's half and is not.
+// own progress list and therefore needs the same tree: buildTree() and
+// flatten() are read by web/src/portal-scorecard.js. The validation copy below
+// is the officer's half and is not.
+//
+// THERE IS NO UNIT WORD ANY MORE. unitWord() lived here, and it chose between
+// "events", "hours" and "points" for the number in a sentence, refusing to
+// answer at all when a requirement measured categories that disagreed. All
+// three were one behaviour wearing three labels: migration 22 dropped the
+// column, so a requirement reads "at least 9 from GBMs" and the category names
+// what is being counted. The number's own noun is points, and it appears once,
+// on the total.
 //
 // THE VOCABULARY RULE, WHICH IS THE POINT OF THIS FILE EXISTING AT ALL.
 // The database calls these rows nodes, and calls a measured one a threshold.
@@ -31,52 +38,12 @@
 // docs/00-spreadsheet-findings.md and the reason a requirement carries a list
 // of categories rather than one.
 
-import { pluralUnit } from './format.js';
-
 /**
  * Sort orders are spaced so that a move is one UPDATE per row that actually
  * moved, and so that two officers reordering different parts of the tree do not
  * collide over consecutive integers.
  */
 export const ORDER_STEP = 10;
-
-/** What a unit column means when it is read out in a sentence. */
-const UNIT_WORD = {
-  event_count: 'events',
-  hours: 'hours',
-  points: 'points',
-};
-
-/**
- * 'events', 'hours', or nothing.
- *
- * Nothing is the honest answer for a requirement that measures categories with
- * different units: "at least 3 events" would be a lie about a rule that adds
- * hours to event counts, and the officer needs to see that rather than read a
- * confident wrong word.
- *
- * SAME RULE FOR DISAGREEING LABELS ON THE SAME UNIT. Two categories can share
- * `unit = 'hours'` and still be labelled differently ('hour' on one,
- * 'session' on another): kinds.size is 1 so the mixed-unit guard above does
- * not fire, and without a separate check this fell through to
- * UNIT_WORD['hours'], printing "hours" for a category the club called
- * sessions. That is the identical dishonesty the mixed-unit branch exists to
- * refuse, so it gets the identical answer: nothing, rather than a third word
- * that matches neither label.
- */
-export function unitWord(categories) {
-  const kinds = new Set();
-  const labels = new Set();
-  for (const category of categories ?? []) {
-    if (!category) continue;
-    kinds.add(category.unit ?? 'event_count');
-    if (category.unit_label) labels.add(category.unit_label);
-  }
-  if (kinds.size !== 1) return '';
-  if (labels.size > 1) return '';
-  if (labels.size === 1) return pluralUnit([...labels][0]);
-  return UNIT_WORD[[...kinds][0]] ?? '';
-}
 
 /**
  * The flat rows, as a tree.
@@ -236,11 +203,6 @@ const PROBLEM_COPY = {
     title: 'Needs a name',
     body: '',
     codes: ['label_missing', 'missing_label', 'blank_label'],
-  },
-  mixed_units: {
-    title: 'Mixes hours and events',
-    body: 'One requirement can only add up one kind of thing.',
-    codes: ['mixed_units', 'mixed_unit_types', 'incompatible_units'],
   },
   duplicated: {
     title: 'Measured twice',

@@ -226,25 +226,17 @@ await check('a known problem uses the copy written for it, not the database sent
 process.stdout.write('\nthe tree, as data\n');
 // ---------------------------------------------------------------------------
 
-await check('the unit word comes from the categories, and is honest about a mix', () => {
-  const events = [{ unit: 'event_count', unit_label: null }];
-  const hours = [{ unit: 'hours', unit_label: 'hour' }];
-  assert.equal(model.unitWord(events), 'events');
-  assert.equal(model.unitWord(hours), 'hours');
-  assert.equal(model.unitWord([...events, ...hours]), '');
-  assert.equal(model.unitWord([]), '');
-
-  // Two categories can share `unit` and still disagree on unit_label: 'hours'
-  // labelled 'hour' on one row and 'session' on another. kinds.size is 1 there,
-  // so the mixed-unit branch above does not catch it on its own, and without a
-  // separate check on labels.size this used to fall through to UNIT_WORD.hours
-  // and print "hours" for a category nobody called that. Same dishonesty as
-  // the mixed-unit case, same answer: nothing.
-  const sessions = [{ unit: 'hours', unit_label: 'session' }];
-  assert.equal(
-    model.unitWord([...hours, ...sessions]),
-    '',
-    'a disagreeing pair of labels on the same unit printed a word instead of nothing',
+await check('there is one unit, so nothing chooses a word for it', () => {
+  // unitWord() lived in the model and chose between "events", "hours" and
+  // "points", refusing to answer when a requirement measured categories that
+  // disagreed. Migration 22 dropped the column those three came from, because
+  // none of them ever changed any arithmetic. A model that grew the concept back
+  // would put a noun on a number the category already names.
+  assert.equal(typeof model.unitWord, 'undefined', 'the unit word came back');
+  assert.doesNotMatch(
+    sources['src/requirement-model.js'],
+    /unit_label|UNIT_WORD/,
+    'the model reads a unit again',
   );
 });
 
@@ -789,9 +781,6 @@ await check('a new category is created with a key nobody has to see', async () =
     {
       slug: 'dental-school-visits',
       name: 'Dental School Visits',
-      unit: 'event_count',
-      unit_label: null,
-      counts_toward_point_total: true,
       sort_order: 100,
     },
   ]);

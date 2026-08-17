@@ -13,32 +13,19 @@
 // would mean the answer to "what do I have to do" could drift from the answer to
 // "have I done it", and the whole product exists so those two cannot drift.
 //
-// The unit word comes from the categories a requirement measures, through
-// unitWord(), which answers with nothing at all rather than a confident wrong
-// word when a requirement adds hours to event counts. Same rule as the officer
-// side, same function.
+// THERE IS NO UNIT WORD. A requirement reads "GBMs 3 of 9", and the category is
+// what names the number, so a noun after it would be saying GBMs twice. Events,
+// hours and points were three labels on one behaviour and migration 22 dropped
+// the column. The one figure that keeps its noun is the total, which is in
+// points, because that is what the whole product counts.
 
 import { rpc } from './api.js';
-import { buildTree, flatten, unitWord } from './requirement-model.js';
+import { buildTree, flatten } from './requirement-model.js';
 import { $, h, announce, setHidden, plural } from './ui.js';
 
 const number = (value) => {
   const n = Number(value ?? 0);
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
-};
-
-/**
- * The unit word, agreeing with the number in front of it.
- *
- * unitWord() answers in the plural, because that is what a column heading and a
- * target need, and "1 events" is the one place that reads as a bug rather than
- * as a figure. The singular is the plural without its s, which holds for the
- * three words this can produce and for any unit_label a club types in.
- */
-const unitFor = (value, categories) => {
-  const word = unitWord(categories);
-  if (!word) return '';
-  return Number(value) === 1 ? word.replace(/s$/i, '') : word;
 };
 
 export function createScorecard(ctx) {
@@ -117,18 +104,13 @@ export function createScorecard(ctx) {
       );
     }
 
-    const unit = unitFor(item.min_value, item.categories);
     const sources = item.categories.map((category) => category.name).join(', ');
 
     return h(
       'li',
       { class: 'honorary-row', dataset: { depth: String(depth) } },
       h('span', { class: 'honorary-label' }, item.label),
-      h(
-        'span',
-        { class: 'honorary-need' },
-        [number(item.min_value), unit].filter(Boolean).join(' '),
-      ),
+      h('span', { class: 'honorary-need' }, number(item.min_value)),
       // The sources only when they are not simply the requirement's own name,
       // which is the ordinary case: "GBMs, 9 events" says it once already.
       sources && sources !== item.label
@@ -155,17 +137,6 @@ export function createScorecard(ctx) {
       passed: Boolean(row.passed),
     }));
 
-    // Which categories each requirement measures, kept beside the tree rather
-    // than on it: buildTree() fills in a categoryIds of its own from the shape
-    // PostgREST returns for an embedded table, and would overwrite one set here.
-    const byCategory = new Map((card?.categories ?? []).map((row) => [row.id, row]));
-    const measuring = new Map(
-      (card?.requirements ?? []).map((row) => [
-        row.node_id,
-        (row.category_ids ?? []).map((id) => byCategory.get(id)).filter(Boolean),
-      ]),
-    );
-
     const { root } = buildTree(requirements, card?.root_node_id ?? null);
     const rows = root ? flatten(root).slice(1) : [];
 
@@ -175,7 +146,7 @@ export function createScorecard(ctx) {
     el.state.textContent = honorary ? 'Honorary Member' : '';
     setHidden(el.state, !honorary);
 
-    el.list.replaceChildren(...rows.map(({ item, depth }) => memberRow(item, depth, measuring)));
+    el.list.replaceChildren(...rows.map(({ item, depth }) => memberRow(item, depth)));
 
     el.points.textContent = plural(Number(card?.point_total ?? 0), 'point');
     setHidden(el.card, false);
@@ -186,9 +157,8 @@ export function createScorecard(ctx) {
     );
   }
 
-  function memberRow(item, depth, measuring) {
+  function memberRow(item, depth) {
     const measured = item.type !== 'group';
-    const unit = measured ? unitFor(item.target, measuring.get(item.id) ?? []) : '';
 
     // A group whose rule is "some of these" is the one place a tick with no
     // figures would look wrong: two of its three requirements are visibly not
@@ -205,7 +175,7 @@ export function createScorecard(ctx) {
         ? h(
             'span',
             { class: 'check-figures' },
-            [`${number(item.value)} of ${number(item.target)}`, measured ? unit : 'met']
+            [`${number(item.value)} of ${number(item.target)}`, measured ? '' : 'met']
               .filter(Boolean)
               .join(' '),
           )

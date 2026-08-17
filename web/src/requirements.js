@@ -51,9 +51,8 @@ import {
   setOptionLabel,
   statusTitle,
   isEditable,
-  unitWord,
 } from './requirement-model.js';
-import { UNIT_LABEL, uniqueSlug } from './category-model.js';
+import { uniqueSlug } from './category-model.js';
 import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
 const NODE_SELECT = [
@@ -126,7 +125,6 @@ export function createRequirements(ctx) {
     categoryDialog: $('new-category-dialog'),
     categoryForm: $('new-category-form'),
     categoryName: $('new-category-name'),
-    categoryUnit: $('new-category-unit'),
     categoryError: $('new-category-error'),
   };
 
@@ -172,7 +170,7 @@ export function createRequirements(ctx) {
           order: 'version.desc',
         }),
         select('categories', {
-          select: 'id,slug,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at',
+          select: 'id,slug,name,sort_order,archived_at',
           order: 'sort_order.asc',
         }),
       ]);
@@ -484,18 +482,24 @@ export function createRequirements(ctx) {
     ];
   }
 
-  /** "at least [ 9 ] events from ⟨GBMs⟩", with the categories as real chips. */
+  /**
+   * "at least [ 9 ] from ⟨GBMs⟩", with the categories as real chips.
+   *
+   * No word after the number. There is one unit and the chips name what is
+   * being counted, so "9 events from GBMs" was saying GBMs twice.
+   */
   function thresholdControl(item) {
     const categories = item.categoryIds
       .map((id) => state.categoryById.get(id))
       .filter(Boolean);
-    const unit = unitWord(categories);
 
     const number = h('input', {
       class: 'rule-number',
       type: 'number',
       min: '0',
-      step: unit === 'hours' ? '0.5' : '1',
+      // A half step, because credit_mode = 'from_submission' lets a member send
+      // a fraction and a threshold has to be able to sit between two of them.
+      step: '0.5',
       value: item.min_value === null || item.min_value === undefined ? '' : String(Number(item.min_value)),
       disabled: !canEdit(),
       'aria-label': 'How many are needed',
@@ -518,7 +522,7 @@ export function createRequirements(ctx) {
       chips.append(h('span', { class: 'muted small' }, 'No categories'));
     }
 
-    return ['at least ', number, unit ? ` ${unit}` : '', ' from ', chips];
+    return ['at least ', number, ' from ', chips];
   }
 
   function categoryChip(item, category) {
@@ -941,9 +945,6 @@ export function createRequirements(ctx) {
             state.categories.map((row) => row.slug),
           ),
           name: made.name,
-          unit: made.unit,
-          unit_label: UNIT_LABEL[made.unit] ?? null,
-          counts_toward_point_total: true,
           sort_order: nextOrder(state.categories),
         },
       ]);
@@ -971,7 +972,6 @@ export function createRequirements(ctx) {
 
   function askForCategory() {
     el.categoryName.value = '';
-    el.categoryUnit.value = 'event_count';
     setHidden(el.categoryError, true);
 
     return new Promise((resolve) => {
@@ -994,7 +994,7 @@ export function createRequirements(ctx) {
           return;
         }
         el.categoryDialog.close();
-        finish({ name, unit: el.categoryUnit.value });
+        finish({ name });
       };
       const onClose = () => finish(null);
 

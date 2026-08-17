@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { freshDb } from './helpers/db.mjs';
 import {
   loadFixture,
+  EXPECTED,
   MEMBERS,
   USERS,
   REQ_SET,
@@ -95,7 +96,7 @@ test('a member sees only their own status row', async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].member_id, MEMBERS.ada);
   // and the number is still correct when computed under their own RLS
-  assert.equal(Number(rows[0].point_total), 46);
+  assert.equal(Number(rows[0].point_total), EXPECTED.ada.pointTotal);
   assert.equal(rows[0].is_honorary, true);
 });
 

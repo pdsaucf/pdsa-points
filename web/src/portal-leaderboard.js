@@ -12,9 +12,13 @@
 //
 // The rank comes from Postgres, with ties sharing a rank. Nothing here counts
 // anything: it draws the numbers it is given, in the order they arrive.
+//
+// A figure in the breakdown is a bare number. There is one unit, and the
+// category beside it names what is being counted, so "GBMs 12" reads the way the
+// officer's board reads and needs no noun after it. The one place a noun belongs
+// is the total, which the member's own screen says in points.
 
 import { rpc } from './api.js';
-import { pluralUnit } from './format.js';
 import { $, h, announce, setHidden, plural } from './ui.js';
 
 const number = (value) => {
@@ -89,11 +93,7 @@ export function createLeaderboard(ctx) {
           'p',
           { class: 'board-figure', dataset: { zero: String(total === 0) } },
           h('span', { class: 'board-figure-name' }, category.name),
-          h(
-            'span',
-            { class: 'board-figure-value' },
-            [number(total), unitWordFor(category)].filter(Boolean).join(' '),
-          ),
+          h('span', { class: 'board-figure-value' }, number(total)),
         ),
       );
     }
@@ -139,14 +139,6 @@ export function createLeaderboard(ctx) {
     breakdown.hidden = false;
     button.setAttribute('aria-expanded', 'true');
   }
-
-  /**
-   * The word beside a number, from the category. An event count reads as the
-   * bare number, the way the board on the officer side reads: "9" in a column
-   * headed GBMs needs no noun after it.
-   */
-  const unitWordFor = (category) =>
-    category?.unit === 'event_count' ? '' : pluralUnit(category?.unit_label ?? category?.unit);
 
   return { open };
 }

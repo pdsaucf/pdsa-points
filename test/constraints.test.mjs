@@ -221,20 +221,26 @@ test('the seeded configuration is intact and warning-free', async () => {
   const cats = Number(await db.val(`select count(*) from categories where archived_at is null`));
   assert.equal(cats, 13);
 
-  const volunteering = await db.one(
-    `select unit, counts_toward_point_total from categories where slug = 'volunteering'`,
+  // A category is a name, a slug and an order. It carried a unit and a
+  // counts_toward_point_total flag until migration 22, and the pair of them is
+  // what this check used to read: Volunteering was 'hours' and did not count,
+  // everything else was 'event_count' and did. Both columns are gone, so what is
+  // asserted instead is that they are gone: a migration that put either back
+  // would put a choice in front of an officer that changes nothing.
+  const columns = await db.q(
+    `select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'categories'
+      order by column_name`,
   );
-  assert.equal(volunteering.unit, 'hours');
-  assert.equal(volunteering.counts_toward_point_total, false);
-
-  const others = Number(
-    await db.val(
-      `select count(*) from categories
-        where slug <> 'volunteering'
-          and (unit <> 'event_count' or not counts_toward_point_total)`,
-    ),
+  assert.deepEqual(
+    columns.map((row) => row.column_name),
+    ['archived_at', 'created_at', 'id', 'name', 'slug', 'sort_order'],
   );
-  assert.equal(others, 0);
+  assert.equal(
+    Number(await db.val(`select count(*) from pg_type where typname = 'unit_type'`)),
+    0,
+    'the unit enum is still in the schema',
+  );
 
   const set = await db.one(
     `select status, root_node_id from requirement_sets where academic_year_id = $1`,
