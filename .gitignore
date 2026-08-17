@@ -22,6 +22,8 @@ roster_*.sql
 
 # Local tool settings, machine-specific by definition
 .claude/settings.local.json
+# Supabase CLI link state, points at one developer's project
+supabase/.temp/
 
 # OS / editor
 .DS_Store
