@@ -154,6 +154,17 @@ body {
   height: 40px;
 }
 
+/*
+  The officer door. It looks like the emblem and nothing else, but it is a link
+  on a phone, so the padding buys a full tap target and the negative margin
+  keeps the emblem where it was drawn before.
+*/
+.brand-door {
+  display: block;
+  margin: calc((var(--tap) - 40px) / -2);
+  padding: calc((var(--tap) - 40px) / 2);
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -352,6 +363,97 @@ body {
   margin: 0.75rem 0 0;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+   The event history
+
+   One <details> per category. The summary is the category and its total, so a
+   shut section still says what is in it, and the rows underneath line up as
+   three columns: what it was, when it was, and what the member got for it.
+   --------------------------------------------------------------------------- */
+
+.event-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.event-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.event-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.event-group-head:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.event-group-name {
+  flex: 1 1 auto;
+}
+
+.event-group-figure {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.event-list {
+  margin: 0;
+  padding: 0 0.75rem 0.5rem;
+  list-style: none;
+}
+
+.event-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.event-title {
+  flex: 1 1 auto;
+}
+
+.event-date {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Wide enough that the column holds its place on the rows that say nothing,
+   which is most of them. */
+.event-mark {
+  min-width: 4.5rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.event-row[data-status='attended'] .event-mark {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.event-row[data-status='declined'] .event-mark {
+  color: var(--danger);
+}
+
+/* An event they have not been to is not a lesser row, it is a quieter one. */
+.event-row[data-status='none'] .event-title {
+  color: var(--ink-muted);
 }
 
 /* --------------------------------------------------------------------------- */

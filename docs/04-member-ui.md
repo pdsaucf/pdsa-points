@@ -146,6 +146,22 @@ trips for numbers already in hand.
 Ties share a rank, computed by `rank() over (order by point_total desc)`. A leaderboard
 that numbers two equal totals 4 and 5 is a leaderboard arguing with itself.
 
+## The root, and the officer door
+
+`points.pdsaucf.com/` forwards here. The bare address is what a member types and what
+gets pasted into a group chat, so the root is the portal; a URL that still carries `?e=`
+is forwarded to `/c/` with the query intact, since a token only means check-in.
+
+The emblem at the top of this page is a link to `/admin/`. Officers are told to tap the
+logo, which is less to explain than a path to type, and most of them are opening the site
+on a phone. Nothing on screen labels it: a member has no use for it, and the page has no
+room for a control that is not theirs. This hides the door, it does not lock it. The
+magic-link sign-in and the role guard behind `/admin/` are the gate, and they are
+unchanged by anyone finding the link.
+
+`mock/verify-portal.mjs` holds the door to three things: it opens `/admin/`, it is named
+for a screen reader, and it draws no text on screen.
+
 ## Security
 
 `anon` holds EXECUTE on the four functions above and on nothing else: not the evaluator

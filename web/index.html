@@ -6,15 +6,17 @@
     <title>PDSA UCF</title>
     <meta name="robots" content="noindex" />
     <!--
-      There is no page at the root. A member reaches this site through a QR
-      code that already carries a token in the query string, so the redirect
-      keeps it rather than dropping straight to /c/ with no event picked.
+      Somebody who types the bare address wants their points, so the root goes
+      to the member portal. A QR code carries the token on /c/ already, but a
+      link that lost its path still has ?e= in it, and that one belongs at
+      check-in rather than the portal.
     -->
     <script>
-      window.location.replace('/c/' + window.location.search);
+      var search = window.location.search;
+      window.location.replace(/[?&]e=/.test(search) ? '/c/' + search : '/me/');
     </script>
   </head>
   <body>
-    <p><a href="/c/">Continue</a></p>
+    <p><a href="/me/">Continue</a></p>
   </body>
 </html>

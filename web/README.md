@@ -13,7 +13,7 @@ Three surfaces, one static directory, no build step.
 
 ```
 web/
-  index.html                 redirect to /c/, keeping the query string
+  index.html                 redirect to /me/, or to /c/ when the URL carries ?e=
   config.js                  Supabase URL and anon key. Public by design.
 
   c/index.html               the check-in page, served at /c/?e=<token>
@@ -118,6 +118,17 @@ step needed is:
 
 `/c/` is a real directory containing `index.html`, so the route works on GitHub
 Pages with no rewrite rules, no 404 trick and no hash router.
+
+## The root, and the way in to the officer screens
+
+`points.pdsaucf.com/` is what a member types or gets sent, so the root forwards to
+`/me/`. A QR code carries its token on `/c/` already, but a link that lost its path
+still has `?e=` on it, and that one is forwarded to `/c/` with the query intact.
+
+There is no visible link to `/admin/` anywhere a member looks. The emblem at the top of
+`/me/` is the link: officers are told to tap the logo rather than to type a path. It is
+not a secret and it is not a security measure, since the sign-in behind it is the gate.
+It is only kept unlabelled because a member has no use for it.
 
 ## The URL, and the QR code
 

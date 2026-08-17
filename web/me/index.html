@@ -31,18 +31,25 @@
     <main id="app" class="app">
       <!--
         The emblem sits above everything, including the refusals, so somebody
-        who followed a link from a group chat can tell whose page this is. alt
-        names the club because no wordmark is drawn beside it at this size.
+        who followed a link from a group chat can tell whose page this is.
+
+        It is also the officer door: tapping it opens /admin/, so an officer is
+        told to tap the logo rather than to type a path. Nothing labels it on
+        screen, since a member has no use for it and the sign-in behind it is
+        the real gate. A screen reader still gets a name for the link, and the
+        club is named in the page title, so the image itself carries no alt.
       -->
       <p class="brand-row">
-        <img
-          class="emblem"
-          src="../assets/img/pdsa-emblem-96.png"
-          width="40"
-          height="40"
-          decoding="async"
-          alt="PDSA UCF"
-        />
+        <a class="brand-door" href="../admin/" aria-label="Officer screens">
+          <img
+            class="emblem"
+            src="../assets/img/pdsa-emblem-96.png"
+            width="40"
+            height="40"
+            decoding="async"
+            alt=""
+          />
+        </a>
       </p>
 
       <nav class="tabs" aria-label="Sections">
@@ -113,6 +120,17 @@
           <ul id="score-list" class="checklist"></ul>
           <p id="score-points" class="points"></p>
           <button id="score-change" type="button" class="button button-quiet">Not you?</button>
+        </section>
+
+        <!--
+          Every event of the year and what this member did about each one, from
+          portal_attendance(). Drawn under the scorecard and loaded after it, so
+          the figures never wait on the list. A category they have a record in
+          opens; one they have never been to stays shut.
+        -->
+        <section id="history" class="panel history" hidden aria-labelledby="history-title">
+          <h2 id="history-title" class="panel-title">Your events</h2>
+          <div id="history-list" class="event-groups"></div>
         </section>
 
         <!--

@@ -161,6 +161,7 @@ const sources = {
   'src/portal.js': await readFile(`${WEB_ROOT}src/portal.js`, 'utf8'),
   'src/portal-scorecard.js': await readFile(`${WEB_ROOT}src/portal-scorecard.js`, 'utf8'),
   'src/portal-leaderboard.js': await readFile(`${WEB_ROOT}src/portal-leaderboard.js`, 'utf8'),
+  'src/portal-history.js': await readFile(`${WEB_ROOT}src/portal-history.js`, 'utf8'),
   'src/member-errors.js': await readFile(`${WEB_ROOT}src/member-errors.js`, 'utf8'),
 };
 
@@ -248,7 +249,12 @@ const portalCopy = [
   ...Object.entries(sources).flatMap(([label, source]) =>
     uiStrings(source).map((text) => [label, text]),
   ),
-  ['me/index.html', portalHtml.replace(/<!--[\s\S]*?-->/g, ' ')],
+  // Comments are not copy, and neither is a link target: the officer door
+  // points at ../admin/, which no member ever reads off the screen.
+  [
+    'me/index.html',
+    portalHtml.replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s(?:href|src)="[^"]*"/g, ' '),
+  ],
 ];
 
 await check('the database vocabulary never reaches a member', () => {
@@ -303,7 +309,7 @@ await check('nothing under the portal computes a point total or an honorary flag
 });
 
 await check('the portal writes nothing at all, and asks for nothing signed in', () => {
-  // Every answer this page draws comes from one of the four public functions,
+  // Every answer this page draws comes from one of the five public functions,
   // through api.js, which sends the anon key and never a session. A page that
   // imported rest.js would behave differently for an officer with a laptop open,
   // and that difference would only ever show up in front of somebody.
@@ -605,6 +611,220 @@ await check('two members with one name are told apart, not guessed between', asy
 });
 
 // ---------------------------------------------------------------------------
+process.stdout.write('\nyour own event history\n');
+// ---------------------------------------------------------------------------
+// The grid the spreadsheet had, drawn from portal_attendance(). What fails
+// silently here is not "the list is missing": it is a list that is subtly the
+// wrong list. A draft event shown to the club, an event counted for one of its
+// two categories, a superseded rejection shown as the current answer, or a
+// status carried in colour with nothing said out loud.
+
+const historyShown = () => !dom.$('history').hidden;
+const historyGroups = () => dom.$('history-list').querySelectorAll('details');
+const historyRows = () => dom.$('history-list').querySelectorAll('.event-row');
+const rowFor = (title) =>
+  [...historyRows()].find((li) => li.querySelector('.event-title').textContent === title) ?? null;
+
+await check('the history is every published event of the year, by category', async () => {
+  mountPortal();
+  lookUp('Abigail', 'Catto');
+  await until(scorecardShown, 'the scorecard never drew');
+  await until(historyShown, 'the event history never drew');
+
+  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  assert.ok(answer.categories.length > 0, 'the server sent no categories at all');
+  assert.equal(
+    historyGroups().length,
+    answer.categories.length,
+    'the page drew a different number of sections than the server sent',
+  );
+
+  const sent = answer.categories.flatMap((category) =>
+    category.events.map((event) => `${category.name}:${event.title}`),
+  );
+  assert.equal(historyRows().length, sent.length, 'the page drew a different number of events');
+});
+
+await check('an event that counts for two categories is listed under both', async () => {
+  // Health Fair is Tabling and Volunteering. A page that drew only an event's
+  // first category would look right on every other row in these fixtures, and
+  // would make counting twice read as a bug.
+  const rows = [...historyRows()].filter(
+    (li) => li.querySelector('.event-title').textContent === 'Health Fair',
+  );
+  assert.equal(rows.length, 2, 'the two-category event is not under both of its categories');
+});
+
+await check('a draft event is not on a members screen', async () => {
+  assert.equal(rowFor('Draft Workshop'), null, 'an unpublished event was shown to a member');
+
+  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const titles = answer.categories.flatMap((category) =>
+    category.events.map((event) => event.title),
+  );
+  assert.ok(!titles.includes('Draft Workshop'), 'the function itself carries the draft');
+});
+
+await check('an event that has not happened yet reads as upcoming, not as one they missed', () => {
+  const row = rowFor('Field Day');
+  assert.ok(row, 'the scheduled event is not on the list at all');
+  assert.equal(row.dataset.status, 'upcoming');
+  assert.equal(row.querySelector('.event-mark').textContent, 'Upcoming');
+});
+
+await check('an attended event carries the credit the server gave it', async () => {
+  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const attended = answer.categories
+    .flatMap((category) => category.events)
+    .filter((event) => event.status === 'attended');
+  assert.ok(attended.length > 0, 'the fixture member attended nothing, so this proves nothing');
+
+  for (const event of attended) {
+    const row = rowFor(event.title);
+    assert.ok(row, `${event.title} is missing from the list`);
+    assert.equal(row.dataset.status, 'attended');
+    assert.equal(
+      row.querySelector('.event-mark').textContent,
+      String(Number(event.credit)),
+      `${event.title} shows a number the server did not send`,
+    );
+  }
+});
+
+await check('an event they did not attend is a blank, not a verdict', () => {
+  const missed = [...historyRows()].filter((li) => li.dataset.status === 'none');
+  assert.ok(missed.length > 0, 'the fixture member attended everything, so this proves nothing');
+  for (const row of missed) {
+    assert.equal(row.querySelector('.event-mark').textContent, '');
+  }
+});
+
+await check('a section they have a record in is open, one they have never touched is shut', () => {
+  for (const group of historyGroups()) {
+    const rows = [...group.querySelectorAll('.event-row')];
+    const touched = rows.some((li) => ['attended', 'waiting', 'declined'].includes(li.dataset.status));
+    assert.equal(
+      group.open === true,
+      touched,
+      `${group.querySelector('.event-group-name').textContent} is ${
+        group.open ? 'open' : 'shut'
+      } and the member ${touched ? 'has' : 'has no'} record in it`,
+    );
+  }
+});
+
+await check('a rejection that was checked in again shows where they stand now', async () => {
+  // Aaron Ozan was turned down at the GBM and checked in again. The unique
+  // index lets both rows exist, and the live one is the answer: a member who
+  // fixed the problem must not read their own page as still declined.
+  mountPortal();
+  lookUp('Aaron', 'Ozan');
+  await until(scorecardShown, 'the scorecard never drew');
+  await until(historyShown, 'the event history never drew');
+
+  const row = rowFor('Spring GBM 5');
+  assert.ok(row, 'the event they were declined at is not on the list');
+  assert.equal(row.dataset.status, 'waiting', 'the superseded rejection is what the page shows');
+  assert.equal(row.querySelector('.event-mark').textContent, 'Waiting');
+});
+
+await check('no status is carried by colour alone', () => {
+  for (const row of historyRows()) {
+    const words = row.querySelector('.visually-hidden');
+    assert.ok(words, 'an event row carries its state in colour and nothing else');
+    assert.match(words.textContent, /^(Attended|Waiting for review|Declined|Upcoming|Not attended)$/);
+  }
+});
+
+await check('the history carries no decline reason, no photo and nobody else', async () => {
+  // The widening migration 23 made is one thing and one thing only. Everything
+  // an officer sees about a record stays with the officer, and the page has no
+  // way to draw what it never receives.
+  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_AARON });
+  const text = JSON.stringify(answer);
+  for (const forbidden of [
+    'review_note',
+    'reviewed_by',
+    'reviewed_at',
+    'submitted_at',
+    'flags',
+    'claimed_name',
+    'claimed_email',
+    'object_path',
+    'member_note',
+    'Photo was taken in the car park',
+  ]) {
+    assert.ok(!text.includes(forbidden), `portal_attendance carries ${forbidden}`);
+  }
+  assert.equal(Object.keys(answer.member).sort().join(','), 'display_name,id');
+});
+
+await check('a slow, superseded history answer cannot paint over the member on screen', async () => {
+  // Not you? followed by a fresh lookup fires a second history request before
+  // the first has necessarily answered: app.history.load() is deliberately
+  // not awaited by show(), so the network is free to answer out of order. A
+  // slow first answer landing after the second would show one member's own
+  // event history under another member's name and points, which is exactly
+  // the kind of leak this page exists to prevent. This drives that sequence
+  // for real, delaying only Abigail's portal_attendance response, and proves
+  // Aaron's screen is not eventually overwritten by it.
+  mountPortal();
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    const body = typeof init?.body === 'string' ? init.body : '';
+    if (String(url).includes('portal_attendance') && body.includes(IDS.MEMBER_ABIGAIL)) {
+      return new Promise((resolve) => setTimeout(() => resolve(realFetch(url, init)), 200));
+    }
+    return realFetch(url, init);
+  };
+
+  try {
+    lookUp('Abigail', 'Catto');
+    await until(scorecardShown, 'the first lookup never drew');
+    assert.equal(dom.$('score-name').textContent.trim(), 'Abigail Catto');
+    dom.click(dom.$('score-change')); // "Not you?", the real path back to the form
+
+    lookUp('Aaron', 'Ozan');
+    // scorecardShown() alone is not enough here: the card stayed visible
+    // across the switch, so it would read true immediately, before Aaron's
+    // own lookup has actually finished. Wait for his name specifically.
+    await until(
+      () => dom.$('score-name').textContent.trim() === 'Aaron Ozan',
+      'the second lookup never drew',
+    );
+    await until(historyShown, 'the second lookups history never drew');
+
+    // Past the 200ms delay, so Abigail's superseded answer has had time to
+    // arrive and, if unguarded, overwrite what is on screen.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    assert.equal(
+      dom.$('score-name').textContent.trim(),
+      'Aaron Ozan',
+      'a slower, superseded lookup overwrote the member on screen',
+    );
+    const row = rowFor('Spring GBM 5');
+    assert.ok(row, 'Aarons own event history was overwritten by a stale answer');
+    assert.equal(row.dataset.status, 'waiting');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check('the leaderboard is still figures only, with no event on it', async () => {
+  // The club asked for the history on the page you reach by typing your name,
+  // and asked for the board to stay minimal. An event title appearing here
+  // would be that decision quietly reversed.
+  const board = await rpc('portal_leaderboard', {});
+  const text = JSON.stringify(board);
+  for (const title of ['Spring GBM 5', 'Soap Carving', 'Health Fair', 'Field Day']) {
+    assert.ok(!text.includes(title), `the leaderboard carries the event "${title}"`);
+  }
+  assert.ok(!text.includes('occurred_on'), 'the leaderboard carries event dates');
+});
+
+// ---------------------------------------------------------------------------
 process.stdout.write('\nthe rules move, and the screen moves with them\n');
 // ---------------------------------------------------------------------------
 
@@ -828,6 +1048,33 @@ await check('the public functions carry no address and no student id', async () 
       assert.ok(!payload.includes(secret), `the ${label} carries ${secret}`);
     }
   }
+});
+
+process.stdout.write('\nthe officer door\n');
+
+await check('the emblem is the way to the officer screens, and says so to a screen reader', () => {
+  const door = portalHtml.match(/<a\b[^>]*class="brand-door"[^>]*>[\s\S]*?<\/a>/);
+  assert.ok(door, 'there is no officer door on the member portal');
+  assert.match(door[0], /href="\.\.\/admin\/"/, 'the door does not open the officer screens');
+  assert.match(door[0], /aria-label="[^"]+"/, 'the door is unnamed for a screen reader');
+  assert.match(door[0], /pdsa-emblem-96\.png/, 'the door is not the emblem');
+  // The link names itself, so the emblem inside it must not name itself twice.
+  assert.match(door[0], /alt=""/, 'the emblem inside the door repeats the links name');
+});
+
+await check('the door is a tap target, not a 40 pixel image', () => {
+  const declared = declarations(rule(portalCss, '.brand-door'));
+  const padding = declared.get('padding') ?? '';
+  assert.match(padding, /var\(--tap\)/, `.brand-door pads to ${padding || 'nothing'}`);
+});
+
+await check('the door carries no label on screen, and does not read as a sign-in', () => {
+  const door = portalHtml.match(/<a\b[^>]*class="brand-door"[^>]*>([\s\S]*?)<\/a>/);
+  const visible = door[1].replace(/<[^>]+>/g, ' ').trim();
+  assert.equal(visible, '', `the door is labelled on screen: ${JSON.stringify(visible)}`);
+  // Invariant 8: nothing on this page is an account, so no wording here may
+  // suggest a member has one to sign in to.
+  assert.doesNotMatch(door[0], /sign\s*in/i, 'the door reads as a members sign-in');
 });
 
 server.close();
