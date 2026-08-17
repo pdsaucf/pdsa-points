@@ -11,7 +11,7 @@
 // Roles come from profiles.role, read through PostgREST under the caller's own
 // policy (profiles_read_own). Three of the four values reach this screen:
 //
-//   admin    everything, including finishing an account claim
+//   admin    everything, including publishing the requirements
 //   officer  the whole review queue
 //   viewer   reads the queue, decides nothing. fn_is_staff() lets them see it,
 //            and fn_assert_officer() would refuse every action, so the buttons
@@ -30,7 +30,6 @@ import {
 import { select } from './rest.js';
 import { describeOfficer, describeSignIn } from './officer-errors.js';
 import { createReview } from './review.js';
-import { createClaims } from './claims.js';
 import { createRequirements } from './requirements.js';
 import { createCategories } from './categories.js';
 import { createProgress } from './progress.js';
@@ -44,7 +43,7 @@ const READING_ROLES = ['officer', 'admin', 'viewer'];
 
 // The six panels, in tab order. Each one is mounted once and reloaded when the
 // year changes, so switching tabs costs nothing.
-const TABS = ['review', 'claims', 'progress', 'roster', 'requirements', 'categories', 'storage'];
+const TABS = ['review', 'progress', 'roster', 'requirements', 'categories', 'storage'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -58,7 +57,6 @@ const app = {
   years: [],
   year: null,
   review: null,
-  claims: null,
   requirements: null,
   categories: null,
   progress: null,
@@ -132,11 +130,9 @@ function note(text, tone = 'ok') {
  * button does comes from the same place, so no caller has to work out whether
  * a given failure is worth retrying.
  *
- * `stage` is passed by the one panel that has a code the sentence alone would
- * have to be read to interpret: see CLAIM in officer-errors.js.
  */
-function fail(err, retry, stage) {
-  const copy = describeOfficer(err, stage);
+function fail(err, retry) {
+  const copy = describeOfficer(err);
 
   if (copy.recover === 'signin') {
     forgetSession();
@@ -153,7 +149,6 @@ function fail(err, retry, stage) {
     el.screenMessageAction.onclick = () => {
       clearMessage();
       app.review?.reload();
-      app.claims?.reload();
     };
     setHidden(el.screenMessageAction, false);
   } else if (copy.recover === 'retry' && retry) {
@@ -338,7 +333,6 @@ function context() {
     note,
     clearMessage,
     setReviewCount: (count) => setCount(el.tabReviewCount, count),
-    setClaimCount: (count) => setCount(el.tabClaimsCount, count),
     openMember,
     closeMember,
     // A record added by hand, or a name edited, changes a number the board and
@@ -402,7 +396,6 @@ function startApp() {
 
   const ctx = context();
   app.review = createReview(ctx);
-  app.claims = createClaims(ctx);
   app.requirements = createRequirements(ctx);
   app.categories = createCategories(ctx);
   app.progress = createProgress(ctx);
@@ -411,7 +404,6 @@ function startApp() {
   app.storage = createStorage(ctx);
 
   app.review.mount();
-  app.claims.mount();
   app.requirements.mount();
   app.categories.mount();
   app.progress.mount();
@@ -445,7 +437,6 @@ function cacheElements() {
     yearSelect: $('year-select'),
     tabs: {
       review: $('tab-review'),
-      claims: $('tab-claims'),
       progress: $('tab-progress'),
       roster: $('tab-roster'),
       requirements: $('tab-requirements'),
@@ -454,7 +445,6 @@ function cacheElements() {
     },
     panels: {
       review: $('panel-review'),
-      claims: $('panel-claims'),
       progress: $('panel-progress'),
       roster: $('panel-roster'),
       requirements: $('panel-requirements'),
@@ -463,7 +453,6 @@ function cacheElements() {
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),
-    tabClaimsCount: $('tab-claims-count'),
     who: $('who'),
     signout: $('signout'),
 

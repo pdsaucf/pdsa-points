@@ -7,13 +7,17 @@
 //
 //   * column names are matched case-insensitively, and a space or a hyphen is
 //     as good as an underscore, so "First Name" and "first-name" both work
-//   * first_name and last_name are required, email is optional, everything else
-//     is ignored
-//   * a row missing a name, or carrying something that is not an email address,
-//     stops the whole file and names the offending row. A roster that is half
-//     loaded is worse than one that is not loaded
-//   * duplicates WITHIN the file are dropped, by email when there is one and by
-//     normalised name otherwise
+//   * first_name and last_name are required, everything else is ignored,
+//     including an email column a previous year's file still carries
+//   * a row missing a name stops the whole file and names the offending row. A
+//     roster that is half loaded is worse than one that is not loaded
+//   * duplicates WITHIN the file are dropped by normalised name
+//
+// A MEMBER HAS NO EMAIL ADDRESS ANY MORE. The club never had one for most of
+// the roster, nothing in the product asks a member to sign in, and the column
+// that remains in the database is history rather than something this reads or
+// writes. A file that still has the column imports fine: the column is ignored,
+// exactly like every other column that is not a name.
 //
 // What this file deliberately does NOT do is decide anything about the existing
 // roster. Matching an incoming person against the members already in the
@@ -98,10 +102,6 @@ export function normaliseHeader(name) {
     .replace(/[\s-]+/g, '_');
 }
 
-// Deliberately loose, exactly as the script is: the job is to catch a column of
-// phone numbers or a stray header row, not to adjudicate RFC 5322.
-const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
 const REQUIRED = ['first_name', 'last_name'];
 
 /**
@@ -110,7 +110,7 @@ const REQUIRED = ['first_name', 'last_name'];
  *
  * @param {string} text
  * @returns {{
- *   people: Array<{first_name: string, last_name: string, email: string|null, row: number}>,
+ *   people: Array<{first_name: string, last_name: string, row: number}>,
  *   skipped: Array<{row: number, reason: string}>,
  *   problem: {title: string, body: string} | null
  * }}
@@ -153,7 +153,6 @@ export function readRoster(text) {
 
     const first = cell('first_name');
     const last = cell('last_name');
-    const email = cell('email') || null;
 
     if (!first || !last) {
       return fail(
@@ -161,14 +160,8 @@ export function readRoster(text) {
         'Every row needs a first name and a last name. Fix the file and choose it again.',
       );
     }
-    if (email && !EMAIL.test(email)) {
-      return fail(
-        `Row ${number} has a bad email`,
-        `"${email}" is not an email address. Correct it, or leave the cell empty.`,
-      );
-    }
 
-    people.push({ first_name: first, last_name: last, email, row: number });
+    people.push({ first_name: first, last_name: last, row: number });
   }
 
   if (!people.length) return fail('No people in the file', 'It has a header row and nothing else.');
@@ -178,30 +171,26 @@ export function readRoster(text) {
 
 /**
  * Drops the duplicates inside the file itself, before anything looks at the
- * roster. Same rule as the script: by email when the row has one, by
- * normalised full name when it does not.
+ * roster, by normalised full name.
+ *
+ * The name is the only identity a row carries now. Two people who genuinely
+ * share a name cannot both come in through one file, which is the same limit
+ * the Add form has, and the duplicate banner is where that gets resolved.
  */
 export function dedupe(people) {
   const kept = [];
   const skipped = [];
-  const byEmail = new Map();
   const byName = new Map();
 
   for (const person of people) {
-    const emailKey = person.email ? person.email.toLowerCase() : null;
     const nameKey = normaliseName(`${person.first_name} ${person.last_name}`);
 
-    if (emailKey && byEmail.has(emailKey)) {
-      skipped.push({ row: person.row, reason: `Same email as row ${byEmail.get(emailKey)}` });
-      continue;
-    }
-    if (!emailKey && byName.has(nameKey)) {
+    if (byName.has(nameKey)) {
       skipped.push({ row: person.row, reason: `Same name as row ${byName.get(nameKey)}` });
       continue;
     }
 
-    if (emailKey) byEmail.set(emailKey, person.row);
-    if (!byName.has(nameKey)) byName.set(nameKey, person.row);
+    byName.set(nameKey, person.row);
     kept.push(person);
   }
 

@@ -37,7 +37,7 @@ const state = {
   nonce: null,
   context: null,
   member: null, // { id, display_name }
-  claimed: null, // { name, email }
+  claimed: null, // { name }
   photo: null, // { blob, sha256, contentType, byteSize, kind }
   photoError: null, // { error, stage } from the last failed upload attempt
   // Grants this page has been issued and not yet handed to submit_checkin.
@@ -246,8 +246,7 @@ function renderForm() {
 
 /**
  * The roster starts empty, so at the first event of the year every search comes
- * back with nothing and the name-and-email route is the normal way in, not a
- * failure. When that happens the button below the results is promoted to look
+ * back with nothing and typing a name is the normal way in, not a failure. When that happens the button below the results is promoted to look
  * like the next step, because it is.
  */
 function promoteClaimedRoute(promote) {
@@ -330,8 +329,8 @@ async function runSearch(query) {
     // handler already prevents, so it is not worth a message.
     if (err instanceof RpcError && err.code === 'PDS03') return;
     const copy = describe(err, 'search');
-    // A search that cannot run must not strand anybody: the name and email
-    // route does not depend on it, so point at it.
+    // A search that cannot run must not strand anybody: typing a name does
+    // not depend on it, so point at it.
     promoteClaimedRoute(true);
     renderResultsHint(`${copy.title}. ${copy.body} You can still check in below.`);
   }
@@ -534,7 +533,6 @@ function collectIdentity() {
   if (state.member) return { p_member_id: state.member.id };
 
   const name = el.claimedName.value.trim();
-  const email = el.claimedEmail.value.trim();
   if (!el.claimedBlock.hidden) {
     if (!name) {
       showFormMessage({
@@ -544,16 +542,8 @@ function collectIdentity() {
       el.claimedName.focus();
       return null;
     }
-    if (!email) {
-      showFormMessage({
-        title: 'Enter your email',
-        body: 'An officer uses it to match you to the roster.',
-      });
-      el.claimedEmail.focus();
-      return null;
-    }
-    state.claimed = { name, email };
-    return { p_claimed_name: name, p_claimed_email: email };
+    state.claimed = { name };
+    return { p_claimed_name: name };
   }
 
   showFormMessage({
@@ -647,7 +637,7 @@ async function onSubmit(event) {
         p_token: state.token,
         p_member_id: identity.p_member_id ?? null,
         p_claimed_name: identity.p_claimed_name ?? null,
-        p_claimed_email: identity.p_claimed_email ?? null,
+        p_claimed_email: null,
         p_value: value.value,
         p_evidence: state.evidence,
         p_client_nonce: state.nonce,
@@ -723,7 +713,6 @@ function cacheElements() {
     changeName: $('change-name'),
     claimedBlock: $('claimed-block'),
     claimedName: $('claimed-name'),
-    claimedEmail: $('claimed-email'),
     claimedBack: $('claimed-back'),
     valueBlock: $('value-block'),
     valueLabel: $('value-label'),

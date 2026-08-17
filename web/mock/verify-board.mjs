@@ -96,7 +96,7 @@ URL.revokeObjectURL = () => {};
 const auth = await import('../src/auth.js');
 const { select, patch, callRpc } = await import('../src/rest.js');
 const csv = await import('../src/csv.js');
-const { matchRoster } = await import('../src/roster.js');
+const { matchRoster, parsePastedNames } = await import('../src/roster.js');
 const { RpcError } = await import('../src/errors.js');
 const { start } = await import('../src/admin.js');
 
@@ -297,9 +297,19 @@ await check('a quoted field survives a comma, a quote and a newline', () => {
 });
 
 await check('a header written any of the ways a person writes it is accepted', () => {
-  const { people, problem } = csv.readRoster('First Name,Last-Name,EMAIL\nAbby,Catto,a@b.com\n');
+  const { people, problem } = csv.readRoster('First Name,Last-Name\nAbby,Catto\n');
   assert.equal(problem, null);
-  assert.deepEqual(people, [{ first_name: 'Abby', last_name: 'Catto', email: 'a@b.com', row: 2 }]);
+  assert.deepEqual(people, [{ first_name: 'Abby', last_name: 'Catto', row: 2 }]);
+});
+
+await check('a column this product no longer has is ignored, not refused', () => {
+  // Last year's export still carries an address, and a file that will not load
+  // because of a column nothing reads would be a refusal for its own sake.
+  const { people, problem } = csv.readRoster(
+    'first_name,last_name,email\nAbby,Catto,407-555-0100\n',
+  );
+  assert.equal(problem, null, 'a file with an email column was refused');
+  assert.deepEqual(people, [{ first_name: 'Abby', last_name: 'Catto', row: 2 }]);
 });
 
 await check('a file without the columns it needs says which ones', () => {
@@ -318,31 +328,17 @@ await check('a row with half a name stops the file and names the row', () => {
   assert.match(problem.title, /Row 3/);
 });
 
-await check('a cell that is not an email stops the file and names the row', () => {
-  const { problem } = csv.readRoster('first_name,last_name,email\nAbby,Catto,407-555-0100\n');
-  assert.match(problem.title, /Row 2/);
-  assert.match(problem.body, /407-555-0100/);
-});
-
-await check('duplicates inside the file are dropped the way the script drops them', () => {
+await check('the same name twice in one file is one person', () => {
   const { people, skipped } = csv.readRoster(
-    [
-      'first_name,last_name,email',
-      'Abby,Catto,abby@ucf.edu',
-      'Abigail,Catto,abby@ucf.edu',
-      'Aaron,Ozan,',
-      'Aaron,Ozan,',
-      'Aaron,Ozan,aaron@ucf.edu',
-    ].join('\n'),
+    ['first_name,last_name', 'Abby,Catto', 'Abigail,Catto', 'Aaron,Ozan', 'Aaron,Ozan'].join('\n'),
   );
   assert.deepEqual(
     people.map((row) => `${row.first_name} ${row.last_name}`),
-    ['Abby Catto', 'Aaron Ozan', 'Aaron Ozan'],
-    'the email tier and the name tier do not behave as the script does',
+    ['Abby Catto', 'Abigail Catto', 'Aaron Ozan'],
+    'two different names were folded together, or one name was let through twice',
   );
-  assert.equal(skipped.length, 2);
-  assert.match(skipped[0].reason, /email/i);
-  assert.match(skipped[1].reason, /name/i);
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].reason, /name/i);
 });
 
 await check('an exported cell cannot become a spreadsheet formula', () => {
@@ -359,37 +355,72 @@ process.stdout.write('\nmatching an import against the roster\n');
 // ---------------------------------------------------------------------------
 
 const ROSTER = [
-  { id: 'a', display_name: 'Abigail Catto', email: 'abigail.catto@knights.ucf.edu' },
-  { id: 'c', display_name: 'Catherine Diaz', email: 'cdiaz@knights.ucf.edu' },
-  { id: 'd', display_name: 'Aaron Ozan', email: null },
+  { id: 'a', display_name: 'Abigail Catto' },
+  { id: 'c', display_name: 'Catherine Diaz' },
+  { id: 'd', display_name: 'Aaron Ozan' },
 ];
 
-await check('the same address is the same person, not a resemblance', () => {
-  const [row] = matchRoster(
-    [{ first_name: 'Abby', last_name: 'Catto', email: 'abigail.catto@knights.ucf.edu', row: 2 }],
-    ROSTER,
-  );
-  assert.equal(row.verdict, 'exact');
-  assert.equal(row.match.id, 'a');
-});
-
-await check('the same name with no address to tell them apart is the same person', () => {
-  const [row] = matchRoster([{ first_name: 'Aaron', last_name: 'Ozan', email: null, row: 2 }], ROSTER);
+await check('the same name is the same person', () => {
+  const [row] = matchRoster([{ first_name: 'Aaron', last_name: 'Ozan', row: 2 }], ROSTER);
   assert.equal(row.verdict, 'exact');
   assert.equal(row.match.id, 'd');
 });
 
 await check('a close spelling is a question, never an answer', () => {
-  const [row] = matchRoster([{ first_name: 'Abby', last_name: 'Cato', email: null, row: 2 }], ROSTER);
+  const [row] = matchRoster([{ first_name: 'Abby', last_name: 'Cato', row: 2 }], ROSTER);
   assert.equal(row.verdict, 'fuzzy', 'a near miss was decided rather than asked about');
   assert.equal(row.match.display_name, 'Abigail Catto');
   assert.match(row.why, /%/);
 });
 
 await check('nobody close is a new member', () => {
-  const [row] = matchRoster([{ first_name: 'Tobias', last_name: 'Renner', email: null, row: 2 }], ROSTER);
+  const [row] = matchRoster([{ first_name: 'Tobias', last_name: 'Renner', row: 2 }], ROSTER);
   assert.equal(row.verdict, 'new');
   assert.equal(row.match, null);
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\na pasted list of names\n');
+// ---------------------------------------------------------------------------
+// The paste box is how a roster will actually be built, so every way a block of
+// names arrives wrong is a way to write the wrong person to the database.
+
+await check('bullets, numbering and a trailing comma are read, not refused', () => {
+  const { people, unusable } = parsePastedNames(
+    ['- Marcus Bell', '1. Grace Okonkwo', '* Aisha Rahman,', '', '   '].join('\n'),
+  );
+  assert.deepEqual(
+    people.map((row) => `${row.first_name} ${row.last_name}`),
+    ['Marcus Bell', 'Grace Okonkwo', 'Aisha Rahman'],
+  );
+  assert.deepEqual(unusable, [], 'a line a person would call a name was rejected');
+});
+
+await check('a spreadsheet wrote it surname first, and it is the same person', () => {
+  const { people, repeated } = parsePastedNames(['Marcus Bell', 'Bell, Marcus'].join('\n'));
+  assert.deepEqual(people, [{ first_name: 'Marcus', last_name: 'Bell', row: 1 }]);
+  assert.equal(repeated.length, 1, 'the same person came through twice');
+});
+
+await check('a surname of several words survives', () => {
+  const { people } = parsePastedNames('Maria de la Cruz');
+  assert.deepEqual(people, [{ first_name: 'Maria', last_name: 'de la Cruz', row: 1 }]);
+});
+
+await check('one word is not a name, and it is reported rather than dropped', () => {
+  const { people, unusable } = parsePastedNames('Bob');
+  assert.deepEqual(people, []);
+  assert.equal(unusable.length, 1);
+  assert.equal(unusable[0].raw, 'Bob');
+  assert.match(unusable[0].why, /first and last/i);
+});
+
+await check('every pasted line is accounted for exactly once', () => {
+  // The report adds up to the number in its own heading, which is the only
+  // reason an officer can trust it.
+  const lines = ['Marcus Bell', 'Bell, Marcus', 'Bob', 'Grace Okonkwo'];
+  const { people, repeated, unusable } = parsePastedNames(lines.join('\n'));
+  assert.equal(people.length + repeated.length + unusable.length, lines.length);
 });
 
 // ---------------------------------------------------------------------------
@@ -648,8 +679,8 @@ await check('Export CSV carries exactly what is on screen, in the order it is on
 
   const parsed = csv.parseCsv(downloads[0]);
   const header = parsed[0];
-  assert.deepEqual(header.slice(0, 3), ['Member', 'Email', 'Points']);
-  assert.deepEqual(header.slice(3, -1), headings().slice(2, -1), 'the columns differ from the board');
+  assert.deepEqual(header.slice(0, 2), ['Member', 'Points']);
+  assert.deepEqual(header.slice(2, -1), headings().slice(2, -1), 'the columns differ from the board');
 
   const rows = parsed.slice(1);
   assert.equal(rows.length, bodyRows().length, 'the export has a different number of members');
@@ -658,10 +689,10 @@ await check('Export CSV carries exactly what is on screen, in the order it is on
     const line = rows[index];
     const cells = cellsOf(node);
     assert.equal(line[0], node.querySelectorAll('th')[0].textContent.trim(), 'the order differs');
-    assert.equal(line[2], cells[0].textContent.trim(), `${line[0]} exported a different point total`);
+    assert.equal(line[1], cells[0].textContent.trim(), `${line[0]} exported a different point total`);
     for (let i = 1; i < cells.length - 1; i += 1) {
       assert.equal(
-        line[2 + i],
+        line[1 + i],
         cells[i].querySelector('.board-value').textContent.trim(),
         `${line[0]} exported a different figure in column ${i}`,
       );
@@ -876,7 +907,7 @@ await check('the same member shows one join date on the roster and on their own 
 
   const row = rosterRows().find((node) => node.textContent.includes('Abigail Catto'));
   assert.ok(row, 'Abigail Catto is not on the roster');
-  const onRoster = row.querySelectorAll('td')[4].textContent.trim();
+  const onRoster = row.querySelectorAll('td')[3].textContent.trim();
   assert.ok(onRoster, 'the roster row carries no join date');
 
   dom.click(row.querySelector('.board-name'));
@@ -901,7 +932,7 @@ await check('the same member shows one join date on the roster and on their own 
   await until(() => !dom.$('panel-roster').hidden, 'Back did not return to the roster');
 });
 
-await check('Export CSV writes the three columns the import reads back', () => {
+await check('Export CSV writes the two columns the import reads back', () => {
   downloads.length = 0;
   dom.click(dom.$('roster-export'));
   const { people, problem } = csv.readRoster(downloads[0]);
@@ -1386,7 +1417,7 @@ await check('a member on the banner and on the roster shows one join date, not t
   // is the contradiction on screen that does the damage, and a screen can
   // render two agreeing sources into two different strings.
   const rosterJoined = new Map(
-    rosterRows().map((row) => [row.dataset.member, row.querySelectorAll('td')[4].textContent.trim()]),
+    rosterRows().map((row) => [row.dataset.member, row.querySelectorAll('td')[3].textContent.trim()]),
   );
 
   let compared = 0;
@@ -1946,7 +1977,6 @@ await check(
     dom.click(dom.$('roster-add'));
     dom.$('roster-add-first').value = 'Beatrix';
     dom.$('roster-add-last').value = 'Hallworth';
-    dom.$('roster-add-email').value = 'beatrix.hallworth@knights.ucf.edu';
     dom.fire(dom.$('roster-add-form'), 'submit');
 
     await until(
@@ -1961,7 +1991,9 @@ await check(
 
     const rows = dom.$('roster-retro-body').querySelectorAll('.retro-list li');
     assert.equal(rows.length, 1, `expected exactly one candidate, got ${rows.length}`);
-    assert.match(rows[0].textContent, /Same email address/);
+    // By name. Her check-in was typed at an event, and nothing on either side
+    // of the match carries an address to be certain about any more.
+    assert.match(rows[0].textContent, /name match/);
 
     dom.$('roster-retro-dialog').close();
 

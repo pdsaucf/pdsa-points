@@ -50,11 +50,21 @@ import { loadFixture, MEMBERS, REQ_SET, USERS } from './helpers/fixture.mjs';
 
 let db;
 
-// Everything the anonymous check-in page is allowed to reach, and nothing
-// else. The first four are the RPCs docs/01-data-model.md section 8 lists;
+// Everything an anonymous caller is allowed to reach, and nothing else. The
+// check-in RPCs are the ones docs/01-data-model.md section 8 lists;
 // fn_upload_grant_is_live is consulted by the storage insert policy, which
 // anon has to be able to satisfy while uploading a photo it was granted a
 // path for.
+//
+// THE FOUR portal_* FUNCTIONS ARE A DELIBERATE WIDENING, from migration 21. The
+// member portal stopped being an account: the club has no email addresses for
+// its members, so a member types their name and reads their own points, and the
+// leaderboard lists the whole roster with their totals the way the spreadsheet
+// this product replaces did. Each one answers a shaped question with the
+// club-facing figures and nothing else, which is asserted in
+// test/public_portal.test.mjs and is the reason they are functions rather than
+// a grant on v_member_status. If one of them ever starts carrying an address, a
+// student id or an unapproved record, that test fails rather than this one.
 //
 // Full signatures rather than bare names. Postgres identifies a function by
 // name AND argument types, so an overload is a different function with its own
@@ -71,6 +81,10 @@ const ANON_MAY_EXECUTE = [
   'fn_keepalive()',
   'fn_upload_grant_is_live(text,text)',
   'get_checkin_context(text)',
+  'portal_find_members(text,text)',
+  'portal_leaderboard()',
+  'portal_requirements()',
+  'portal_scorecard(uuid)',
   'search_members(text,text,text)',
   'submit_checkin(text,uuid,text,text,numeric,jsonb,text)',
 ];
@@ -142,7 +156,7 @@ test('no function in public carries EXECUTE for PUBLIC', async () => {
   );
 });
 
-test('anon may execute the check-in surface and nothing else', async () => {
+test('anon may execute the check-in and portal surfaces and nothing else', async () => {
   // has_function_privilege rather than a scan of proacl, because it accounts
   // for a grant to PUBLIC as well as one to anon. Assertion 1 above is what
   // keeps the PUBLIC half empty; this one would still be correct without it.

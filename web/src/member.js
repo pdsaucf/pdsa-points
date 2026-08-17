@@ -88,7 +88,6 @@ export function createMember(ctx) {
     editFirst: $('member-edit-first'),
     editLast: $('member-edit-last'),
     editPreferred: $('member-edit-preferred'),
-    editEmail: $('member-edit-email'),
     editError: $('member-edit-error'),
   };
 
@@ -142,7 +141,7 @@ export function createMember(ctx) {
       const [members, enrollments, categories, statuses, totals, records, reviewers] =
         await Promise.all([
           select('members', {
-            select: 'id,first_name,last_name,preferred_name,display_name,email,created_at,archived_at,merged_into_id',
+            select: 'id,first_name,last_name,preferred_name,display_name,created_at,archived_at,merged_into_id',
             filters: { id: `eq.${state.memberId}` },
             limit: 1,
           }),
@@ -291,7 +290,6 @@ export function createMember(ctx) {
     el.name.textContent = member.display_name;
 
     el.meta.textContent = [
-      member.email || 'No email on file',
       state.joined ? `Joined ${monthYear(state.joined)}` : null,
       ctx.year.label,
     ]
@@ -534,7 +532,6 @@ export function createMember(ctx) {
     el.editFirst.value = state.member.first_name ?? '';
     el.editLast.value = state.member.last_name ?? '';
     el.editPreferred.value = state.member.preferred_name ?? '';
-    el.editEmail.value = state.member.email ?? '';
     el.editDialog.showModal();
   }
 
@@ -559,7 +556,6 @@ export function createMember(ctx) {
           first_name: first,
           last_name: last,
           preferred_name: el.editPreferred.value.trim() || null,
-          email: el.editEmail.value.trim() || null,
         },
       );
       if (!rows.length) {

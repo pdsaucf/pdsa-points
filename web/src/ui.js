@@ -42,6 +42,57 @@ export function h(tag, props = {}, ...children) {
   return node;
 }
 
+/**
+ * An inline chevron, for the buttons that move a row up or down.
+ *
+ * Built with createElementNS rather than as markup, for the same reason nothing
+ * here touches innerHTML, and because an svg assembled by createElement lands
+ * in the HTML namespace and renders as nothing at all.
+ *
+ * The icon is aria-hidden and the button around it carries the words, so a
+ * screen reader still hears "Move GBMs up" while the screen shows an arrow.
+ */
+export function chevron(direction) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', direction === 'up' ? 'M3.5 10 L8 5.5 L12.5 10' : 'M3.5 6 L8 10.5 L12.5 6');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+
+  svg.append(path);
+  return svg;
+}
+
+/**
+ * The button that moves one row among its siblings. Every list that can be
+ * reordered uses this one, so they cannot drift apart.
+ *
+ * @param {{direction: 'up'|'down', title: string, disabled?: boolean, onClick: Function}} spec
+ */
+export function moveButton({ direction, title, disabled = false, onClick }) {
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: 'button button-icon',
+      title,
+      'aria-label': title,
+      disabled,
+      onClick,
+    },
+    chevron(direction),
+  );
+}
+
 /** Says something to a screen reader without moving focus or drawing a box. */
 export function announce(message) {
   const live = $('live');

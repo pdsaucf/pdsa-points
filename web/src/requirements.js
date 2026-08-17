@@ -54,7 +54,7 @@ import {
   unitWord,
 } from './requirement-model.js';
 import { UNIT_LABEL, uniqueSlug } from './category-model.js';
-import { $, h, announce, setHidden, plural } from './ui.js';
+import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
 const NODE_SELECT = [
   'id',
@@ -606,13 +606,18 @@ export function createRequirements(ctx) {
       );
 
     actions.append(
-      button('Up', `Move ${item.label} up`, () => moveWithin(item, -1), siblings[0]?.id === item.id),
-      button(
-        'Down',
-        `Move ${item.label} down`,
-        () => moveWithin(item, 1),
-        siblings[siblings.length - 1]?.id === item.id,
-      ),
+      moveButton({
+        direction: 'up',
+        title: `Move ${item.label} up`,
+        disabled: siblings[0]?.id === item.id || state.inFlight > 0,
+        onClick: () => moveWithin(item, -1),
+      }),
+      moveButton({
+        direction: 'down',
+        title: `Move ${item.label} down`,
+        disabled: siblings[siblings.length - 1]?.id === item.id || state.inFlight > 0,
+        onClick: () => moveWithin(item, 1),
+      }),
     );
 
     // Only a set written before the list went flat still holds one of these,

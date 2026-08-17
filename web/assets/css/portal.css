@@ -259,61 +259,6 @@ body {
 }
 
 /* --------------------------------------------------------------------------- */
-/* The roster search                                                            */
-/* --------------------------------------------------------------------------- */
-
-/* A fixed height, not a minimum, for the reason the check-in page gives: a well
-   that grows when results arrive moves the button a thumb is already travelling
-   towards. */
-.results-well {
-  height: 11rem;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg);
-}
-
-.results {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.result {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: var(--tap);
-  padding: 0.5rem 0.75rem;
-  font: inherit;
-  text-align: left;
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  cursor: pointer;
-}
-
-.result:hover {
-  background: var(--accent-soft);
-}
-
-.hint {
-  display: flex;
-  align-items: center;
-  min-height: 3.25rem;
-  margin: 0;
-  padding: 0.5rem 0.75rem;
-}
-
-.chosen-name {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-/* --------------------------------------------------------------------------- */
 /* Progress                                                                     */
 /* --------------------------------------------------------------------------- */
 
@@ -410,112 +355,224 @@ body {
 }
 
 /* --------------------------------------------------------------------------- */
-/* Records                                                                      */
+/* The two tabs                                                                 */
 /* --------------------------------------------------------------------------- */
+/* Two of them, full width between them, because a phone gets one thumb and
+   there is nothing else competing for the top of this screen. */
 
-.records-head {
+.tabs {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
+  margin: 0 0 1rem;
 }
 
-.records {
+.tab {
+  flex: 1 1 0;
+  min-height: var(--tap);
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.tab[aria-selected='true'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------- */
+/* Which one is you                                                             */
+/* --------------------------------------------------------------------------- */
+
+.results {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.record {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.25rem 0.75rem;
-  padding: 0.625rem 0;
+.result {
   border-bottom: 1px solid var(--line);
 }
 
-.record:last-child {
+.result:last-child {
   border-bottom: 0;
 }
 
-.record-main {
+.result-button {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.5rem;
-  min-width: 0;
+  gap: 0.25rem 0.5rem;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 
-.record-date {
-  color: var(--ink-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.record-title {
+.result-name {
   font-weight: 600;
 }
 
-.record-categories {
+.result-meta {
   color: var(--ink-muted);
   font-size: 0.875rem;
 }
 
-.record-status {
-  display: flex;
-  align-items: baseline;
-  gap: 0.375rem;
+/* --------------------------------------------------------------------------- */
+/* What an Honorary Member is                                                   */
+/* --------------------------------------------------------------------------- */
+/* The box at the bottom of the points tab. It is the one piece of prose on this
+   screen, so it gets a surface of its own and the accent edge, and the list
+   under it is the published rules rather than anything written here. */
+
+.honorary {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+}
+
+.honorary-title {
+  margin: 0 0 0.375rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.honorary-body {
   margin: 0;
+  color: var(--ink);
+}
+
+.honorary-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.honorary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--accent);
+}
+
+.honorary-row[data-depth='2'] {
+  padding-left: 1.25rem;
+}
+
+.honorary-label {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.honorary-need {
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.record[data-status='approved'] .record-status {
-  color: var(--ok);
-}
-
-.record[data-status='rejected'] .record-status {
-  color: var(--danger);
-}
-
-.record-note,
-.quote {
-  flex: 1 0 100%;
-  margin: 0.25rem 0 0;
-  padding-left: 0.75rem;
+.honorary-from {
+  flex: 1 1 100%;
   color: var(--ink-muted);
-  font-size: 0.9375rem;
-  border-left: 2px solid var(--line-strong);
+  font-size: 0.875rem;
 }
 
 /* --------------------------------------------------------------------------- */
-/* Something's missing                                                          */
+/* The leaderboard                                                              */
 /* --------------------------------------------------------------------------- */
+/* A row is a button, whole. A chevron the size of a full stop is not a target on
+   a phone, and there is nothing else on the row to press. */
 
-.missing {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.875rem;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+.board-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-/* A label above its field, rather than a label beside it: the number box is
-   9rem wide and an inline label would sit next to it on its own baseline. */
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.board-row {
+  border-bottom: 1px solid var(--line);
 }
 
-.missing-actions {
+.board-row:last-child {
+  border-bottom: 0;
+}
+
+.board-button {
   display: flex;
   align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.board-rank {
+  min-width: 2ch;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.board-name {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+/* Gold as a fill, never as a foreground: the star sits on the soft gold with the
+   gold ink on top, the same rule the honorary pill follows. */
+.board-star {
+  padding: 0 0.3rem;
+  color: var(--gold-ink);
+  background: var(--gold-soft);
+  border-radius: 999px;
+}
+
+.board-points {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-breakdown {
+  padding: 0.25rem 0 0.75rem 2.75rem;
+}
+
+.board-figure {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 0.5rem;
+  margin: 0;
+  padding: 0.1875rem 0;
+}
+
+.board-figure[data-zero='true'] {
+  color: var(--ink-muted);
+}
+
+.board-figure-name {
+  font-size: 0.9375rem;
+}
+
+.board-figure-value {
+  font-variant-numeric: tabular-nums;
 }
 
 /* --------------------------------------------------------------------------- */

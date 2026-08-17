@@ -17,11 +17,10 @@
 //   MATCHING IS AGAINST EVERY LIVE MEMBER, NOT THIS YEAR'S ROSTER. The table
 //   shows this year, which is right. Matching against this year would not be:
 //   somebody who was here last year and has not been enrolled for this one is
-//   invisible to that matcher, so an import treats them as new. With an email
-//   that collides with the unique index and fails the run; without one it
-//   quietly creates a second person. Same rule scripts/import_roster.py has
-//   always used server-side, which matches against members and not against
-//   member_enrollments.
+//   invisible to that matcher, so an import treats them as new, and a second
+//   person quietly appears under the same name. Same rule
+//   scripts/import_roster.py has always used server-side, which matches
+//   against members and not against member_enrollments.
 //
 //   EVERY WRITE IS ONE CALL. Adding somebody goes through
 //   upsert_member_and_enroll(), which finds or creates the member and enrolls
@@ -52,11 +51,9 @@
 //   duplicate is dismiss_duplicate_pair(), and it is remembered, so the same
 //   pair never asks twice.
 //
-// The matching rule here is the same one scripts/import_roster.py uses, because
-// the two paths load the same rosters into the same table: by email when the
-// incoming row has one, by normalised name when it does not. What this adds on
-// top is the fuzzy tier the script has no way to offer, since the script has
-// nobody to ask.
+// Matching is by normalised name, and nothing else: a member has no email
+// address in this product any more. What this adds on top of the script is the
+// fuzzy tier, which the script has no way to offer since it has nobody to ask.
 
 import { select, remove, callRpc } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
@@ -103,11 +100,92 @@ const IMPORT_RETRO_CONCURRENCY = 4;
  * duplicate nobody is shown is a duplicate nobody merges.
  */
 const DUPLICATE_REASON = {
+  // History. Nothing collects an address now, but the view still reports this
+  // reason for two rows that were imported with the same one years ago, and a
+  // pair with no explanation is a pair nobody dares merge.
   exact_email: 'Same email address',
   exact_nid: 'Same student id',
   exact_name: 'Same name',
   close_name: 'Similar name',
 };
+
+/**
+ * A pasted block of names, as rows worth sending.
+ *
+ * Pure, and exported, because this is the one place the officer's typing is
+ * interpreted and every way it can be wrong has to be answerable without a
+ * browser. A club list arrives as a message, and messages carry bullets,
+ * numbering, trailing commas and "Bell, Marcus" from whoever exported a
+ * spreadsheet, so all of that is read rather than refused.
+ *
+ * ONE NAME IS NOT A NAME HERE. The roster stores a first and a last name, so a
+ * line with one word cannot be written, and guessing which half is missing
+ * would put a made-up surname on a real person. Those lines come back in
+ * `unusable` for the report, not silently dropped.
+ *
+ * A name repeated inside the paste is counted once and reported, because a
+ * block copied out of a group chat has the same person in it twice more often
+ * than not.
+ *
+ * @param {string} text what was pasted
+ * @returns {{people: Array<{first_name: string, last_name: string, row: number}>,
+ *   repeated: Array<{name: string, row: number}>,
+ *   unusable: Array<{raw: string, row: number, why: string}>}}
+ */
+export function parsePastedNames(text) {
+  const people = [];
+  const repeated = [];
+  const unusable = [];
+  const seen = new Map(); // normalised name -> the line it first arrived on
+
+  String(text ?? '')
+    .split(/\r?\n/)
+    .forEach((line, index) => {
+      const row = index + 1;
+      // Bullets, "1.", "1)", and a trailing comma from a pasted list.
+      const cleaned = line
+        .replace(/^\s*(?:[-*•·]|\d+[.)])\s*/, '')
+        .replace(/[,;]\s*$/, '')
+        .trim()
+        .replace(/\s+/g, ' ');
+      if (!cleaned) return;
+
+      const [first, last] = splitName(cleaned);
+      if (!first || !last) {
+        unusable.push({ raw: cleaned, row, why: 'Needs a first and last name' });
+        return;
+      }
+
+      const key = `${first} ${last}`.toLowerCase();
+      if (seen.has(key)) {
+        repeated.push({ name: `${first} ${last}`, row });
+        return;
+      }
+      seen.set(key, row);
+      people.push({ first_name: first, last_name: last, row });
+    });
+
+  return { people, repeated, unusable };
+}
+
+/**
+ * 'Marcus Bell' and 'Bell, Marcus' are the same person written two ways.
+ *
+ * A comma means a spreadsheet wrote it last-name-first. Without one, the first
+ * word is the first name and everything after it is the surname, so "Maria de
+ * la Cruz" keeps her whole name instead of losing two thirds of it.
+ */
+function splitName(cleaned) {
+  const comma = cleaned.indexOf(',');
+  if (comma > 0) {
+    const last = cleaned.slice(0, comma).trim();
+    const first = cleaned.slice(comma + 1).trim();
+    return [first, last];
+  }
+  const parts = cleaned.split(' ');
+  if (parts.length < 2) return [cleaned, ''];
+  return [parts[0], parts.slice(1).join(' ')];
+}
 
 /**
  * Every incoming row, matched against the roster, with what would happen to it.
@@ -121,35 +199,32 @@ const DUPLICATE_REASON = {
  *   'fuzzy'  looks like somebody already here. Needs an answer before import
  *   'new'    nobody close. Created and enrolled
  *
- * @param {Array<{first_name: string, last_name: string, email: string|null, row: number}>} people
- * @param {Array<{id: string, display_name: string, email?: string|null}>} members
+ * THE NAME IS THE WHOLE IDENTITY. There used to be an email tier above the
+ * name tier, and it was the only exact one: an address matched a person outright
+ * and a name only matched when neither side had an address to contradict it.
+ * Nothing collects an address any more, so the name tier is the top tier, and
+ * two people who genuinely share a name are resolved by the duplicate banner
+ * rather than by a column nobody fills in.
+ *
+ * @param {Array<{first_name: string, last_name: string, row: number}>} people
+ * @param {Array<{id: string, display_name: string}>} members
  */
 export function matchRoster(people, members) {
-  const byEmail = new Map();
   const byName = new Map();
   for (const member of members ?? []) {
-    if (member.email) byEmail.set(String(member.email).toLowerCase(), member);
     const key = normaliseName(member.display_name);
     if (!byName.has(key)) byName.set(key, member);
   }
 
   return (people ?? []).map((person) => {
     const fullName = `${person.first_name} ${person.last_name}`;
-    const email = person.email ? person.email.toLowerCase() : null;
-
-    // An email is an identity, not a resemblance. Same rule as the script, and
-    // the same rule rankMembers() applies on the review queue.
-    const byAddress = email ? byEmail.get(email) : null;
-    if (byAddress) {
-      return { ...person, verdict: 'exact', match: byAddress, why: 'Same email address' };
-    }
 
     const sameName = byName.get(normaliseName(fullName));
-    if (sameName && (!email || !sameName.email)) {
+    if (sameName) {
       return { ...person, verdict: 'exact', match: sameName, why: 'Same name' };
     }
 
-    const ranked = rankMembers({ name: fullName, email: person.email }, members ?? [], {
+    const ranked = rankMembers({ name: fullName }, members ?? [], {
       limit: 3,
       floor: FUZZY_FLOOR,
     });
@@ -192,11 +267,20 @@ export function createRoster(ctx) {
     duplicatesTitle: $('duplicates-title'),
     duplicatesList: $('duplicates-list'),
 
+    pasteButton: $('roster-paste'),
+    pasteDialog: $('paste-dialog'),
+    pasteForm: $('paste-form'),
+    pasteNames: $('paste-names'),
+    pasteError: $('paste-error'),
+    pasteResultDialog: $('paste-result-dialog'),
+    pasteResultTitle: $('paste-result-title'),
+    pasteResultMeta: $('paste-result-meta'),
+    pasteResultGroups: $('paste-result-groups'),
+
     addDialog: $('roster-add-dialog'),
     addForm: $('roster-add-form'),
     addFirst: $('roster-add-first'),
     addLast: $('roster-add-last'),
-    addEmail: $('roster-add-email'),
     addError: $('roster-add-error'),
 
     retroDialog: $('roster-retro-dialog'),
@@ -267,7 +351,7 @@ export function createRoster(ctx) {
       const [enrollments, statuses, duplicates, everyEnrollment, everyMember] = await Promise.all([
         select('member_enrollments', {
           select:
-            'member_id,status,joined_on,members!inner(id,first_name,last_name,preferred_name,display_name,email,created_at,archived_at,merged_into_id)',
+            'member_id,status,joined_on,members!inner(id,first_name,last_name,preferred_name,display_name,created_at,archived_at,merged_into_id)',
           filters: {
             academic_year_id: `eq.${yearId}`,
             'members.archived_at': 'is.null',
@@ -286,7 +370,7 @@ export function createRoster(ctx) {
         // member is exactly the person a year filter would hide. See the note
         // at the top of this file.
         select('members', {
-          select: 'id,first_name,last_name,display_name,email,created_at',
+          select: 'id,first_name,last_name,display_name,created_at',
           filters: { archived_at: 'is.null', merged_into_id: 'is.null' },
           order: 'display_name.asc',
         }),
@@ -327,7 +411,7 @@ export function createRoster(ctx) {
     try {
       return await select('v_possible_duplicate_members', {
         select:
-          'member_a,member_b,display_a,display_b,email_a,email_b,reason,score,records_a,records_b,joined_a,joined_b',
+          'member_a,member_b,display_a,display_b,reason,score,records_a,records_b,joined_a,joined_b',
         order: 'score.desc',
       });
     } catch (err) {
@@ -363,16 +447,13 @@ export function createRoster(ctx) {
   function visibleMembers() {
     const query = state.query.trim().toLowerCase();
     if (!query) return state.members;
-    return state.members.filter(
-      (member) =>
-        member.display_name.toLowerCase().includes(query) ||
-        String(member.email ?? '').toLowerCase().includes(query),
-    );
+    return state.members.filter((member) => member.display_name.toLowerCase().includes(query));
   }
 
   function render() {
     setHidden(el.loading, true);
     setHidden(el.add, !ctx.canReview);
+    setHidden(el.pasteButton, !ctx.canReview);
     setHidden(el.importButton, !ctx.canReview);
 
     const rows = visibleMembers();
@@ -408,7 +489,6 @@ export function createRoster(ctx) {
               member.display_name,
             ),
           ),
-          h('td', { class: 'roster-email' }, member.email ?? ''),
           h('td', { class: 'board-number' }, number(status.point_total)),
           h(
             'td',
@@ -419,6 +499,19 @@ export function createRoster(ctx) {
           h(
             'td',
             { class: 'roster-actions' },
+            // The name above is a button too, but nothing about a name says so.
+            // Every roster row carries the way into the member page in the place
+            // an officer already looks for actions.
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'button button-small',
+                'aria-label': `Open ${member.display_name}`,
+                onClick: () => ctx.openMember(member.id),
+              },
+              'Open',
+            ),
             ctx.canReview
               ? h(
                   'button',
@@ -526,7 +619,6 @@ export function createRoster(ctx) {
     const side = (which) => {
       const id = which === 'a' ? pair.member_a : pair.member_b;
       const name = which === 'a' ? pair.display_a : pair.display_b;
-      const email = which === 'a' ? pair.email_a : pair.email_b;
       const records = which === 'a' ? pair.records_a : pair.records_b;
       const joined = which === 'a' ? pair.joined_a : pair.joined_b;
       const checked = which === (preferB ? 'b' : 'a');
@@ -555,7 +647,6 @@ export function createRoster(ctx) {
             [
               plural(Number(records ?? 0), 'record'),
               joined ? `joined ${monthYear(joined)}` : null,
-              email || null,
             ]
               .filter(Boolean)
               .join(' · '),
@@ -668,9 +759,10 @@ export function createRoster(ctx) {
    * transaction. Both Add and the import go through here.
    *
    * matchedId is the officer's answer from the preview: an exact match, or a
-   * fuzzy one they pressed Link member on. Passing none leaves the function to
-   * match on email and student id itself, which is what makes a re-run of an
-   * interrupted import land on the row the first run created.
+   * fuzzy one they pressed Link member on. It is how a returning member is
+   * found now that there is no address for the function to match on itself,
+   * and it is what makes a re-run of an interrupted import land on the rows the
+   * first run created rather than beside them.
    *
    * @returns {Promise<{member_id: string, was_created: boolean, was_enrolled: boolean}>}
    */
@@ -678,7 +770,7 @@ export function createRoster(ctx) {
     return callRpc('upsert_member_and_enroll', {
       p_first_name: person.first_name,
       p_last_name: person.last_name,
-      p_email: person.email ?? null,
+      p_email: null,
       p_ucf_nid: null,
       p_academic_year_id: ctx.year.id,
       p_matched_member_id: matchedId,
@@ -714,8 +806,11 @@ export function createRoster(ctx) {
         row: row.row,
         first_name: row.first_name,
         last_name: row.last_name,
-        email: row.email ?? null,
-        matched_member_id: answeredMatch(row),
+        email: null,
+        // The import carries the officer's answer as a decision on the row.
+        // A pasted list has no preview to answer, and resolves the match
+        // itself, so it names the member outright.
+        matched_member_id: row.matched_member_id ?? answeredMatch(row),
       })),
       p_academic_year_id: ctx.year.id,
     });
@@ -751,11 +846,7 @@ export function createRoster(ctx) {
     // An exact match who is NOT on this year's list is not a refusal either.
     // That is a returning member, and putting them on this year's roster is
     // exactly what the officer is asking for.
-    const email = el.addEmail.value.trim() || null;
-    const [matched] = matchRoster(
-      [{ first_name: first, last_name: last, email, row: 1 }],
-      state.everyMember,
-    );
+    const [matched] = matchRoster([{ first_name: first, last_name: last, row: 1 }], state.everyMember);
     const matchedId = matched.verdict === 'exact' ? matched.match.id : null;
     if (matchedId && state.enrolled.has(matchedId)) {
       el.addError.textContent = `${matched.match.display_name} is already on the roster.`;
@@ -767,7 +858,7 @@ export function createRoster(ctx) {
     el.addDialog.close();
     setBusy(true);
     try {
-      const result = await enrollPerson({ first_name: first, last_name: last, email }, matchedId);
+      const result = await enrollPerson({ first_name: first, last_name: last }, matchedId);
       const name = matchedId ? matched.match.display_name : `${first} ${last}`;
       const said = result?.was_created ? `${name} added.` : `${name} added to ${ctx.year.label}.`;
       ctx.note(said);
@@ -799,6 +890,168 @@ export function createRoster(ctx) {
     } catch {
       /* silent: Add already succeeded and said so */
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // A whole roster, pasted
+  // -------------------------------------------------------------------------
+  // The list arrives as a block of names, so this is the path most rosters will
+  // actually be built through. It reuses the import's batch call and the
+  // import's matching, and differs in the one way that matters: there is no
+  // preview to answer, so a name that exactly matches somebody already on file
+  // is treated as that person rather than asked about, and everything the run
+  // decided is reported afterwards instead.
+
+  function openPaste() {
+    el.pasteNames.value = '';
+    setHidden(el.pasteError, true);
+    el.pasteDialog.showModal();
+    el.pasteNames.focus();
+  }
+
+  const refuse = (message) => {
+    el.pasteError.textContent = message;
+    setHidden(el.pasteError, false);
+  };
+
+  async function runPaste(event) {
+    event.preventDefault();
+    const { people, repeated, unusable } = parsePastedNames(el.pasteNames.value);
+
+    if (!people.length) {
+      refuse(
+        unusable.length
+          ? 'No line has both a first and a last name.'
+          : 'Paste one name per line.',
+      );
+      return;
+    }
+    setHidden(el.pasteError, true);
+    el.pasteDialog.close();
+
+    // Same tiers as the import preview, with no address to match on, so an
+    // exact hit means somebody on file already carries this exact name.
+    const matched = matchRoster(people, state.everyMember);
+
+    const already = [];
+    const rows = [];
+    for (const row of matched) {
+      const hit = row.verdict === 'exact' ? row.match : null;
+      if (hit && state.enrolled.has(hit.id)) {
+        already.push(hit.display_name);
+        continue;
+      }
+      rows.push({
+        row: row.row,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        matched_member_id: hit?.id ?? null,
+        returning: Boolean(hit),
+        name: hit ? hit.display_name : `${row.first_name} ${row.last_name}`,
+      });
+    }
+
+    const added = [];
+    const returning = [];
+    const refused = [];
+    let unknown = 0;
+
+    setBusy(true);
+    try {
+      for (let at = 0; at < rows.length; at += IMPORT_CHUNK) {
+        const chunk = rows.slice(at, at + IMPORT_CHUNK);
+        const results = await enrollBatch(chunk);
+
+        // Same rule as the import: a chunk that does not account for every row
+        // it was given ends the run, because not knowing what landed is worse
+        // than stopping. Re-pasting is safe, the write is idempotent.
+        if (!Array.isArray(results) || results.length !== chunk.length) {
+          unknown = rows.length - at;
+          break;
+        }
+
+        results.forEach((result, index) => {
+          const row = chunk[index];
+          if (result?.error) {
+            refused.push({ name: row.name, message: result.message ?? '' });
+            return;
+          }
+          (result?.was_created ? added : returning).push(row.name);
+        });
+      }
+      await load();
+      ctx.onRosterChanged?.();
+    } catch (err) {
+      ctx.fail(err, null);
+      return;
+    } finally {
+      setBusy(false);
+    }
+
+    const wrote = added.length + returning.length;
+    const said = `${plural(wrote, 'member')} added.`;
+    announce(said);
+    showPasteReport({
+      pasted: people.length + repeated.length + unusable.length,
+      added,
+      returning,
+      already,
+      repeated,
+      unusable,
+      refused,
+      unknown,
+    });
+  }
+
+  /**
+   * What the paste did, counted and named.
+   *
+   * The heading counts what was pasted and every line below accounts for one
+   * part of it, so the numbers add up on screen. A group with nothing in it is
+   * not drawn: "0 repeated" is a sentence nobody needs.
+   */
+  function showPasteReport(report) {
+    el.pasteResultTitle.textContent = `${plural(report.pasted, 'name')} pasted`;
+    el.pasteResultMeta.textContent = ctx.year.label;
+
+    const groups = [];
+    const group = (kind, count, label, names) => {
+      if (!count) return;
+      groups.push(
+        h(
+          'div',
+          { class: 'paste-group', dataset: { kind } },
+          h('p', { class: 'paste-group-count' }, `${count} ${label}`),
+          h('p', { class: 'paste-group-names' }, names.join(', ')),
+        ),
+      );
+    };
+
+    group('added', report.added.length, 'added', report.added);
+    group('added', report.returning.length, 'returning', report.returning);
+    group('plain', report.already.length, 'already on the roster', report.already);
+    group(
+      'plain',
+      report.repeated.length,
+      'repeated',
+      report.repeated.map((entry) => entry.name),
+    );
+    group(
+      'warn',
+      report.unusable.length,
+      'skipped',
+      report.unusable.map((entry) => `${entry.raw} (${entry.why.toLowerCase()})`),
+    );
+    group(
+      'warn',
+      report.refused.length,
+      'refused',
+      report.refused.map((entry) => [entry.name, entry.message].filter(Boolean).join(': ')),
+    );
+    group('warn', report.unknown, 'unknown', ['Paste them again.']);
+
+    el.pasteResultGroups.replaceChildren(...groups);
+    el.pasteResultDialog.showModal();
   }
 
   // -------------------------------------------------------------------------
@@ -851,7 +1104,7 @@ export function createRoster(ctx) {
     el.importForm.reset();
     setHidden(el.importProblem, true);
     setHidden(el.importTable, true);
-    el.importSummary.textContent = 'Choose a CSV with first_name, last_name and email columns.';
+    el.importSummary.textContent = 'Choose a CSV with first_name and last_name columns.';
     el.importRun.disabled = true;
     el.importDialog.showModal();
   }
@@ -1006,7 +1259,6 @@ export function createRoster(ctx) {
       { dataset: { row: String(row.row), verdict: row.verdict, decision: row.decision ?? 'none' } },
       h('td', { class: 'import-line' }, String(row.row)),
       h('td', {}, name),
-      h('td', { class: 'roster-email' }, row.email ?? ''),
       cell,
     );
   }
@@ -1169,17 +1421,13 @@ export function createRoster(ctx) {
   // -------------------------------------------------------------------------
 
   /**
-   * The three columns the import reads, so a file exported here can be handed
-   * to next year's officers and imported straight back.
+   * The two columns the import reads, so a file exported here can be handed to
+   * next year's officers and imported straight back.
    */
   function exportRows() {
     return [
-      ['first_name', 'last_name', 'email'],
-      ...visibleMembers().map((member) => [
-        member.first_name,
-        member.last_name,
-        member.email ?? '',
-      ]),
+      ['first_name', 'last_name'],
+      ...visibleMembers().map((member) => [member.first_name, member.last_name]),
     ];
   }
 
@@ -1207,13 +1455,21 @@ export function createRoster(ctx) {
     });
     el.add.addEventListener('click', openAdd);
     el.addForm.addEventListener('submit', addMember);
+    el.pasteButton.addEventListener('click', openPaste);
+    el.pasteForm.addEventListener('submit', runPaste);
     el.removeForm.addEventListener('submit', confirmRemove);
     el.importButton.addEventListener('click', openImport);
     el.importFile.addEventListener('change', onFileChosen);
     el.importForm.addEventListener('submit', runImport);
     el.exportButton.addEventListener('click', exportCsv);
 
-    for (const dialog of [el.addDialog, el.removeDialog, el.importDialog, el.retroDialog]) {
+    for (const dialog of [
+      el.addDialog,
+      el.pasteDialog,
+      el.removeDialog,
+      el.importDialog,
+      el.retroDialog,
+    ]) {
       dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
     }
   }

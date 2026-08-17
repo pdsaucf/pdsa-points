@@ -1,215 +1,177 @@
 # Member portal
 
-Same static site, route `/me`. Members sign in and see their own progress toward
-Honorary Member.
+Same static site, route `/me`. A member types their name and sees their own progress
+toward Honorary Member, and a leaderboard of the whole club.
 
-This is also the cheapest fix for the failure mode that drove the review decision: a
-member who can see their own record notices a missing credit themselves, instead of it
-staying invisible until nobody catches it.
+This is the cheapest fix for the failure mode that drove the review decision: a member
+who can see their own record notices a missing credit themselves, instead of it staying
+invisible until nobody catches it.
 
-## The sign-in problem, and the claim flow
+## There is no sign-in
 
-Magic-link auth needs an email per member. **The imported 2025-26 roster has none**: the
-workbook carries names only, so 355 members arrive with `email IS NULL`. Requiring
-officers to source 355 email addresses before the portal works would stall it
-indefinitely.
+**Members do not have email addresses, and the club is not collecting any.** The imported
+roster carries names only. The first version of this portal was built around magic-link
+auth and a claim flow: a member signed in, and either their address matched a roster row
+or an officer confirmed which row was theirs. That whole apparatus existed to answer one
+question, "which roster row is this person", from an address.
 
-So sign-in is a claim, not a lookup:
+The question is now asked directly:
 
 ```
-  member enters email  ─▶  magic link  ─▶  signed in
-                                             │
-                    ┌────────────────────────┴────────────────────────┐
-                    │                                                 │
-        email matches a member row                    no match on email
-        exactly (case-insensitive)                            │
-                    │                                         ▼
-                    ▼                             "Which of these is you?"
-            linked automatically,                  roster search, pick one
-            portal is live now                              │
-                                                            ▼
-                                              claim filed, officer approves
-                                              (one click, in the review queue)
+   member types First name + Last name
+                    │
+     ┌──────────────┼───────────────────────────┐
+     │              │                           │
+  one match     two matches               no match
+     │              │                           │
+     ▼              ▼                           ▼
+ their points   "Which one is you?"      "Not on this years roster.
+                (told apart by the        Ask an officer."
+                 month they joined)
 ```
 
-Once officers start collecting emails on new members, the top path is the normal one and
-nobody waits. For the imported backlog, it costs one officer click per member, spread
-over whenever each person first signs in.
+What that means, stated rather than left implicit: **anybody who can open the site can
+read any member's category totals and whether they are honorary, by typing their name.**
+That is a deliberate decision and it is the same one the leaderboard makes. The
+spreadsheet this product replaces was a link anybody in the club could open, and the
+totals on it were the whole social function of the point system.
 
-```sql
-create table member_claims (
-  id          uuid primary key default gen_random_uuid(),
-  user_id     uuid not null references auth.users on delete cascade,
-  member_id   uuid not null references members,
-  status      text not null default 'pending',   -- pending | approved | rejected
-  requested_at timestamptz not null default now(),
-  reviewed_by uuid references auth.users,
-  reviewed_at timestamptz
-);
-create unique index one_live_claim_per_user
-  on member_claims (user_id) where status <> 'rejected';
-create unique index one_live_claim_per_member
-  on member_claims (member_id) where status <> 'rejected';
-```
+What is deliberately NOT public:
 
-The second index is the one that matters: two people cannot both hold a live claim on
-Abigail Catto's record.
+- no email address, no student id, no notes
+- no individual check-ins, so nothing pending and nothing declined
+- no officer's decline reason
+- nothing about anybody who is not on this year's roster
 
-A claim is what stops someone signing in as themselves and reading another member's
-record. Until it is approved, `profiles.member_id` stays null and the portal shows
-"waiting for an officer to confirm this is you", not somebody's data.
+Approved credit is a total. The individual records behind it are the part an officer needs
+and a stranger does not, so they are on the officer's member screen and not here.
 
-### The functions the flow is made of
+## The four functions the page is made of
 
-Every step above is a `SECURITY DEFINER` RPC, because every step does something the
-caller's own policies forbid. They are defined in `..._member_portal.sql` and
-enumerated in [01-data-model.md](01-data-model.md) section 8.
+Every one is a `SECURITY DEFINER` function that any caller may execute, including one
+holding nothing but the anon key. They are defined in
+`..._public_member_portal.sql` (migration 21).
 
-| Step | Function |
+| What the page needs | Function |
 |---|---|
-| signed in, first request of the session | `start_portal_session()` |
-| "which of these is you" | `search_roster_for_claim(q)` |
-| the member picks one | `file_member_claim(member_id, note)` |
-| the officer's queue | `list_pending_claims()` |
-| the officer's one click | `review_member_claim(claim_id, decision, note)` |
-| "Something's missing?" | `request_missing_credit(event_id, note, value)` |
+| the name box | `portal_find_members(first_name, last_name)` |
+| one member's points | `portal_scorecard(member_id)` |
+| the leaderboard, with breakdowns | `portal_leaderboard()` |
+| "What is an Honorary Member?" | `portal_requirements()` |
 
-`start_portal_session()` is the one that carries the branch in the diagram. A signed-in
-account has no `profiles` row until something creates one, and nothing else in the
-schema does, so this creates it with role `member` (**not** the `viewer` column default,
-which is read-only staff and can see the whole club) and links it when the address
-matches. It never changes a role that already exists, never moves a `member_id` that is
-already set, and never links a member another profile holds, so calling it on every page
-load is a read in every case except the first.
+Functions rather than a grant on `v_member_status`, because a grant on the view would
+hand `anon` the whole table through PostgREST's filter syntax. A function returns a shaped
+answer to a shaped question, and `test/public_portal.test.mjs` reads the keys of those
+answers rather than trusting the SELECT list.
 
-An officer whose account never got a `profiles` row comes out of it a member. That is
-deliberate: `fn_current_role()` was already null for them, so they had no officer rights
-to lose, and an admin now updates the role rather than inserting it.
+Name matching is `fn_normalise_name()`, the same comparison the duplicate view and the
+CSV import use, so `o halloran` finds `O'Halloran`. Both spellings of a roster name are
+compared, the display name and first plus last, so a member whose row carries a preferred
+name is found by either.
 
-Two notes carried by a claim, not one. `member_claims.note` is the member's own words and
-is shown back to them; `review_note` is why an officer declined. Same split, and same
-reason, as `member_note` against `review_note` on an attendance record.
-
-**The roster moves while a claim waits.** That gap is the design, not a defect: one
-officer click per member, whenever each person first signs in. But the days in between
-are exactly when roster cleanup happens, so `review_member_claim()` revalidates the
-member at approval instead of trusting the check made when the claim was filed.
-
-- **Merged**: followed to the survivor, the same bounded walk
-  `upsert_member_and_enroll()` does. A merge means the row moved, not that the person
-  stopped existing, and `merge_members()` took every attendance record with it. Linking
-  to the tombstone would hand somebody an empty portal. The claim keeps naming the row
-  the member actually picked; the resolved id is reported in the audit row instead.
-- **Archived**: refused. `search_roster_for_claim()` already declines to offer archived
-  rows, so approving one would leave the two halves of one rule disagreeing.
-
-A claim can also be POSTed straight to `member_claims`, since `claims_insert_own`
-permits it, skipping `file_member_claim()` and its checks. That is why those checks are
-made again at approval, which is the step that actually grants the read, and why the
-500-character limit on `note` is a check constraint on the column as well as a readable
-refusal in the function. A cap enforced in one of two write paths is not a cap.
+**The verdict is still Postgres's.** `portal_scorecard()` evaluates the published rules
+through `fn_member_requirement_status()`, which is the same function `v_member_status`
+uses for `is_honorary` and the same one the officer's member screen reads. Invariant 2
+holds when the caller is a stranger with a phone.
 
 ## What a member sees
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ PDSA Points                              Abigail Catto      Sign out     │
-│                                                                          │
-│ Honorary Member 2025-2026                              10 of 11 met      │
-│ ████████████████████████████████████████████████░░░░░                    │
-│                                                                          │
-│ ✓ GBMs                     9 of 9                                        │
-│ ✓ Volunteering             29.5 of 25 hours                              │
-│ ○ Clinical Workshops       4 of 5          one more to go                │
-│ ✓ Non-Clinical Workshops   6 of 5                                        │
-│ ✓ Socials                  7 of 6                                        │
-│ ✓ Dental School Visits     5 of 5                                        │
-│ ✓ Fundraising              5 of 5                                        │
-│ ✓ Partial Proceeds         5 of 5                                        │
-│ ✓ Tabling                  2 of 2                                        │
-│ ✓ Editorial Points                                                       │
-│     ✓ Speaking             1 of 1                                        │
-│     ✓ Writing              1 of 1                                        │
-│                                                                          │
-│ 45 points total                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────┐
+│  [ My points ]  [ Leaderboard ]  │
+│                                  │
+│  Abigail Catto      10 of 11 met │
+│  ✓ GBMs             9 of 9 events│
+│  ✓ Volunteering  29.5 of 25 hours│
+│  ○ Clinical Workshops  4 of 5    │
+│  ✓ Socials          7 of 6 events│
+│  ✓ Tabling          2 of 2 events│
+│  ✓ Speaking         1 of 1 event │
+│  ✓ Writing          1 of 1 event │
+│                                  │
+│  45 points          [ Not you? ] │
+│                                  │
+│ ┌──────────────────────────────┐ │
+│ │ What is an Honorary Member?  │ │
+│ │ Honorary Members are those   │ │
+│ │ who go above and beyond to   │ │
+│ │ be an active and valuable    │ │
+│ │ member to PDSA. To reach     │ │
+│ │ Honorary Member status,      │ │
+│ │ certain requirements must be │ │
+│ │ met.                         │ │
+│ │                              │ │
+│ │ GBMs                9 events │ │
+│ │ Volunteering       25 hours  │ │
+│ │ Socials             6 events │ │
+│ │ Speaking            1 event  │ │
+│ │   Journal Club,              │ │
+│ │   Media Speaking             │ │
+│ └──────────────────────────────┘ │
+└──────────────────────────────────┘
 ```
 
-The list is generated from the published requirement set, so a category added in
-September appears here in September with no code change. Nothing about the 2025-26
-categories is baked into this screen.
+Both lists are generated from the published requirement set, so a category added in
+September appears in September with no code change. Nothing about this year's categories
+is baked into the page, and `mock/verify-portal.mjs` renames a requirement mid-run and
+requires the screen to follow it.
 
-### Their record
+The box at the bottom is what the page says before anybody has typed anything, which is
+the common case for somebody who followed a link from a group chat.
+
+## The leaderboard
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ My records                                    [ Something's missing? ]   │
-│                                                                          │
-│ Mar 12   Zumba Night           Social                     ⏳ in review    │
-│ Mar 05   Soap Carving          Clinical Workshop, Social  ✓ counted      │
-│ Feb 26   Nothing Bundt Cakes   Partial Proceeds           ✗ not counted  │
-│            "Receipt photo was for a different location"                  │
-│ Feb 16   Spring GBM 4          GBM                        ✓ counted      │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────┐
+│  Leaderboard   2026-2027 · 64    │
+│                                  │
+│   1  Amir Petrov         ★   26  │
+│   1  Daniel Nguyen       ★   26  │
+│   6  Hannah Cheng        ★   23  │
+│  12  Leah Ortiz              19  │
+│        GBMs               12     │
+│        Volunteering  45 hours    │
+│        Socials             9     │
+│        Tabling             3     │
+└──────────────────────────────────┘
 ```
 
-Three things here matter more than they look:
+One row per member: rank, name, the honorary star, the point total. Tapping a row opens
+that member's per-category breakdown underneath it, one at a time.
 
-- **Pending submissions are visible.** "I checked in, did it work?" is answerable by the
-  member, at 8pm, without emailing anyone.
-- **Rejections show their reason.** The `review_note` an officer typed is the thing the
-  member actually needs, and hiding it just generates an email asking for it.
-- **Multi-category events show every category they earned.** Soap Carving counting twice
-  is visible, so it looks correct rather than looking like a bug.
+The breakdown ships with the list rather than being fetched per row opened: a club is a
+few hundred people and ten categories, and a request per tap would be hundreds of round
+trips for numbers already in hand.
 
-### "Something's missing?"
-
-Opens a short form: pick the event from a list, add a note, submit. That calls
-`request_missing_credit()`, which files an ordinary `attendance_records` row with
-`status = 'pending'` and `source = 'member_request'`, flagged `member_requested`, the
-note in `member_note`, landing in the same review queue as everything else.
-
-It refuses an event the member is not enrolled for, an unpublished one, and a second
-request for an event they already have a live record on. A member who is asking about an
-event from a year they were not on the roster for has made a mistake at the point of
-asking, and saying so beats filing a record that will be declined later.
-
-This deliberately reuses the existing machinery instead of adding a support inbox. An
-officer approving a missing-credit request is doing the exact same action, in the exact
-same screen, as approving a check-in.
+Ties share a rank, computed by `rank() over (order by point_total desc)`. A leaderboard
+that numbers two equal totals 4 and 5 is a leaderboard arguing with itself.
 
 ## Security
 
-Members are the narrowest role in the system. `profiles.role = 'member'` joins the
-existing enum, and every policy is keyed on `profiles.member_id`:
+`anon` holds EXECUTE on the four functions above and on nothing else: not the evaluator
+they call, not `fn_portal_year()`, and not one table, view or sequence.
+`test/privileges.test.mjs` compares the anon surface against a written-out list, so
+widening it again is a deliberate edit to that list rather than something that happens
+quietly.
 
-| Table | Member can |
-|---|---|
-| `members` | read own row, edit preferred name and email only |
-| `attendance_records` | read own rows; insert only via the missing-credit RPC |
-| `attendance_evidence` | read own rows |
-| `v_member_status`, requirement views | read own row only |
-| `member_claims` | read own row |
-| everything else | nothing |
+The one refusal these functions make is a member who is not on this year's roster:
+`portal_scorecard()` raises `PDS03` rather than answering with zeroes, because a screen of
+zeroes reads as "you have attended nothing" when the truth is "you are not on this year's
+list, go and see an officer".
 
-Two specifics worth stating:
+Nothing on this page writes anything. There is no missing-credit form and no way for a
+member to file a record: invariant 6 says every attendance record is approved by a person,
+and the way a member raises a missing credit now is to tell an officer, who has the member
+screen and the review queue for exactly that.
 
-- **A member can never see another member's progress or the roster.** There is no
-  leaderboard, and the progress board stays officer-only. Two name searches exist and
-  no more: the check-in autocomplete (`search_members()`) and the claim screen
-  (`search_roster_for_claim()`). Both return names and ids and nothing else, both cap
-  at ten rows and three letters, and both are rate limited. The claim search is open
-  only to an account that is not yet linked, and it hides anybody already linked or
-  already claimed, so it is strictly narrower than the anonymous one the check-in page
-  already exposes.
-- **A member cannot approve anything**, including their own missing-credit request. The
-  status column is set by RPC, never by a client write.
+## What is left of the old design
 
-## Scope
+The claim machinery in migration 18 (`start_portal_session()`, `search_roster_for_claim()`,
+`file_member_claim()`, `review_member_claim()`, `list_pending_claims()`,
+`request_missing_credit()`) is still in the database and is called by nothing. It was left
+in place rather than dropped: dropping it is a migration that can be written any time, and
+`member_claims` still holds the claims that were filed. The officer-facing Account claims
+tab and the member-facing claim screens are gone from the client.
 
-One block, sequenced after the requirements engine, because the progress screen renders
-whatever the published rule tree says and there is no point building it against
-hardcoded categories.
-
-Concretely: magic-link auth, the claim flow plus its officer approval, the progress
-screen, the record list, the missing-credit request, and member-scoped RLS.
+`members.email` is likewise still a column, holding whatever was imported into it. Nothing
+reads it and nothing writes it.

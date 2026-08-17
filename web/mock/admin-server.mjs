@@ -568,6 +568,9 @@ function totalsByMember(yearId) {
   return out;
 }
 
+/** fn_portal_year(): the one year with is_current set. */
+const portalYear = () => db.academic_years.find((row) => row.is_current) ?? null;
+
 const publishedSetFor = (yearId) =>
   db.requirement_sets.find((row) => row.academic_year_id === yearId && row.status === 'published') ??
   null;
@@ -1601,6 +1604,22 @@ function upsertOne(auth, yearId, row) {
     }
     if (!member && nid) {
       member = db.members.find((one) => String(one.ucf_nid ?? '').toLowerCase() === nid) ?? null;
+    }
+    // The name tier, from migration 20. It is what makes a re-run of an
+    // interrupted import land on the rows the first attempt wrote, now that
+    // nothing carries an address for the tier above to match on. Live rows
+    // only, oldest first, both spellings of the name compared.
+    if (!member) {
+      const wanted = normaliseName(`${first} ${last}`);
+      member =
+        db.members
+          .filter((one) => !one.archived_at && !one.merged_into_id)
+          .filter(
+            (one) =>
+              normaliseName(one.display_name) === wanted ||
+              normaliseName(`${one.first_name} ${one.last_name}`) === wanted,
+          )
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0] ?? null;
     }
   }
 
@@ -3497,6 +3516,235 @@ export const ADMIN_RPC = {
 
     record({ fn: 'validate_requirement_set', actor: auth.userId, setId: set.id, count: problems.length });
     json(res, 200, problems);
+  },
+
+  // -------------------------------------------------------------------------
+  // The public member portal
+  // -------------------------------------------------------------------------
+  // The four functions of migration 21, which any caller may make, including one
+  // holding nothing but the anon key. Held to the same standard as everything
+  // above: a mock that is more forgiving than Postgres is a lie that ships, so
+  // the shape of each answer is the shape the SQL builds, key for key, and the
+  // one refusal the SQL makes (a member who is not on this year's roster) is
+  // made here too.
+  //
+  // Nothing here checks a role. That is the point of them.
+
+  /** portal_find_members(p_first_name text, p_last_name text) returns table */
+  portal_find_members(res, body, req, helpers) {
+    const { json } = helpers;
+    const wanted = normaliseName(
+      `${String(body.p_first_name ?? '').trim()} ${String(body.p_last_name ?? '').trim()}`,
+    );
+    const first = String(body.p_first_name ?? '').trim();
+    const last = String(body.p_last_name ?? '').trim();
+
+    if (!first || !last || !wanted) {
+      record({ fn: 'portal_find_members', outcome: 'empty' });
+      json(res, 200, []);
+      return;
+    }
+
+    const yearId = portalYear()?.id ?? null;
+    const rows = db.member_enrollments
+      .filter((row) => row.academic_year_id === yearId)
+      .map((row) => ({
+        enrollment: row,
+        member: db.members.find((one) => one.id === row.member_id) ?? null,
+      }))
+      .filter((entry) => entry.member && !entry.member.archived_at && !entry.member.merged_into_id)
+      .filter(
+        (entry) =>
+          normaliseName(entry.member.display_name) === wanted ||
+          normaliseName(`${entry.member.first_name} ${entry.member.last_name}`) === wanted,
+      )
+      .sort((a, b) => String(a.enrollment.joined_on).localeCompare(String(b.enrollment.joined_on)))
+      .slice(0, 10)
+      .map((entry) => ({
+        member_id: entry.member.id,
+        display_name: entry.member.display_name,
+        joined_on: entry.enrollment.joined_on ?? null,
+      }));
+
+    record({ fn: 'portal_find_members', count: rows.length });
+    json(res, 200, rows);
+  },
+
+  /** portal_scorecard(p_member_id uuid) returns jsonb */
+  portal_scorecard(res, body, req, helpers) {
+    const { json, pds } = helpers;
+    const year = portalYear();
+    if (!year) {
+      pds(res, 'PDS03', 'No academic year is set up yet.');
+      return;
+    }
+
+    const member = db.members.find((row) => row.id === body.p_member_id) ?? null;
+    const enrollment = db.member_enrollments.find(
+      (row) => row.member_id === body.p_member_id && row.academic_year_id === year.id,
+    );
+    if (!member || member.archived_at || member.merged_into_id || !enrollment) {
+      record({ fn: 'portal_scorecard', outcome: 'PDS03' });
+      pds(res, 'PDS03', 'Nobody by that name is on this years roster.');
+      return;
+    }
+
+    const status = memberStatusRows().find(
+      (row) => row.member_id === member.id && row.academic_year_id === year.id,
+    );
+    const index = totalsByMember(year.id);
+    const totals = index.get(member.id) ?? new Map();
+    const set = publishedSetFor(year.id);
+
+    const categories = db.categories
+      .filter((row) => !row.archived_at)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        unit: row.unit,
+        unit_label: row.unit_label ?? null,
+        counts_toward_point_total: row.counts_toward_point_total,
+        total: totals.get(row.id) ?? 0,
+      }));
+
+    const requirements = set
+      ? evaluateSet(set.id, member.id, index).map((row) => {
+          const node = db.requirement_nodes.find((one) => one.id === row.node_id) ?? {};
+          return {
+            ...row,
+            sort_order: node.sort_order ?? 0,
+            category_ids: db.requirement_node_categories
+              .filter((link) => link.node_id === row.node_id)
+              .map((link) => link.category_id),
+          };
+        })
+      : [];
+
+    record({ fn: 'portal_scorecard', memberId: member.id });
+    json(res, 200, {
+      year: { id: year.id, label: year.label },
+      member: {
+        id: member.id,
+        display_name: member.display_name,
+        joined_on: enrollment.joined_on ?? null,
+      },
+      point_total: status?.point_total ?? 0,
+      is_honorary: Boolean(status?.is_honorary),
+      categories,
+      requirements,
+      root_node_id: set?.root_node_id ?? null,
+    });
+  },
+
+  /** portal_leaderboard() returns jsonb */
+  portal_leaderboard(res, body, req, helpers) {
+    const { json, pds } = helpers;
+    const year = portalYear();
+    if (!year) {
+      pds(res, 'PDS03', 'No academic year is set up yet.');
+      return;
+    }
+
+    const status = memberStatusRows().filter((row) => row.academic_year_id === year.id);
+    const index = totalsByMember(year.id);
+
+    const rows = db.member_enrollments
+      .filter((row) => row.academic_year_id === year.id)
+      .map((row) => db.members.find((one) => one.id === row.member_id))
+      .filter((member) => member && !member.archived_at && !member.merged_into_id)
+      .map((member) => {
+        const held = status.find((row) => row.member_id === member.id);
+        const totals = {};
+        for (const [categoryId, total] of index.get(member.id) ?? new Map()) {
+          totals[categoryId] = total;
+        }
+        return {
+          member_id: member.id,
+          display_name: member.display_name,
+          point_total: held?.point_total ?? 0,
+          is_honorary: Boolean(held?.is_honorary),
+          totals,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.point_total - a.point_total || String(a.display_name).localeCompare(b.display_name),
+      );
+
+    // rank() over (order by point_total desc): ties share a rank, and the next
+    // rank skips, which is what the window function does.
+    let rank = 0;
+    let seen = 0;
+    let previous = null;
+    for (const row of rows) {
+      seen += 1;
+      if (row.point_total !== previous) {
+        rank = seen;
+        previous = row.point_total;
+      }
+      row.rank = rank;
+    }
+
+    record({ fn: 'portal_leaderboard', count: rows.length });
+    json(res, 200, {
+      year: { id: year.id, label: year.label },
+      categories: db.categories
+        .filter((row) => !row.archived_at)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map((row) => ({
+          id: row.id,
+          name: row.name,
+          unit: row.unit,
+          unit_label: row.unit_label ?? null,
+          counts_toward_point_total: row.counts_toward_point_total,
+        })),
+      members: rows,
+    });
+  },
+
+  /** portal_requirements() returns jsonb */
+  portal_requirements(res, body, req, helpers) {
+    const { json, pds } = helpers;
+    const year = portalYear();
+    if (!year) {
+      pds(res, 'PDS03', 'No academic year is set up yet.');
+      return;
+    }
+    const set = publishedSetFor(year.id);
+
+    record({ fn: 'portal_requirements', setId: set?.id ?? null });
+    json(res, 200, {
+      year: { id: year.id, label: year.label },
+      set: set
+        ? { id: set.id, name: set.name, version: set.version, root_node_id: set.root_node_id }
+        : null,
+      nodes: set
+        ? db.requirement_nodes
+            .filter((row) => row.requirement_set_id === set.id)
+            .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+            .map((node) => ({
+              node_id: node.id,
+              parent_id: node.parent_id,
+              type: node.type,
+              label: node.label,
+              sort_order: node.sort_order,
+              min_value: node.min_value ?? null,
+              min_children_passing: node.min_children_passing ?? null,
+              categories: db.requirement_node_categories
+                .filter((link) => link.node_id === node.id)
+                .map((link) => db.categories.find((one) => one.id === link.category_id))
+                .filter(Boolean)
+                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                .map((category) => ({
+                  id: category.id,
+                  name: category.name,
+                  unit: category.unit,
+                  unit_label: category.unit_label ?? null,
+                })),
+            }))
+        : [],
+    });
   },
 
   /** preview_requirement_set(p_set_id uuid) returns table (node_id, label, passing, total) */

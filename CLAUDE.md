@@ -121,8 +121,8 @@ Breaking any of these reintroduces a problem the design exists to solve:
    rows. A category name, a threshold, which categories exist, and the overall pass rule
    all change from the admin UI with no deploy.
 2. **Honorary status is computed in Postgres**, never in client JS.
-3. **The anonymous check-in page touches no table.** It calls `SECURITY DEFINER` RPCs
-   only. An anonymous caller can never set `status`.
+3. **The anonymous pages touch no table.** The check-in page and the member portal call
+   `SECURITY DEFINER` RPCs only. An anonymous caller can never set `status`.
 4. **Categories archive, never delete.** Every reference is `on delete restrict`.
 5. **An event is defined once.** Categories attach via `event_categories`. Never add a
    `category_id` column to `events`.
@@ -130,6 +130,14 @@ Breaking any of these reintroduces a problem the design exists to solve:
    queue makes that cheap; it does not skip the step.
 7. **Photos are never deleted on a timer.** Purging is an operator action, and only
    reviewed records are eligible.
+8. **A member has no email address, and the member portal is not an account.** Somebody
+   types their name and reads their own points. Nothing collects an address anywhere in
+   the product; `members.email` is a column holding history that nothing reads.
+9. **What the portal exposes is club-facing figures and nothing else.** Category totals,
+   point totals, the honorary verdict and the published rules, through four shaped
+   functions. Never an address, a student id, a note, an individual check-in, or anything
+   pending or declined. Widening that surface means editing the written-out list in
+   `test/privileges.test.mjs` on purpose.
 
 ## Multi-agent workflow
 

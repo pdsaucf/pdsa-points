@@ -105,24 +105,11 @@ visible:
 > for a category like Tabling where the stakes are low. It ships **off everywhere**, as
 > an advanced toggle in the event editor. Default behaviour is review everything.
 
-### Account claims
-
-A second, much smaller tab in the same screen. When a member signs in to the portal with
-an email that doesn't match their roster row, they pick themselves from the roster and
-an officer confirms it:
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ Account claims · 3                                                       │
-│  abigail.catto@gmail.com   says they are   Abigail Catto                 │
-│    Roster email: none on file · 45 records · joined Aug 2025             │
-│                                     [ Confirm ]  [ Not them ]            │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-Most members never generate one of these: if the email they sign in with matches their
-roster email, they are linked automatically. Claims exist for the 355 imported members
-who arrived with no email on file. See [04-member-ui.md](04-member-ui.md).
+> **There is no Account claims tab.** There was one, and it existed because the member
+> portal was an account: a member signed in with an address, and an officer confirmed
+> which roster row was theirs. Members have no email addresses and the club is not
+> collecting any, so the portal is a name box now and there is nothing to confirm. See
+> [04-member-ui.md](04-member-ui.md).
 
 ---
 
@@ -227,12 +214,45 @@ Four details that matter:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Members  355         Search […]      [+ Add ]  [ Import CSV ]  [ Export ]│
+│ Members  355   Search […]   [ Add ] [ Paste names ] [ Import CSV ] [ Export ]│
 │ ──────────────────────────────────────────────────────────────────────── │
-│ Abigail Catto      abigail@…    45 pts   10/11 reqs   ● active       ⋯   │
-│ Aaron Ozan         aaron@…       6 pts    0/11 reqs   ● active       ⋯   │
+│ Abigail Catto        45 pts   ★   joined Aug 2025    [ Open ] [ Remove ] │
+│ Aaron Ozan            6 pts       joined Aug 2025    [ Open ] [ Remove ] │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+**A member has no email address.** The column is still in the database holding what was
+imported into it years ago, and nothing reads or writes it: no column here, no field on
+Add, no cell in the CSV, and nothing asked at check-in. A name is the whole identity, and
+`upsert_member_and_enroll()` matches on it (migration 20).
+
+**Open** is on every row as well as on the name, because a name that happens to be
+clickable is not an affordance anybody finds.
+
+### Paste names
+
+The way a club list actually arrives is a block of names in a message, and typing them one
+at a time through Add is the reason a spreadsheet outlives every attempt to replace it. So
+the paste box takes them as they come: one per line, bullets and numbering stripped,
+`Bell, Marcus` read as `Marcus Bell`, a surname of several words kept whole.
+
+Afterwards it reports what it did, and the parts add up to the number in the heading:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 24 names pasted                                                          │
+│ 2026-2027                                                                │
+│  19 added              Marcus Bell, Grace Okonkwo, Aisha Rahman, …       │
+│   2 returning          Ada Levy, Sam Cole                                │
+│   1 already on the roster   Abigail Catto                                │
+│   1 repeated           Marcus Bell                                       │
+│   1 skipped            Bob (needs a first and last name)                 │
+│                                            [ Done ]                      │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+A line with one word cannot be written, because guessing which half is missing would put a
+made-up surname on a real person, so those lines are reported rather than dropped.
 
 CSV import previews every row and shows fuzzy matches against existing members
 ("**Abby Catto** looks like **Abigail Catto**: same person, or new member?") before
@@ -241,10 +261,12 @@ must not regress.
 
 ### Duplicate people
 
-A banner appears whenever the roster contains likely duplicates, using trigram similarity on
-name, plus exact matches on email or NID. This is the other half of the "duplicates
-happen" problem: the review queue stops one person checking in twice for one event, and
-this stops one person existing twice on the roster.
+A banner appears whenever the roster contains likely duplicates, using trigram similarity
+on name, plus exact matches on email or NID for the rows that still carry either. This is
+the other half of the "duplicates happen" problem: the review queue stops one person
+checking in twice for one event, and this stops one person existing twice on the roster.
+With no address on a new row, it is also the only thing that can tell two people who
+genuinely share a name apart, which is why merging and dismissing both live here.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -270,9 +292,9 @@ check-in (§ Review queue, above), so their earlier attendance sits unmatched, w
 officer already knows who they are, so it's also the moment those records can be
 offered back: `fn_retroactive_match_candidates(member_id)` returns every unresolved
 check-in that might be theirs, restricted to years they're actually enrolled in. A
-claimed email that matches the member's own is reported as an identity; a claimed name
-that merely resembles theirs is reported as a resemblance, never presented with the same
-confidence. Nothing is linked until an officer confirms which ones are really theirs,
+claimed name that resembles theirs is reported as a resemblance, never as a certainty. (A
+claimed address that matched the member's own used to be reported as an identity, and
+still is for records filed before check-in stopped asking for one.) Nothing is linked until an officer confirms which ones are really theirs,
 through `link_retroactive_matches()`, and confirming does not approve: the records stay
 in the review queue exactly like every other pending record.
 
@@ -285,9 +307,8 @@ skipped either), so a stale screen never reads as a success.
 
 Asking about an archived member's earlier check-ins is refused outright: archiving already
 said this is not somebody the club is tracking. Asking about a member who has since been
-merged into somebody else follows the merge to the survivor, the same way approving an
-account claim does (see Account claims, below), since that's where `merge_members()`
-already moved the rest of their history.
+merged into somebody else follows the merge to the survivor, since that's where
+`merge_members()` already moved the rest of their history.
 
 ### Member detail
 
@@ -337,8 +358,8 @@ one click to CSV for whoever still wants a spreadsheet.
         │   ▸ Abigail Catto              │
         │   ▸ Catherine Diaz             │
         │   ─────────────────────────    │
-        │   ▸ I don't see my name        │ ──▶ full name + email,
-        │                                │     goes to review to be matched
+        │   ▸ I don't see my name        │ ──▶ full name, goes to review
+        │                                │     to be matched
         │  Photo in your PDSA shirt      │
         │  [ 📷 Take photo ]             │  ← compressed to ~200 KB before upload
         │                                │
@@ -426,7 +447,7 @@ Rules behind it:
 | **P2** Review queue | Triage flags, flagged/routine split, unmatched-name resolution, grid + lightbox, bulk approve/reject, audit | 1 block |
 | **P3** Requirements engine | Node model, evaluator, editor UI, live preview | **2 blocks**, the real cost centre |
 | **P4** Board + roster | Progress board, member detail, CSV import/export UI, duplicate detection + merge | 1 block |
-| **P5** Member portal | Magic-link auth, account claims + officer approval, progress screen, record list, missing-credit requests, member RLS | 1 block |
+| **P5** Member portal | Name lookup, the scorecard, the leaderboard, the Honorary explainer, four public functions | 1 block |
 | **P6** Ops | Storage screen + purge flow, keep-alive ping, backups | 1 block |
 
 **Roster loading is not in P4.** The system starts with no members, so a bulk roster

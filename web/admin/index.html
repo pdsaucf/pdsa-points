@@ -105,9 +105,6 @@
           <button id="tab-review" type="button" class="tab" aria-selected="true" aria-controls="panel-review">
             Review <span id="tab-review-count" class="pill">0</span>
           </button>
-          <button id="tab-claims" type="button" class="tab" aria-selected="false" aria-controls="panel-claims">
-            Account claims <span id="tab-claims-count" class="pill">0</span>
-          </button>
           <button id="tab-progress" type="button" class="tab" aria-selected="false" aria-controls="panel-progress">
             Progress
           </button>
@@ -189,24 +186,6 @@
         </p>
       </main>
 
-      <main id="panel-claims" class="panel-view" hidden>
-        <section id="loading-claims" class="empty" aria-busy="true">
-          <p class="spinner" aria-hidden="true"></p>
-          <p class="muted">Loading claims…</p>
-        </section>
-
-        <section id="empty-claims" class="empty" hidden>
-          <p class="empty-tick" aria-hidden="true">✓</p>
-          <h2 class="empty-title">No account claims</h2>
-          <p class="muted">
-            A claim appears when a member signs in with an email that is not on their
-            roster row.
-          </p>
-        </section>
-
-        <div id="claims-list" class="flagged-list"></div>
-      </main>
-
       <!--
         The progress board, which replaces the Total and Honorary tabs of the
         spreadsheet. Every number on it is read from the database: the point
@@ -222,7 +201,7 @@
               class="input"
               type="search"
               autocomplete="off"
-              placeholder="Name or email"
+              placeholder="Name"
             />
           </div>
           <div class="toolbar-field toolbar-field-narrow">
@@ -272,11 +251,12 @@
               class="input"
               type="search"
               autocomplete="off"
-              placeholder="Name or email"
+              placeholder="Name"
             />
           </div>
           <p id="roster-count" class="count" aria-live="polite"></p>
           <button id="roster-add" type="button" class="button">Add</button>
+          <button id="roster-paste" type="button" class="button">Paste names</button>
           <button id="roster-import" type="button" class="button">Import CSV</button>
           <button id="roster-export" type="button" class="button">Export CSV</button>
         </div>
@@ -322,7 +302,6 @@
           <thead>
             <tr>
               <th scope="col">Member</th>
-              <th scope="col">Email</th>
               <th class="board-number" scope="col">Points</th>
               <th class="board-number" scope="col">Honorary</th>
               <th scope="col">Joined</th>
@@ -624,35 +603,6 @@
       </form>
     </dialog>
 
-    <!--
-      Declining an account claim, which captures a reason for the same reason a
-      declined check-in does: the member reads it on their own screen, and a
-      decline with no reason produces the email this product exists to stop.
-      review_member_claim() keeps it in member_claims.review_note, which is the
-      officer's column. member_claims.note beside it is the member's own words.
-    -->
-    <dialog id="claim-decline-dialog" class="dialog">
-      <form id="claim-decline-form" method="dialog" novalidate>
-        <h2 class="dialog-title">Decline claim</h2>
-        <p id="claim-decline-who" class="muted small"></p>
-        <label class="label" for="claim-decline-note">Reason</label>
-        <input
-          id="claim-decline-note"
-          class="input"
-          type="text"
-          maxlength="200"
-          autocomplete="off"
-          placeholder="That roster row belongs to somebody else"
-          required
-        />
-        <p id="claim-decline-error" class="field-error" hidden>Type a reason.</p>
-        <div class="dialog-actions">
-          <button type="button" class="button" data-close>Cancel</button>
-          <button type="submit" class="button button-danger">Decline</button>
-        </div>
-      </form>
-    </dialog>
-
     <!-- Add as new member, for somebody genuinely not on the roster. -->
     <dialog id="new-member-dialog" class="dialog">
       <form id="new-member-form" method="dialog" novalidate>
@@ -665,8 +615,6 @@
         <input id="new-first" class="input" type="text" autocomplete="off" required />
         <label class="label" for="new-last">Last name</label>
         <input id="new-last" class="input" type="text" autocomplete="off" required />
-        <label class="label" for="new-email">Email (optional)</label>
-        <input id="new-email" class="input" type="email" autocomplete="off" spellcheck="false" />
         <p id="new-member-error" class="field-error" hidden>
           First and last name are both required.
         </p>
@@ -766,18 +714,48 @@
         <input id="roster-add-first" class="input" type="text" autocomplete="off" required />
         <label class="label" for="roster-add-last">Last name</label>
         <input id="roster-add-last" class="input" type="text" autocomplete="off" required />
-        <label class="label" for="roster-add-email">Email (optional)</label>
-        <input
-          id="roster-add-email"
-          class="input"
-          type="email"
-          autocomplete="off"
-          spellcheck="false"
-        />
         <p id="roster-add-error" class="field-error" hidden></p>
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button type="submit" class="button button-primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      A whole roster, pasted. The way a club list actually arrives is a block of
+      names in a message, and typing them one at a time through Add is the
+      reason a spreadsheet outlived every attempt to replace it.
+    -->
+    <dialog id="paste-dialog" class="dialog dialog-wide">
+      <form id="paste-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Paste names</h2>
+        <p class="muted small">One name per line.</p>
+        <textarea
+          id="paste-names"
+          class="input paste-box"
+          rows="10"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Marcus Bell
+Grace Okonkwo"
+        ></textarea>
+        <p id="paste-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="paste-run" type="submit" class="button button-primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- What that paste did, per name, so nobody has to read the table to find out. -->
+    <dialog id="paste-result-dialog" class="dialog dialog-wide">
+      <form id="paste-result-form" method="dialog">
+        <h2 id="paste-result-title" class="dialog-title"></h2>
+        <p id="paste-result-meta" class="muted small"></p>
+        <div id="paste-result-groups" class="paste-groups"></div>
+        <div class="dialog-actions">
+          <button type="submit" class="button button-primary">Done</button>
         </div>
       </form>
     </dialog>
@@ -835,7 +813,6 @@
               <tr>
                 <th class="board-number" scope="col">Row</th>
                 <th scope="col">Name</th>
-                <th scope="col">Email</th>
                 <th scope="col">What happens</th>
               </tr>
             </thead>
@@ -883,7 +860,7 @@
       </form>
     </dialog>
 
-    <!-- Correcting a name or an address on the roster row itself. -->
+    <!-- Correcting a name on the roster row itself. -->
     <dialog id="member-edit-dialog" class="dialog">
       <form id="member-edit-form" method="dialog" novalidate>
         <h2 class="dialog-title">Edit member</h2>
@@ -893,14 +870,6 @@
         <input id="member-edit-last" class="input" type="text" autocomplete="off" required />
         <label class="label" for="member-edit-preferred">Preferred name (optional)</label>
         <input id="member-edit-preferred" class="input" type="text" autocomplete="off" />
-        <label class="label" for="member-edit-email">Email (optional)</label>
-        <input
-          id="member-edit-email"
-          class="input"
-          type="email"
-          autocomplete="off"
-          spellcheck="false"
-        />
         <p id="member-edit-error" class="field-error" hidden></p>
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>

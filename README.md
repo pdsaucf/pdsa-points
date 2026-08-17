@@ -79,6 +79,9 @@ feature, so each one can be read on its own.
 | `..._member_import_batch.sql` | `upsert_members_and_enroll()`, which imports a roster in one request instead of 355 |
 | `..._member_portal.sql` | `attendance_records.member_note`, `member_claims.review_note`, and the six RPCs the member portal signs in through: session bootstrap, the claim flow and its officer approval, and the missing-credit request. Also locks both member rows at the top of `merge_members()`, which approving a claim now depends on |
 | `..._retroactive_matching.sql` | `fn_retroactive_match_candidates()` and `link_retroactive_matches()`, so a member's check-ins from before they joined are offered back to them instead of resolved one at a time |
+| `..._storage_ops.sql` | the purge flow, the storage screen's figures, and the keep-alive ping |
+| `..._name_is_the_identity.sql` | `upsert_member_and_enroll()` resolves a row by name when nothing else identifies it. A member has no email address any more, and the email tier was what made a re-run of an interrupted import land on the rows the first attempt wrote |
+| `..._public_member_portal.sql` | the four functions the member portal is made of, callable by `anon`: `portal_find_members()`, `portal_scorecard()`, `portal_leaderboard()`, `portal_requirements()` |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
@@ -153,14 +156,14 @@ python3 scripts/import_roster.py roster.csv --year 2026-2027 --out local/roster.
 Then apply `local/roster.sql` to the database, through the Supabase SQL editor
 or `psql`.
 
-The CSV needs a header row with `first_name` and `last_name`. `email` is
-optional, extra columns are ignored, and header names are matched loosely, so
-`First Name` and `first-name` both work. The script refuses to run on
-malformed input and names the row that is wrong rather than guessing.
+The CSV needs a header row with `first_name` and `last_name`. Extra columns are
+ignored, including an `email` column a previous year's file still carries, and
+header names are matched loosely, so `First Name` and `first-name` both work.
+The script refuses to run on malformed input and names the row that is wrong
+rather than guessing.
 
 Duplicates are handled twice over: within the file, and against members who are
-already in the database. A match is by email when there is one, and by
-normalised full name otherwise, which is the same rule
+already in the database, by normalised full name, which is the same rule
 `fn_normalise_name()` uses in the database. The generated SQL is idempotent, so
 applying it twice is harmless, and re-running it after adding people to the CSV
 only inserts the new ones.
@@ -180,11 +183,18 @@ grant at all. The anonymous check-in page reaches the database only through
 four `SECURITY DEFINER` RPCs (`get_checkin_context`, `search_members`,
 `create_evidence_upload`, `submit_checkin`), none of which takes a status or a
 source argument, so an anonymous caller structurally cannot approve anything.
+The member portal is anonymous too, and reaches the database through four more
+`SECURITY DEFINER` functions (`portal_find_members`, `portal_scorecard`,
+`portal_leaderboard`, `portal_requirements`). Members have no email addresses
+and no accounts: somebody types their name and reads their own points, and the
+leaderboard lists the club the way the spreadsheet this replaces did. Each
+function answers a shaped question with the club-facing figures and nothing
+else, and `test/public_portal.test.mjs` holds that line: no address, no student
+id, no notes, no individual check-ins, nothing pending or declined.
+
 Everyone signed in shares the `authenticated` database role; admin, officer,
 viewer and member are values of `profiles.role`, read through `SECURITY
-DEFINER` helpers so that policies on `profiles` do not recurse. Members are
-keyed on `profiles.member_id`, which stays null until an officer approves an
-account claim, so an unclaimed account sees nothing. An account with no
+DEFINER` helpers so that policies on `profiles` do not recurse. An account with no
 `profiles` row at all has no role, and no role is refused: `fn_assert_officer()`
 and `fn_assert_admin()` treat an indeterminate role as a no rather than as a
 missing no. `test/privileges.test.mjs` holds both that and the grants, so a
@@ -196,8 +206,8 @@ opened yet, `PDS03` bad argument, `PDS04` evidence problem, `PDS05` already
 checked in, `PDS06` cannot approve an unmatched record, `PDS07` wrong role,
 `PDS08` unknown requirement set, `PDS09` rate limited, `PDS10` check-in has
 closed, `PDS11` the requirement tree is not a tree, `PDS12` a requirement set
-failed validation, `PDS13` this account already holds a claim or a link, `PDS14`
-that member is already claimed by, or linked to, another account.
+failed validation, `PDS13` and `PDS14` the claim codes, raised by the migration
+18 functions the client no longer calls.
 
 `PDS02` and `PDS10` are separate codes on purpose. They were one code, which
 forced the page to read the message text to decide which of two screens to show,
@@ -205,11 +215,6 @@ so rewording a sentence would have silently shown the wrong one with no test
 failing. The message text is copy and is meant to be rewritten freely; the code
 is the contract. If a further distinction is ever needed, add a code rather than
 a sentence.
-
-`PDS13` and `PDS14` are the same rule applied again. A claim that cannot be
-filed has failed for one of two reasons, and only one of them is the member's
-mistake: their own claim is already waiting, or somebody else already holds one
-on that person, which an officer has to look at.
 
 ### Check-in rate limits, and the client nonce
 

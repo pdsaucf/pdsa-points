@@ -42,14 +42,13 @@ const RECORD_SELECT = [
   'event_id',
   'member_id',
   'claimed_name',
-  'claimed_email',
   'status',
   'source',
   'submitted_value',
   'flags',
   'submitted_at',
   'review_note',
-  'members(id,display_name,email)',
+  'members(id,display_name)',
   // !inner so the year filter below narrows the records rather than just
   // blanking the embedded event on the ones from another year.
   'events!inner(id,title,occurred_on,academic_year_id,event_categories(credit_mode,categories(name,unit,unit_label)))',
@@ -136,7 +135,6 @@ export function createReview(ctx) {
     newMemberForm: $('new-member-form'),
     newFirst: $('new-first'),
     newLast: $('new-last'),
-    newEmail: $('new-email'),
     newMemberError: $('new-member-error'),
     photoDialog: $('photo-dialog'),
     photoBody: $('photo-dialog-body'),
@@ -220,7 +218,7 @@ export function createReview(ctx) {
     if (!needed) return;
 
     state.roster = await select('members', {
-      select: 'id,display_name,email',
+      select: 'id,display_name',
       filters: { archived_at: 'is.null', merged_into_id: 'is.null' },
       order: 'display_name.asc',
     });
@@ -419,7 +417,6 @@ export function createReview(ctx) {
         valueLabel(record),
         // The "Requested by member" heading already says where it came from.
         lead === 'member_requested' ? null : SOURCE_NOTE[record.source],
-        record.claimed_email || null,
       ]),
     );
 
@@ -514,11 +511,7 @@ export function createReview(ctx) {
    */
   function renderSuggestions(record, card) {
     const list = h('ul', { class: 'suggestions' });
-    const ranked = rankMembers(
-      { name: record.claimed_name, email: record.claimed_email },
-      state.roster ?? [],
-      { limit: 5 },
-    );
+    const ranked = rankMembers({ name: record.claimed_name }, state.roster ?? [], { limit: 5 });
 
     if (!ranked.length) {
       list.append(
@@ -784,7 +777,7 @@ export function createReview(ctx) {
 
   async function resolveToNewMember(record, card) {
     const guess = splitName(record.claimed_name);
-    const details = await askNewMember(guess, record.claimed_email);
+    const details = await askNewMember(guess);
     if (!details) return;
 
     setBusy(true);
@@ -795,7 +788,7 @@ export function createReview(ctx) {
         p_new_member: details,
       });
       const display = `${details.first_name} ${details.last_name}`.trim();
-      const member = { id: memberId, display_name: display, email: details.email ?? null };
+      const member = { id: memberId, display_name: display };
       if (state.roster) state.roster.push(member);
       onResolved(record, member, card, `${display} added to the roster and linked.`);
     } catch (err) {
@@ -807,7 +800,7 @@ export function createReview(ctx) {
 
   function onResolved(record, member, card, said) {
     record.member_id = member.id;
-    record.members = { id: member.id, display_name: member.display_name, email: member.email ?? null };
+    record.members = { id: member.id, display_name: member.display_name };
     record.flags = (record.flags ?? []).filter((f) => f !== 'unmatched_name');
     // resolve_unmatched() enrols them in the event's year as part of the same
     // transaction, so a not_enrolled flag left over from submission is stale.
@@ -939,11 +932,10 @@ export function createReview(ctx) {
     });
   }
 
-  function askNewMember(guess, email) {
+  function askNewMember(guess) {
     return new Promise((resolve) => {
       el.newFirst.value = guess.first_name ?? '';
       el.newLast.value = guess.last_name ?? '';
-      el.newEmail.value = email ?? '';
       setHidden(el.newMemberError, true);
 
       // Same guard as askReason, for the same reason.
@@ -966,7 +958,7 @@ export function createReview(ctx) {
           return;
         }
         el.newMemberDialog.close();
-        finish({ first_name: first, last_name: last, email: el.newEmail.value.trim() || null });
+        finish({ first_name: first, last_name: last });
       };
 
       const onClose = () => finish(null);

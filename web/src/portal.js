@@ -1,107 +1,58 @@
-// The member portal shell: /me.
+// The member portal: /me.
 //
-// Signing in, working out which of four screens this account is on, and handing
-// the page to whichever one it is. docs/04-member-ui.md is the design, and the
-// branch it draws is not a preference: an account that is not linked to a
-// roster row must never be shown somebody's data, so the screen is chosen by
-// what start_portal_session() says and by nothing this file infers.
+// A member types their name and reads their points. That is the whole product
+// on this page, and it is a much smaller page than it was.
 //
-//   linked                    the progress screen and the record list
-//   not linked, no claim      "which of these is you", roster search
-//   claim pending             waiting for an officer, and nothing else
-//   claim rejected            the officer's reason, and a way to try again
+// WHAT WAS HERE BEFORE, AND WHY IT IS GONE. The portal used to be an account: a
+// magic link, a session, start_portal_session() to work out whether that account
+// was linked to a roster row, a roster search to claim one, and an officer to
+// confirm the claim. All of it existed to answer one question, "which roster row
+// is this person", from an email address. The club does not have addresses for
+// its members and is not collecting any, so the question is now asked directly:
+// what is your name.
 //
-// WHAT IS SHARED WITH THE OFFICER SCREENS, AND WHY EACH ONE IS SHARED.
+// NOTHING ON THIS PAGE IS AUTHENTICATED, and that is deliberate rather than
+// convenient. Every call goes through api.js, which sends the anon key and never
+// a session, so this page behaves the same for a member, an officer with a
+// laptop open, and a stranger with the link. The four functions it calls are
+// SECURITY DEFINER and shaped: they answer with the club-facing figures and
+// nothing else. The reasoning, including what that does expose, is written out
+// in supabase/migrations/20260817110000_public_member_portal.sql.
 //
-//   src/auth.js       magic-link sign-in, the session, refresh, sign out. Not
-//                     officer-specific: the only officer-shaped thing in it was
-//                     create_user: false, which is now an argument (see
-//                     sendMagicLink) because this portal is the one surface
-//                     where signing in for the first time IS creating the
-//                     account. docs/04 has 355 members arriving with no email
-//                     on file, so a portal that could only sign in addresses an
-//                     admin had already provisioned would serve nobody.
-//   src/rest.js       authenticated reads and RPCs, with the 401-then-refresh
-//                     recovery and the two retry budgets from api.js.
-//   src/ui.js         the DOM helpers, including announce(), so this page talks
-//                     to a screen reader exactly as the admin app does.
-//   src/format.js     pluralUnit and valueFieldLabel, used by the missing
-//                     credit form for the same reason the check-in page uses
-//                     them: the label comes from the category, and nothing in
-//                     the client knows the word "hours".
-//   src/requirement-model.js  buildTree, flatten and unitWord. The progress
-//                     list is the published rule set, drawn, so it needs the
-//                     same tree the requirements editor works in.
+// THE VERDICT IS STILL POSTGRES'S. is_honorary and every requirement's pass or
+// fail arrive from fn_member_requirement_status() through the scorecard call.
+// Nothing here decides whether somebody is honorary (invariant 2), and nothing
+// here knows what a threshold is: it draws the rows it is given.
 //
-// WHAT IS NOT SHARED, ON PURPOSE. officer-errors.js. A member reading "Reload
-// the queue" is a member reading somebody else's job. src/member-errors.js is
-// the same idea in their register, and the reasoning is at the top of it.
+// WHAT IS SHARED WITH THE OTHER SCREENS
 //
-// NO ROLE GUARD. Unlike /admin/, every signed-in account is welcome here.
-// start_portal_session() gives an account with no profiles row the role
-// `member`, and an officer who opens this page sees their own progress if they
-// are linked and the claim screen if they are not, which is what migration 18
-// describes and is why search_roster_for_claim() checks "not linked" rather
-// than "is a member".
+//   src/api.js       the anonymous request path, with the retry budgets and the
+//                    per-attempt timeout. The check-in page uses the same one.
+//   src/ui.js        the DOM helpers, including announce(), so this page talks
+//                    to a screen reader the way the admin app does.
+//   src/format.js    pluralUnit, so the word beside a number comes from the
+//                    category and nothing in the client knows the word "hours".
+//   src/requirement-model.js  buildTree, flatten and unitWord. The requirement
+//                    list is the published rule set, drawn.
 
 import { IS_CONFIGURED } from '../config.js';
-import {
-  sendMagicLink,
-  parseAuthRedirect,
-  adoptSession,
-  currentSession,
-  forgetSession,
-  signOut,
-} from './auth.js';
-import { select, callRpc } from './rest.js';
-import { describeMember, describeMemberSignIn } from './member-errors.js';
-import { createClaim } from './portal-claim.js';
-import { createProgress } from './portal-progress.js';
-import { $, announce, setHidden } from './ui.js';
-
-const VIEWS = ['boot', 'signin', 'blocked', 'search', 'pending', 'rejected', 'portal'];
+import { rpc } from './api.js';
+import { describeMember } from './member-errors.js';
+import { createScorecard } from './portal-scorecard.js';
+import { createLeaderboard } from './portal-leaderboard.js';
+import { $, h, announce, setHidden } from './ui.js';
 
 const el = {};
 const app = {
-  session: null, // start_portal_session()'s answer
-  years: [],
-  year: null,
-  claim: null, // the claim screens
-  progress: null, // the progress screen and the record list
-  wired: false,
+  scorecard: null,
+  leaderboard: null,
+  tab: 'points',
+  candidates: [],
+  looking: false,
 };
 
 // ---------------------------------------------------------------------------
-// Whole-screen states
-// ---------------------------------------------------------------------------
-
-function showView(name) {
-  for (const view of VIEWS) setHidden(el.views[view], view !== name);
-  setHidden(el.topbar, !currentSession());
-}
-
-function showSignIn(message) {
-  showView('signin');
-  if (message) {
-    el.signinMessageTitle.textContent = message.title;
-    el.signinMessageBody.textContent = ` ${message.body}`;
-    setHidden(el.signinMessage, false);
-    announce(`${message.title}. ${message.body}`);
-  } else {
-    setHidden(el.signinMessage, true);
-  }
-  el.signinEmail.focus({ preventScroll: true });
-}
-
-function showBlocked(title, body) {
-  showView('blocked');
-  el.blockedTitle.textContent = title;
-  el.blockedBody.textContent = body;
-  announce(`${title}. ${body}`);
-}
-
-// ---------------------------------------------------------------------------
-// The two strips every screen talks through
+// The message strip
 // ---------------------------------------------------------------------------
 
 function clearMessage() {
@@ -110,41 +61,16 @@ function clearMessage() {
   el.messageBody.textContent = '';
   setHidden(el.messageAction, true);
   el.messageAction.onclick = null;
-  setHidden(el.note, true);
-  el.note.textContent = '';
 }
 
-/** A plain confirmation. Never a refusal: those go through fail(). */
-function note(text) {
-  setHidden(el.message, true);
-  el.note.textContent = text;
-  setHidden(el.note, false);
-}
-
-/**
- * Something went wrong. The copy and what the button does both come from
- * member-errors.js, so no screen has to decide whether a given failure is worth
- * pressing again.
- */
 function fail(err, retry) {
   const copy = describeMember(err);
-
-  if (copy.recover === 'signin') {
-    forgetSession();
-    showSignIn({ title: copy.title, body: copy.body });
-    return;
-  }
-
-  setHidden(el.note, true);
   el.messageTitle.textContent = copy.title;
   el.messageBody.textContent = copy.body;
 
   if (copy.recover === 'reload') {
     el.messageAction.textContent = 'Reload';
-    el.messageAction.onclick = () => {
-      clearMessage();
-      openSession();
-    };
+    el.messageAction.onclick = () => window.location.reload();
     setHidden(el.messageAction, false);
   } else if (copy.recover === 'retry' && retry) {
     el.messageAction.textContent = 'Try again';
@@ -162,234 +88,192 @@ function fail(err, retry) {
 }
 
 // ---------------------------------------------------------------------------
-// Sign in
+// The two tabs
 // ---------------------------------------------------------------------------
 
-async function onSignInSubmit(event) {
-  event.preventDefault();
-  const email = el.signinEmail.value.trim();
-  if (!email || !email.includes('@')) {
-    showSignIn({
-      title: 'That is not an email address.',
-      body: 'Type the address you want the link sent to.',
-    });
-    return;
-  }
-
-  el.signinSubmit.disabled = true;
-  el.signinSubmitLabel.textContent = 'Sending…';
-  try {
-    // Back to this exact page, with no hash and no query of our own, so the
-    // tokens GoTrue appends are the only thing in the fragment.
-    const redirectTo = `${window.location.origin}${window.location.pathname}`;
-    // createUser, unlike the officer screens. See the header of this file.
-    await sendMagicLink(email, redirectTo, { createUser: true });
-    showSignIn({
-      title: 'Check your inbox.',
-      body: `A link is on its way to ${email}. It works once.`,
-    });
-  } catch (err) {
-    showSignIn(describeMemberSignIn(err));
-  } finally {
-    el.signinSubmit.disabled = false;
-    el.signinSubmitLabel.textContent = 'Email me a link';
-  }
-}
-
-/**
- * The tokens arrive in the URL fragment. They are taken out of the address bar
- * straight away: a sign-in link that stays in the history, or gets pasted into
- * a group chat, is a live session anybody can pick up.
- */
-function captureRedirect() {
-  const result = parseAuthRedirect(window.location.href);
-  if (!result) return null;
-
-  window.history.replaceState(null, '', window.location.pathname);
-
-  if (result.error) {
-    return {
-      error: {
-        title: 'That link did not work',
-        body: result.error.description || 'Links work once and expire. Ask for a new one below.',
-      },
-    };
-  }
-
-  adoptSession(result.session);
-  return { signedIn: true };
-}
-
-async function endSession() {
-  await signOut();
-  window.location.replace(window.location.pathname);
-}
-
-// ---------------------------------------------------------------------------
-// The session, and the screen it lands on
-// ---------------------------------------------------------------------------
-
-/**
- * The first call the portal makes on every load.
- *
- * It is the one function in the schema that will serve an account with no
- * profiles row, which is every account the first time somebody completes a
- * magic-link sign-in. It creates that row as a member, links it when the
- * address matches exactly one live unclaimed roster row, and answers with
- * everything needed to choose a screen.
- */
-async function openSession() {
-  showView('boot');
+function selectTab(tab) {
+  app.tab = tab;
+  setHidden(el.viewPoints, tab !== 'points');
+  setHidden(el.viewBoard, tab !== 'board');
+  el.tabPoints.setAttribute('aria-selected', String(tab === 'points'));
+  el.tabBoard.setAttribute('aria-selected', String(tab === 'board'));
   clearMessage();
 
-  let session;
-  try {
-    session = await callRpc('start_portal_session');
-  } catch (err) {
-    fail(err, openSession);
-    return;
-  }
-  app.session = session ?? {};
-
-  el.who.textContent =
-    app.session.member_name || currentSession()?.user?.email || 'Signed in';
-
-  if (!app.years.length) {
-    try {
-      app.years = await select('academic_years', {
-        select: 'id,label,is_current,starts_on',
-        order: 'starts_on.desc',
-      });
-    } catch (err) {
-      fail(err, openSession);
-      return;
-    }
-  }
-  app.year = app.years.find((year) => year.is_current) ?? app.years[0] ?? null;
-
-  if (!app.year) {
-    showBlocked('Nothing to show yet', 'No year has been set up.');
-    return;
-  }
-
-  route();
+  // Read once, on the first visit. A member switching back and forth is not
+  // asking for a fresh count of the whole club each time.
+  if (tab === 'board') app.leaderboard.open();
 }
 
-function route() {
-  const claim = app.session.claim ?? null;
+// ---------------------------------------------------------------------------
+// Looking yourself up
+// ---------------------------------------------------------------------------
 
-  if (app.session.member_id) {
-    showView('portal');
-    app.progress.open();
+function refuse(message) {
+  el.lookupError.textContent = message;
+  setHidden(el.lookupError, false);
+}
+
+async function onLookup(event) {
+  event.preventDefault();
+  if (app.looking) return;
+
+  const first = el.lookupFirst.value.trim();
+  const last = el.lookupLast.value.trim();
+  if (!first || !last) {
+    refuse('Type your first and last name.');
+    (first ? el.lookupLast : el.lookupFirst).focus();
     return;
   }
 
-  if (claim?.status === 'rejected') {
-    showView('rejected');
-    app.claim.showRejected(claim);
-    return;
-  }
+  setHidden(el.lookupError, true);
+  clearMessage();
+  setLooking(true);
+  try {
+    const rows = await rpc('portal_find_members', {
+      p_first_name: first,
+      p_last_name: last,
+    });
+    const found = Array.isArray(rows) ? rows : [];
 
-  if (claim) {
-    // Pending, or the state that cannot happen: approved and still not linked.
-    // review_member_claim() has a postcondition that refuses to report a link
-    // it did not make, so an approved claim always comes with a member_id and
-    // is answered by the branch above. Landing here means somebody is between
-    // two writes, and "an officer is looking at it" is the only thing that is
-    // true either way. Loading the page again is what resolves it.
-    showView('pending');
-    app.claim.showPending(claim);
-    return;
+    if (!found.length) {
+      // Not a failure of the page, and not something a retry fixes, so it is
+      // said at the field rather than in the strip at the top.
+      refuse('Nobody by that name is on this years roster. Ask an officer.');
+      return;
+    }
+    if (found.length === 1) {
+      await show(found[0].member_id);
+      return;
+    }
+    offerCandidates(found);
+  } catch (err) {
+    fail(err, () => onLookup(event));
+  } finally {
+    setLooking(false);
   }
+}
 
-  showView('search');
-  app.claim.showSearch();
+function setLooking(on) {
+  app.looking = on;
+  el.lookupSubmit.disabled = on;
+  el.lookupSubmitLabel.textContent = on ? 'Looking…' : 'Show my points';
+}
+
+/**
+ * Two members with one name.
+ *
+ * The month they joined is the only thing left that tells them apart, so it is
+ * on the button. Picking wrong costs nothing: this page reads and writes
+ * nothing, and "Not you?" is on the scorecard.
+ */
+function offerCandidates(rows) {
+  app.candidates = rows;
+  el.pickList.replaceChildren(
+    ...rows.map((row) =>
+      h(
+        'li',
+        { class: 'result' },
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'result-button',
+            onClick: () => show(row.member_id),
+          },
+          h('span', { class: 'result-name' }, row.display_name),
+          h('span', { class: 'result-meta' }, joinedLabel(row.joined_on)),
+        ),
+      ),
+    ),
+  );
+  setHidden(el.pickBlock, false);
+  announce('Two people have that name. Pick one.');
+}
+
+const joinedLabel = (isoDate) => {
+  if (!isoDate) return '';
+  const [y, m, d] = String(isoDate).slice(0, 10).split('-').map(Number);
+  if (!y || !m) return '';
+  return `joined ${new Date(y, m - 1, d || 1).toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+  })}`;
+};
+
+async function show(memberId) {
+  setHidden(el.pickBlock, true);
+  clearMessage();
+  setLooking(true);
+  try {
+    const card = await rpc('portal_scorecard', { p_member_id: memberId });
+    app.scorecard.render(card);
+    setHidden(el.lookupForm, true);
+    // The name they typed is not cleared: pressing "Not you?" puts them back on
+    // the form with it still in the boxes, which is what somebody who mistyped
+    // one letter needs.
+  } catch (err) {
+    fail(err, () => show(memberId));
+  } finally {
+    setLooking(false);
+  }
+}
+
+function forget() {
+  app.scorecard.clear();
+  setHidden(el.lookupForm, false);
+  setHidden(el.pickBlock, app.candidates.length < 2);
+  el.lookupFirst.focus();
 }
 
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
-function context() {
-  return {
-    get memberId() {
-      return app.session?.member_id ?? null;
-    },
-    get memberName() {
-      return app.session?.member_name ?? null;
-    },
-    get year() {
-      return app.year;
-    },
-    fail,
-    note,
-    clearMessage,
-    /** A claim was just filed, or an officer's decision needs reading again. */
-    reload: openSession,
-    /** Declined, and they want another go at picking their name. */
-    retryClaim: () => {
-      showView('search');
-      app.claim.showSearch();
-    },
-  };
-}
-
 function cacheElements() {
   Object.assign(el, {
-    views: Object.fromEntries(VIEWS.map((view) => [view, $(`view-${view}`)])),
-
-    topbar: $('topbar'),
-    who: $('who'),
-    signout: $('signout'),
-
     message: $('screen-message'),
     messageTitle: $('screen-message-title'),
     messageBody: $('screen-message-body'),
     messageAction: $('screen-message-action'),
-    note: $('screen-note'),
 
-    signinEmail: $('signin-email'),
-    signinSubmit: $('signin-submit'),
-    signinSubmitLabel: $('signin-submit-label'),
-    signinMessage: $('signin-message'),
-    signinMessageTitle: $('signin-message-title'),
-    signinMessageBody: $('signin-message-body'),
+    tabPoints: $('tab-points'),
+    tabBoard: $('tab-board'),
+    viewPoints: $('view-points'),
+    viewBoard: $('view-board'),
 
-    blockedTitle: $('blocked-title'),
-    blockedBody: $('blocked-body'),
+    lookupForm: $('lookup-form'),
+    lookupFirst: $('lookup-first'),
+    lookupLast: $('lookup-last'),
+    lookupError: $('lookup-error'),
+    lookupSubmit: $('lookup-submit'),
+    lookupSubmitLabel: $('lookup-submit-label'),
+
+    pickBlock: $('pick-block'),
+    pickList: $('pick-list'),
   });
-}
-
-function wire() {
-  el.views.signin.addEventListener('submit', onSignInSubmit);
-  el.signout.addEventListener('click', endSession);
 }
 
 export function start() {
   cacheElements();
-  wire();
 
-  const ctx = context();
-  app.claim = createClaim(ctx);
-  app.progress = createProgress(ctx);
-  app.claim.mount();
-  app.progress.mount();
+  const ctx = { fail, clearMessage };
+  app.scorecard = createScorecard(ctx);
+  app.leaderboard = createLeaderboard(ctx);
+
+  el.lookupForm.addEventListener('submit', onLookup);
+  el.tabPoints.addEventListener('click', () => selectTab('points'));
+  el.tabBoard.addEventListener('click', () => selectTab('board'));
+  $('score-change').addEventListener('click', forget);
 
   if (!IS_CONFIGURED) {
-    showBlocked('Not connected yet', 'An officer needs to finish setting up this site.');
+    el.messageTitle.textContent = 'This page is not connected yet';
+    el.messageBody.textContent = 'Ask an officer.';
+    setHidden(el.message, false);
+    setHidden(el.lookupForm, true);
     return;
   }
 
-  const redirect = captureRedirect();
-  if (redirect?.error) {
-    showSignIn(redirect.error);
-    return;
-  }
-
-  if (!currentSession()) {
-    showSignIn();
-    return;
-  }
-
-  openSession();
+  // The requirements below the form are what this page says before anybody has
+  // typed anything, so they are read on load rather than on demand.
+  app.scorecard.loadRequirements();
 }

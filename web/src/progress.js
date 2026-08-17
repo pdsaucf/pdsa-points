@@ -86,7 +86,7 @@ export function createProgress(ctx) {
           order: 'sort_order.asc',
         }),
         select('member_enrollments', {
-          select: 'member_id,status,joined_on,members!inner(id,display_name,email,archived_at,merged_into_id)',
+          select: 'member_id,status,joined_on,members!inner(id,display_name,archived_at,merged_into_id)',
           filters: {
             academic_year_id: `eq.${yearId}`,
             'members.archived_at': 'is.null',
@@ -173,9 +173,7 @@ export function createProgress(ctx) {
   function visibleMembers() {
     const query = state.query.trim().toLowerCase();
     return state.members.filter((member) => {
-      if (query && !member.display_name.toLowerCase().includes(query)) {
-        if (!String(member.email ?? '').toLowerCase().includes(query)) return false;
-      }
+      if (query && !member.display_name.toLowerCase().includes(query)) return false;
       const honorary = state.status.get(member.id)?.is_honorary ?? false;
       if (state.filter === 'honorary' && !honorary) return false;
       if (state.filter === 'not_honorary' && honorary) return false;
@@ -317,7 +315,6 @@ export function createProgress(ctx) {
   function exportRows() {
     const header = [
       'Member',
-      'Email',
       'Points',
       ...state.categories.map((category) => category.name),
       'Honorary',
@@ -327,7 +324,6 @@ export function createProgress(ctx) {
       const status = state.status.get(member.id) ?? { point_total: 0, is_honorary: false };
       return [
         member.display_name,
-        member.email ?? '',
         number(status.point_total),
         ...state.categories.map((category) => number(totalFor(member.id, category.id))),
         status.is_honorary ? 'yes' : 'no',

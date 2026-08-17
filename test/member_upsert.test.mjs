@@ -11,7 +11,14 @@
 //   * the same row imported twice writes nothing the second time
 //   * a member who exists from a previous year is ENROLLED, never written down
 //     a second time, whether the officer confirmed the match in the preview or
-//     the function had to find them by address itself
+//     the function had to find them itself
+//
+// WHAT FINDING THEM MEANS CHANGED IN MIGRATION 20. A member has no email
+// address any more, so the tier that used to carry every re-run (email, then
+// student id) matches nothing on a row nobody typed an address into. The name
+// is the identity now, and it is the last tier: an officer's answer first, then
+// an address or a student id if the row still carries one, then the normalised
+// name among live members. The tests below drive all four.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -170,6 +177,63 @@ test('a member from a previous year is enrolled, not written down twice', async 
     { academic_year_id: YEAR_2025 },
     { academic_year_id: YEAR_2026 },
   ].sort((a, b) => a.academic_year_id.localeCompare(b.academic_year_id)));
+});
+
+test('the name finds somebody nothing else could identify', async () => {
+  // THE FINDING FROM MIGRATION 20, and the reason the name tier exists at all.
+  // Nothing collects an address, so this is what an import row now looks like:
+  // two names and nothing else. Before the name tier, the second call created a
+  // second Perpetua Lang, which is how re-importing a file after a dropped
+  // response quietly doubled the roster.
+  const first = await upsert({ first: 'Perpetua', last: 'Lang' });
+  assert.equal(first.was_created, true);
+  const before = await memberCount();
+
+  const again = await upsert({ first: 'Perpetua', last: 'Lang', year: YEAR_2025 });
+
+  assert.equal(again.member_id, first.member_id, 'the same name was written down twice');
+  assert.equal(again.was_created, false);
+  assert.equal(again.was_enrolled, true, 'the year did not get the enrollment it asked for');
+  assert.equal(await memberCount(), before);
+});
+
+test('the name is matched the way a person reads it, punctuation and all', async () => {
+  const made = await upsert({ first: 'Sinead', last: "O'Halloran" });
+  const again = await upsert({ first: '  sinead ', last: 'o halloran' });
+  assert.equal(again.member_id, made.member_id, 'case and punctuation made a second person');
+  assert.equal(again.was_created, false);
+});
+
+test('a preferred name on the row is a name this finds them by', async () => {
+  // display_name is coalesce(preferred_name, first_name) || ' ' || last_name,
+  // so the roster screen shows "Abby Catto" for somebody whose first name is
+  // Abigail. Both spellings have to resolve to her, or the officer who types
+  // what the screen shows creates a second row.
+  const made = await upsert({ first: 'Abigail', last: 'Fenwick' });
+  await db.exec(
+    `update members set preferred_name = 'Abby' where id = '${made.member_id}'`,
+  );
+
+  const byPreferred = await upsert({ first: 'Abby', last: 'Fenwick' });
+  assert.equal(byPreferred.member_id, made.member_id, 'the name on screen found nobody');
+  assert.equal(byPreferred.was_created, false);
+
+  const byGiven = await upsert({ first: 'Abigail', last: 'Fenwick' });
+  assert.equal(byGiven.member_id, made.member_id, 'the name on the row found nobody');
+  assert.equal(byGiven.was_created, false);
+});
+
+test('an archived member is not revived by their name', async () => {
+  // Found by an address, an archived row is refused outright, because a caller
+  // naming them outright deserves to be told. The name tier is a guess, so it
+  // does not reach that refusal: it skips them, and the officer gets the member
+  // they asked for. Orla Winterbourne is archived in the fixture above.
+  const before = await memberCount();
+  const result = await upsert({ first: 'Orla', last: 'Winterbourne' });
+
+  assert.equal(result.was_created, true, 'the archived row was resolved to instead');
+  assert.notEqual(result.member_id, CAST.retired);
+  assert.equal(await memberCount(), before + 1);
 });
 
 test('a student id resolves somebody with no address on file', async () => {

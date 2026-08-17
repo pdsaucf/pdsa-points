@@ -20,7 +20,7 @@ import { select, insert, patch } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { reorderWithin, nextOrder } from './requirement-model.js';
 import { UNIT_LABEL, UNIT_NAME, uniqueSlug } from './category-model.js';
-import { $, h, announce, setHidden, plural } from './ui.js';
+import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
 const CATEGORY_SELECT =
   'id,slug,name,unit,unit_label,counts_toward_point_total,sort_order,archived_at';
@@ -130,28 +130,18 @@ export function createCategories(ctx) {
     const actions = h('div', { class: 'rule-actions' });
     if (ctx.canReview) {
       actions.append(
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'button button-small',
-            disabled: state.busy || index === 0,
-            'aria-label': `Move ${category.name} up`,
-            onClick: () => move(category, -1),
-          },
-          'Up',
-        ),
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'button button-small',
-            disabled: state.busy || index === count - 1,
-            'aria-label': `Move ${category.name} down`,
-            onClick: () => move(category, 1),
-          },
-          'Down',
-        ),
+        moveButton({
+          direction: 'up',
+          title: `Move ${category.name} up`,
+          disabled: state.busy || index === 0,
+          onClick: () => move(category, -1),
+        }),
+        moveButton({
+          direction: 'down',
+          title: `Move ${category.name} down`,
+          disabled: state.busy || index === count - 1,
+          onClick: () => move(category, 1),
+        }),
         h(
           'button',
           {

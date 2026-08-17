@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>My points | PDSA UCF</title>
-    <meta name="description" content="Your PDSA UCF points and records." />
+    <meta name="description" content="Your PDSA UCF points and the Honorary Member requirements." />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#59328f" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#14120e" media="(prefers-color-scheme: dark)" />
@@ -18,9 +18,19 @@
     <link rel="stylesheet" href="../assets/css/portal.css" />
   </head>
   <body>
+    <!--
+      THERE IS NO SIGN-IN ON THIS PAGE. A member types their name and reads
+      their points. The club has no email addresses for its members and is not
+      collecting any, so the magic link, the account, and the claim an officer
+      used to confirm are all gone (migration 21).
+
+      Everything here is served by four SECURITY DEFINER functions any visitor
+      may call, and every one of them answers with club-facing figures only: no
+      address, no student id, no individual check-ins, nothing pending.
+    -->
     <main id="app" class="app">
       <!--
-        The emblem sits above every view, including the refusals, so somebody
+        The emblem sits above everything, including the refusals, so somebody
         who followed a link from a group chat can tell whose page this is. alt
         names the club because no wordmark is drawn beside it at this size.
       -->
@@ -35,11 +45,14 @@
         />
       </p>
 
-      <!-- Who is signed in, and the way out. Hidden until there is a session. -->
-      <header id="topbar" class="topbar" hidden>
-        <p id="who" class="who"></p>
-        <button id="signout" type="button" class="button button-quiet">Sign out</button>
-      </header>
+      <nav class="tabs" aria-label="Sections">
+        <button id="tab-points" type="button" class="tab" aria-selected="true" aria-controls="view-points">
+          My points
+        </button>
+        <button id="tab-board" type="button" class="tab" aria-selected="false" aria-controls="view-board">
+          Leaderboard
+        </button>
+      </nav>
 
       <!-- Anything that went wrong, for every view below. -->
       <div id="screen-message" class="message" role="alert" hidden>
@@ -48,188 +61,85 @@
         <button id="screen-message-action" type="button" class="button button-secondary" hidden></button>
       </div>
 
-      <!-- A plain confirmation. Never a refusal: those go in the block above. -->
-      <p id="screen-note" class="note" role="status" hidden></p>
-
-      <!-- 1. Working out whether anybody is signed in -->
-      <section id="view-boot" class="view view-centred" aria-busy="true">
-        <p class="spinner" aria-hidden="true"></p>
-        <p class="muted">Loading your points…</p>
-      </section>
-
-      <!-- 2. Sign in -->
-      <form id="view-signin" class="view" novalidate hidden>
-        <h1 class="title">Your points</h1>
-        <section class="field">
-          <label class="label" for="signin-email">Your email</label>
-          <p class="muted small">No password required</p>
-          <input
-            id="signin-email"
-            class="input"
-            type="email"
-            inputmode="email"
-            autocomplete="email"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-            enterkeyhint="send"
-            placeholder="you@knights.ucf.edu"
-          />
-          <p id="signin-message" class="notice" role="alert" hidden>
-            <span id="signin-message-title" class="notice-title"></span>
-            <span id="signin-message-body" class="notice-body"></span>
-          </p>
-          <button id="signin-submit" type="submit" class="button button-primary full">
-            <span id="signin-submit-label">Send sign-in link</span>
-          </button>
-        </section>
-      </form>
-
-      <!-- 3. Nothing to connect to: config.js has not been filled in -->
-      <section id="view-blocked" class="view view-centred" hidden>
-        <h1 id="blocked-title" class="title"></h1>
-        <p id="blocked-body" class="body"></p>
-      </section>
-
-      <!-- 4. Signed in, not linked, no claim: which of these is you -->
-      <section id="view-search" class="view" hidden>
-        <h1 class="title">Find your name</h1>
-        <p class="muted">The address you signed in with is not on the roster.</p>
-
-        <section id="search-block" class="field">
-          <label class="label" for="claim-search">Your name</label>
-          <!--
-            A list of buttons rather than a combobox. The check-in page has a
-            full one, with keyboard navigation and aria-activedescendant, and
-            it earns it: one field, one thumb, a queue behind. Here the results
-            are ordinary buttons in the tab order, which needs no ARIA to be
-            correct and cannot be half implemented.
-          -->
-          <input
-            id="claim-search"
-            class="input"
-            type="text"
-            aria-describedby="claim-hint"
-            autocomplete="off"
-            autocapitalize="words"
-            autocorrect="off"
-            spellcheck="false"
-            enterkeyhint="search"
-            placeholder="Start typing"
-          />
-          <div class="results-well">
-            <ul id="claim-results" class="results"></ul>
-            <p id="claim-hint" class="muted small hint"></p>
-          </div>
-        </section>
-
-        <!-- Picked one. The note is theirs, and an officer reads it. -->
-        <form id="claim-confirm" class="field" novalidate hidden>
-          <p class="label">Is this you?</p>
-          <p id="claim-chosen" class="chosen-name"></p>
-          <label class="label" for="claim-note">Note for an officer (optional)</label>
-          <textarea
-            id="claim-note"
-            class="input textarea"
-            rows="3"
-            maxlength="500"
-            enterkeyhint="done"
-          ></textarea>
-          <p id="claim-error" class="error" role="alert" hidden></p>
-          <button id="claim-send" type="submit" class="button button-primary full">Send</button>
-          <button id="claim-back" type="button" class="button button-quiet">Pick another name</button>
-        </form>
-      </section>
-
-      <!--
-        5. Claim filed, nobody has looked at it yet.
-
-        A heading, a name and a date. start_portal_session() deliberately does
-        not return the member's own note with the claim, and this screen does
-        not go and fetch it: there is no decision on this screen, so a
-        quotation of what they typed a moment ago would be one more thing to
-        read and nothing to do with it.
-      -->
-      <section id="view-pending" class="view view-centred" hidden>
-        <h1 class="title">Waiting for an officer</h1>
-        <p id="pending-who" class="muted"></p>
-      </section>
-
-      <!-- 6. An officer said no, and why -->
-      <section id="view-rejected" class="view view-centred" hidden>
-        <h1 class="title">Not confirmed</h1>
-        <p id="rejected-who" class="muted"></p>
-        <p id="rejected-reason" class="quote" hidden></p>
-        <button id="rejected-retry" type="button" class="button button-primary">Try again</button>
-      </section>
-
-      <!-- 7. Linked: the progress screen and the record list -->
-      <section id="view-portal" class="view" hidden>
-        <section class="panel" aria-labelledby="progress-title">
-          <div class="progress-head">
-            <h1 id="progress-title" class="title"></h1>
-            <p id="progress-figures" class="figures"></p>
-          </div>
-          <!--
-            Decorative. The figures line above says the same thing in words,
-            because a bar is the one part of this screen a member using a
-            screen reader, or one who cannot tell the two fills apart, would
-            get nothing from.
-          -->
-          <p id="progress-bar" class="bar" aria-hidden="true" hidden>
-            <span id="progress-bar-fill" class="bar-fill"></span>
-          </p>
-          <p id="progress-state" class="state" hidden></p>
-          <ul id="progress-list" class="checklist"></ul>
-          <p id="progress-points" class="points"></p>
-          <p id="progress-note" class="muted small" hidden></p>
-        </section>
-
-        <section class="panel" aria-labelledby="records-title">
-          <div class="records-head">
-            <h2 id="records-title" class="panel-title">My records</h2>
-            <button id="missing-open" type="button" class="button button-secondary">
-              Something's missing?
+      <section id="view-points" class="view">
+        <!-- The whole sign-in this page has. -->
+        <form id="lookup-form" class="panel" novalidate>
+          <h1 class="title">Your points</h1>
+          <section class="field">
+            <label class="label" for="lookup-first">First name</label>
+            <input
+              id="lookup-first"
+              class="input"
+              type="text"
+              autocomplete="given-name"
+              autocapitalize="words"
+              autocorrect="off"
+              spellcheck="false"
+              enterkeyhint="next"
+            />
+            <label class="label" for="lookup-last">Last name</label>
+            <input
+              id="lookup-last"
+              class="input"
+              type="text"
+              autocomplete="family-name"
+              autocapitalize="words"
+              autocorrect="off"
+              spellcheck="false"
+              enterkeyhint="go"
+            />
+            <p id="lookup-error" class="error" role="alert" hidden></p>
+            <button id="lookup-submit" type="submit" class="button button-primary full">
+              <span id="lookup-submit-label">Show my points</span>
             </button>
-          </div>
+          </section>
+        </form>
 
-          <form id="missing-form" class="missing" novalidate hidden>
-            <label class="label" for="missing-event">Event</label>
-            <select id="missing-event" class="select"></select>
-
-            <div id="missing-value-field" class="stack" hidden>
-              <label id="missing-value-label" class="label" for="missing-value"></label>
-              <input
-                id="missing-value"
-                class="input input-number"
-                type="number"
-                inputmode="decimal"
-                step="any"
-                min="0"
-                enterkeyhint="next"
-              />
-            </div>
-
-            <label class="label" for="missing-note">What is missing</label>
-            <textarea
-              id="missing-note"
-              class="input textarea"
-              rows="3"
-              maxlength="500"
-              enterkeyhint="send"
-            ></textarea>
-
-            <p id="missing-error" class="error" role="alert" hidden></p>
-            <div class="missing-actions">
-              <button id="missing-send" type="submit" class="button button-primary">Send</button>
-              <button id="missing-cancel" type="button" class="button button-quiet">Cancel</button>
-            </div>
-          </form>
-
-          <p id="missing-closed" class="muted small" hidden></p>
-          <ul id="records-list" class="records"></ul>
-          <p id="records-empty" class="muted small" hidden>Nothing yet.</p>
+        <!--
+          Two members with one name. With no address on file the join month is
+          the only thing that tells them apart, so it is what the buttons carry.
+        -->
+        <section id="pick-block" class="panel" hidden aria-labelledby="pick-title">
+          <h2 id="pick-title" class="panel-title">Which one is you?</h2>
+          <ul id="pick-list" class="results"></ul>
         </section>
+
+        <section id="scorecard" class="panel" hidden aria-labelledby="score-name">
+          <div class="progress-head">
+            <h1 id="score-name" class="title"></h1>
+            <p id="score-figures" class="figures"></p>
+          </div>
+          <p id="score-state" class="state" hidden></p>
+          <ul id="score-list" class="checklist"></ul>
+          <p id="score-points" class="points"></p>
+          <button id="score-change" type="button" class="button button-quiet">Not you?</button>
+        </section>
+
+        <!--
+          What the requirements are, for somebody who has not looked themselves
+          up. Drawn from the published rules, so it cannot drift from what the
+          scorecard above is scored against.
+        -->
+        <section id="honorary" class="honorary" aria-labelledby="honorary-title">
+          <h2 id="honorary-title" class="honorary-title">What is an Honorary Member?</h2>
+          <p class="honorary-body">
+            Honorary Members are those who go above and beyond to be an active and valuable
+            member to PDSA. To reach Honorary Member status, certain requirements must be met.
+          </p>
+          <ul id="honorary-list" class="honorary-list"></ul>
+          <p id="honorary-note" class="muted small" hidden></p>
+        </section>
+      </section>
+
+      <section id="view-board" class="view" hidden aria-labelledby="board-title">
+        <div class="progress-head">
+          <h1 id="board-title" class="title">Leaderboard</h1>
+          <p id="board-meta" class="muted small"></p>
+        </div>
+        <section id="board-loading" class="view-centred" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+        </section>
+        <ol id="board-list" class="board-list"></ol>
       </section>
 
       <noscript>
