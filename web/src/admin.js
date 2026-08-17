@@ -36,6 +36,7 @@ import { createCategories } from './categories.js';
 import { createProgress } from './progress.js';
 import { createRoster } from './roster.js';
 import { createMember } from './member.js';
+import { createStorage } from './storage.js';
 import { $, h, announce, setHidden } from './ui.js';
 
 const REVIEWING_ROLES = ['officer', 'admin'];
@@ -43,7 +44,7 @@ const READING_ROLES = ['officer', 'admin', 'viewer'];
 
 // The six panels, in tab order. Each one is mounted once and reloaded when the
 // year changes, so switching tabs costs nothing.
-const TABS = ['review', 'claims', 'progress', 'roster', 'requirements', 'categories'];
+const TABS = ['review', 'claims', 'progress', 'roster', 'requirements', 'categories', 'storage'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -63,6 +64,7 @@ const app = {
   progress: null,
   roster: null,
   member: null,
+  storage: null,
   tab: 'review',
   returnTab: 'roster',
 };
@@ -401,6 +403,7 @@ function startApp() {
   app.progress = createProgress(ctx);
   app.roster = createRoster(ctx);
   app.member = createMember(ctx);
+  app.storage = createStorage(ctx);
 
   app.review.mount();
   app.claims.mount();
@@ -409,6 +412,7 @@ function startApp() {
   app.progress.mount();
   app.roster.mount();
   app.member.mount();
+  app.storage.mount();
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +445,7 @@ function cacheElements() {
       roster: $('tab-roster'),
       requirements: $('tab-requirements'),
       categories: $('tab-categories'),
+      storage: $('tab-storage'),
     },
     panels: {
       review: $('panel-review'),
@@ -449,6 +454,7 @@ function cacheElements() {
       roster: $('panel-roster'),
       requirements: $('panel-requirements'),
       categories: $('panel-categories'),
+      storage: $('panel-storage'),
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),

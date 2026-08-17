@@ -72,6 +72,12 @@ export class ShimNode extends ShimBase {
     this.parentNode = null;
     this.listeners = new Map();
     this.nodeValue = null;
+    // Enough for the one inline style the shipped screens set (the storage
+    // usage bar's width): a plain object a caller can assign properties on,
+    // not a real CSSStyleDeclaration. Anything reading a property nobody set
+    // gets undefined rather than the empty string a browser would give, which
+    // is the shim's usual rule: answer narrowly rather than convincingly.
+    this.style = {};
 
     const owner = this;
     this._data = {};
@@ -215,7 +221,13 @@ export class ShimNode extends ShimBase {
 
   close() {
     this.attributes.delete('open');
-    this.dispatchEvent(new ShimEvent('close', this));
+    // Real dialogs fire `close` as a queued task, not synchronously: several
+    // screens in this product rely on exactly that ordering (a submit
+    // handler that closes the dialog itself and then decides the outcome,
+    // guarded so a same-tick cancel-via-close cannot overwrite a decision
+    // already made). Dispatching this synchronously would let that guard's
+    // OTHER branch win instead, so this is deferred a tick.
+    queueMicrotask(() => this.dispatchEvent(new ShimEvent('close', this)));
   }
 
   reset() {

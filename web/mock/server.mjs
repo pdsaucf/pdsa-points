@@ -29,6 +29,8 @@ import {
   adminState,
   handleAuth,
   handleRest,
+  handleStorageDelete,
+  handleStorageInfo,
   handleStorageSign,
   magicLinkFor,
   resetAdmin,
@@ -646,6 +648,34 @@ export function startMock(port = PORT) {
 
     if (url.pathname.startsWith('/storage/v1/object/sign/evidence/')) {
       serveSignedObject(res, url, { json });
+      return;
+    }
+
+    // The purge screen's bulk delete: deleteEvidenceObjects() (src/rest.js)
+    // sends a DELETE straight to the bucket, not to an object path, so this
+    // has to be matched before the upload route below, the same way signing
+    // is.
+    if (url.pathname === '/storage/v1/object/evidence' && req.method === 'DELETE') {
+      const raw = await readBody(req);
+      let body = {};
+      try {
+        body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
+      } catch {
+        body = {};
+      }
+      handleStorageDelete(req, res, url, body, { json, pds }, ANON_KEY);
+      return;
+    }
+
+    // evidenceObjectExists() (src/rest.js): the one question a bulk delete's
+    // response cannot answer for a path it did not echo back. Matched before
+    // the generic upload route below, the same way signing and the bulk
+    // delete are.
+    if (
+      url.pathname.startsWith('/storage/v1/object/info/evidence/') &&
+      req.method === 'GET'
+    ) {
+      handleStorageInfo(req, res, url, { json, pds }, ANON_KEY);
       return;
     }
 

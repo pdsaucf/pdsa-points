@@ -116,3 +116,51 @@ None beyond what's already in [01-data-model.md](01-data-model.md): `provider`,
 `object_path`, `drive_file_id`, `archived_at`, `purged_at` on `attendance_evidence`
 were put there for exactly this. Storage location is a row value; no reader hardcodes
 a backend.
+
+## Backups: what `.github/workflows/backup.yml` actually saves
+
+**A database dump has no photos in it.** `pg_dump` captures rows, not the bytes the
+`evidence` bucket holds for them. `attendance_evidence.object_path` is a pointer, and
+restoring a dump brings every pointer back with nothing at the other end of it until
+the bucket is restored separately. The nightly workflow backs up the `public` schema
+(the tables this project owns, per README.md's migration table) as a `pg_dump -Fc`
+artifact, encrypted before upload (see below), kept 14 days.
+
+Backups only run once an admin turns them on (README.md, "Keeping the project
+running"): the `BACKUPS_ENABLED` repository variable is what tells the workflow
+apart a fresh clone that has never configured backups from a project that had
+them configured and then lost a secret. The first case skips cleanly; the
+second fails the run loudly, on purpose, so a lost secret is never mistaken for
+"nothing to back up."
+
+**Why the dump is encrypted, and how to decrypt it.** This repository currently
+has no git remote, so nobody has decided public vs. private yet, and a workflow
+artifact on a public repo is downloadable by anyone with read access to it;
+artifact retention is not a privacy boundary. The dump holds every member's
+name and email, so before it is uploaded the workflow encrypts it symmetrically
+(AES-256 via `gpg --symmetric`) with the `BACKUP_ENCRYPTION_PASSPHRASE`
+repository secret. To decrypt a downloaded artifact:
+
+```bash
+gpg --batch --yes --passphrase-fd 0 --decrypt --output the.dump the.dump.gpg <<< "$BACKUP_ENCRYPTION_PASSPHRASE"
+```
+
+(The inverse with `openssl` instead of `gpg` works the same way if the
+encryption side is ever swapped to `openssl enc`; nothing about the restore
+steps below changes either way.)
+
+**Restoring, in order:**
+
+1. Download the artifact from the workflow run (Actions tab, or `gh run download`).
+2. Decrypt it, per the command above.
+3. Restore the rows: `pg_restore --clean --no-owner --dbname="$SUPABASE_DB_URL" the.dump`.
+4. Restore the bucket separately. `pg_dump` never touched it, so this is the other
+   half of a real disaster recovery: Supabase's own project-level backups (a paid-tier
+   feature) or a manual `supabase storage` sync from wherever the objects were last
+   known good. An empty bucket after step 3 is not a bug in the restore, it is the
+   restore having done exactly what it was ever going to do.
+
+A restore into a database that already has rows is not attempted by anything here.
+`--clean` drops what `pg_restore` is about to recreate, which is the right behaviour
+for rebuilding an empty project and the wrong one for merging into a live one: decide
+which case this is before running it.

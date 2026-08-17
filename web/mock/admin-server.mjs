@@ -29,6 +29,35 @@ const ACCESS_TTL_SECONDS = 3600;
 
 let db = buildDatabase();
 
+/**
+ * Which evidence-bucket object paths this mock's Storage stand-in currently
+ * holds bytes for: every unpurged attendance_evidence row's object_path, plus
+ * any purge_run_objects row nobody has confirmed deleting yet (some of
+ * these, like the fixture's "outstanding" run, do not correspond to a live
+ * attendance_evidence row at all, purging having already happened; they are
+ * still real objects sitting in the bucket until something deletes them).
+ * A path with a purge_run_objects row already marked deleted_at, or an
+ * attendance_evidence row already purged and confirmed, is left out: this
+ * mock's Storage stand-in never held it, or no longer does.
+ */
+function seedBucketObjects() {
+  const set = new Set();
+  for (const evidence of db.attendance_evidence) {
+    if (evidence.object_path && !evidence.purged_at) set.add(evidence.object_path);
+  }
+  for (const object of db.purge_run_objects) {
+    if (!object.deleted_at) set.add(object.object_path);
+  }
+  return set;
+}
+
+// The one piece of real bucket state this mock keeps: what handleStorageDelete
+// (this file) actually removes a path from, and what handleStorageInfo (this
+// file) answers evidenceObjectExists() (src/rest.js) against. Everything else
+// about Storage in this mock is a stand-in; this Set is what makes "was this
+// path really deleted, or only claimed to be" answerable at all.
+let bucketObjects = seedBucketObjects();
+
 const sessions = new Map(); // access token -> { userId, email, expiresAt }
 const refreshTokens = new Map(); // refresh token -> { userId, email }
 const magicLinks = new Map(); // email -> the URL the email would contain
@@ -121,6 +150,7 @@ function refusedImportRow(line) {
 
 export function resetAdmin() {
   db = buildDatabase();
+  bucketObjects = seedBucketObjects();
   sessions.clear();
   refreshTokens.clear();
   magicLinks.clear();
@@ -130,6 +160,7 @@ export function resetAdmin() {
   pendingFailure = null;
   pendingRowRefusal = null;
   pendingShortResult = false;
+  pendingDeleteFailures = null;
 }
 
 export function adminState() {
@@ -779,11 +810,56 @@ const VIEWS = {
 };
 
 /**
+ * v_purge_runs_outstanding, computed the way the SQL view does: purge runs
+ * with at least one purge_run_objects row nobody has confirmed deleting.
+ */
+function purgeRunsOutstandingRows() {
+  const counts = new Map(); // purge_run_id -> { total, outstanding }
+  for (const object of db.purge_run_objects) {
+    const entry = counts.get(object.purge_run_id) ?? { total: 0, outstanding: 0 };
+    entry.total += 1;
+    if (!object.deleted_at) entry.outstanding += 1;
+    counts.set(object.purge_run_id, entry);
+  }
+
+  const rows = [];
+  for (const [runId, entry] of counts) {
+    if (entry.outstanding === 0) continue;
+    const run = db.purge_runs.find((r) => r.id === runId);
+    if (!run) continue;
+    rows.push({
+      purge_run_id: runId,
+      kind: run.kind,
+      performed_by: run.performed_by,
+      performed_at: run.performed_at,
+      outstanding_count: entry.outstanding,
+      total_count: entry.total,
+    });
+  }
+  return rows;
+}
+
+// purge_runs_read, upload_grants_read and this view's own policy in the real
+// RLS (migration 11) are all fn_is_officer(), narrower than fn_is_staff(): a
+// viewer reads the storage screen's usage bar but not its operational detail.
+// That is narrower than every other table below, which the blanket
+// `isStaff(auth) return rows` a few lines down would otherwise grant, so
+// these are checked first and returned early.
+const OFFICER_ONLY_TABLES = new Set(['purge_runs', 'purge_run_objects', 'evidence_upload_grants']);
+const OFFICER_VIEWS = { v_purge_runs_outstanding: purgeRunsOutstandingRows };
+
+/**
  * The RLS table from docs/01-data-model.md section 8, in the crude form the
  * client can actually be tested against. Reads only: writes are checked at
  * their own call sites below.
  */
 function visibleRows(table, auth) {
+  if (OFFICER_ONLY_TABLES.has(table)) {
+    return isOfficer(auth) ? (db[table] ?? []) : [];
+  }
+  if (OFFICER_VIEWS[table]) {
+    return isOfficer(auth) ? OFFICER_VIEWS[table]() : [];
+  }
   if (VIEWS[table]) {
     const rows = VIEWS[table]();
     if (isStaff(auth)) return rows;
@@ -988,6 +1064,10 @@ const WRITE_POLICY = {
     isAdmin(auth) || (isOfficer(auth) && isDraft(setOf(row?.requirement_set_id))),
   requirement_node_categories: (auth, row) =>
     isAdmin(auth) || (isOfficer(auth) && isDraft(setOfNode(row?.node_id))),
+  // settings_write (migration 11) is fn_is_admin(), narrower than purging
+  // itself (fn_assert_officer()): an officer can clear photos but only an
+  // admin can change how long they are kept.
+  app_settings: (auth) => isAdmin(auth),
 };
 
 const uuid = (prefix) => `${prefix}${randomBytes(6).toString('hex')}`;
@@ -1580,6 +1660,58 @@ function upsertOne(auth, yearId, row) {
   });
 
   return { member_id: member.id, was_created: created, was_enrolled: enrolled };
+}
+
+// ---------------------------------------------------------------------------
+// Storage: the purge flow
+// ---------------------------------------------------------------------------
+// Written against supabase/migrations/20260815100000_storage_ops.sql. The
+// eligibility rule is reproduced once, in eligibleEvidence(), and both
+// purge_evidence and fn_purge_preview read it, the same way the real
+// migration writes the two queries to match on purpose: a preview that
+// promised something the purge itself declined to do would be worse than no
+// preview.
+
+const settingInt = (key, fallback) => {
+  const row = db.app_settings.find((s) => s.key === key);
+  return row ? Number(row.value) : fallback;
+};
+
+const monthsAgo = (months) => {
+  const d = new Date();
+  d.setMonth(d.getMonth() - Number(months));
+  return d;
+};
+
+/** Every unpurged, reviewed evidence row whose event is older than `months`. */
+function eligibleEvidence(months) {
+  const cutoff = monthsAgo(months);
+  return db.attendance_evidence
+    .filter((e) => !e.purged_at && e.object_path)
+    .map((e) => {
+      const record = db.attendance_records.find((r) => r.id === e.attendance_record_id);
+      const event = record ? db.events.find((ev) => ev.id === record.event_id) : null;
+      return { evidence: e, record, event };
+    })
+    .filter(
+      ({ record, event }) =>
+        record &&
+        ['approved', 'rejected'].includes(record.status) &&
+        event &&
+        new Date(event.occurred_on) < cutoff,
+    );
+}
+
+/** v_orphaned_uploads: an expired, unconsumed, unreclaimed grant nothing points at. */
+function orphanedUploadRows() {
+  const now = Date.now();
+  return db.evidence_upload_grants.filter(
+    (g) =>
+      !g.consumed_at &&
+      !g.reclaimed_at &&
+      new Date(g.expires_at).getTime() < now &&
+      !db.attendance_evidence.some((e) => e.object_path === g.object_path),
+  );
 }
 
 export const ADMIN_RPC = {
@@ -2226,6 +2358,265 @@ export const ADMIN_RPC = {
     record({ fn: 'dismiss_duplicate_pair', actor: auth.userId, memberA: first, memberB: second });
 
     json(res, 200, null);
+  },
+
+  // -------------------------------------------------------------------------
+  // Storage: the purge flow
+  // -------------------------------------------------------------------------
+
+  /** fn_storage_usage() returns table(...). Staff gated: a viewer reads it. */
+  fn_storage_usage(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isStaff(auth)) {
+      record({ fn: 'fn_storage_usage', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const live = db.attendance_evidence.filter((e) => !e.purged_at && e.object_path);
+    const bytes = live.reduce((sum, e) => sum + (e.byte_size ?? 0), 0);
+    const quota = settingInt('storage_quota_bytes', 1073741824);
+    const percent = quota === 0 ? 0 : Math.round((bytes / quota) * 1000) / 10;
+
+    json(res, 200, [
+      {
+        photo_count: live.length,
+        bytes_held: bytes,
+        quota_bytes: quota,
+        warn_percent: settingInt('storage_warn_percent', 75),
+        percent_used: percent,
+        orphaned_count: orphanedUploadRows().length,
+      },
+    ]);
+  },
+
+  /** fn_purge_preview(p_retention_months) returns table(...). Officer only. */
+  fn_purge_preview(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'fn_purge_preview', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const months = body.p_retention_months ?? settingInt('evidence_retention_months', 12);
+    if (months < 1) {
+      pds(res, 'PDS03', 'Retention window must be at least one month.');
+      return;
+    }
+
+    const byEvent = new Map();
+    for (const { evidence, event } of eligibleEvidence(months)) {
+      const entry = byEvent.get(event.id) ?? { event, count: 0, bytes: 0 };
+      entry.count += 1;
+      entry.bytes += evidence.byte_size ?? 0;
+      byEvent.set(event.id, entry);
+    }
+
+    const rows = [...byEvent.values()]
+      .sort((a, b) => String(a.event.occurred_on).localeCompare(String(b.event.occurred_on)))
+      .map(({ event, count, bytes }) => ({
+        event_id: event.id,
+        event_title: event.title,
+        occurred_on: event.occurred_on,
+        photo_count: count,
+        bytes,
+      }));
+
+    json(res, 200, rows);
+  },
+
+  /**
+   * purge_evidence(p_retention_months, p_event_ids) returns jsonb.
+   *
+   * p_event_ids null means every eligible event. Given, it is intersected
+   * with the eligible set: a requested id that produced nothing eligible
+   * comes back in ineligible_event_ids rather than being silently skipped or
+   * silently purged, the same rule link_retroactive_matches() already keeps.
+   */
+  purge_evidence(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'purge_evidence', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const months = body.p_retention_months ?? settingInt('evidence_retention_months', 12);
+    if (months < 1) {
+      pds(res, 'PDS03', 'Retention window must be at least one month.');
+      return;
+    }
+
+    let eligible = eligibleEvidence(months);
+    let ineligible = [];
+    if (Array.isArray(body.p_event_ids)) {
+      const requested = [...new Set(body.p_event_ids)];
+      const stillEligible = new Set(
+        eligible.filter((row) => requested.includes(row.event.id)).map((row) => row.event.id),
+      );
+      ineligible = requested.filter((id) => !stillEligible.has(id));
+      eligible = eligible.filter((row) => requested.includes(row.event.id));
+    }
+
+    const eventIds = [...new Set(eligible.map((row) => row.event.id))];
+    const bytes = eligible.reduce((sum, row) => sum + (row.evidence.byte_size ?? 0), 0);
+    const paths = eligible.map((row) => row.evidence.object_path);
+
+    const runId = uuid('p9000000-0000-4000-a000-');
+    db.purge_runs.push({
+      id: runId,
+      performed_by: auth.userId,
+      performed_at: new Date().toISOString(),
+      kind: 'evidence',
+      retention_months: months,
+      evidence_count: eligible.length,
+      bytes_freed: bytes,
+      event_ids: eventIds,
+    });
+
+    for (const row of eligible) {
+      row.evidence.purged_at = new Date().toISOString();
+      row.evidence.purge_run_id = runId;
+    }
+
+    for (const path of paths) {
+      db.purge_run_objects.push({
+        id: uuid('q9000000-0000-4000-a000-'),
+        purge_run_id: runId,
+        bucket: 'evidence',
+        object_path: path,
+        deleted_at: null,
+      });
+    }
+
+    audit(auth, 'purge_evidence', 'purge_run', runId, {
+      retention_months: months,
+      evidence_count: eligible.length,
+      bytes_freed: bytes,
+      requested_event_ids: body.p_event_ids ?? null,
+      ineligible_event_ids: ineligible,
+    });
+    record({
+      fn: 'purge_evidence',
+      actor: auth.userId,
+      months,
+      count: eligible.length,
+      bytes,
+      eventIds,
+      ineligible,
+    });
+
+    json(res, 200, {
+      purge_run_id: runId,
+      evidence_count: eligible.length,
+      bytes_freed: bytes,
+      event_ids: eventIds,
+      object_paths: paths,
+      ineligible_event_ids: ineligible,
+    });
+  },
+
+  /** purge_orphaned_uploads() returns jsonb. Officer only. */
+  purge_orphaned_uploads(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'purge_orphaned_uploads', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const orphans = orphanedUploadRows();
+    const runId = uuid('p9000000-0000-4000-a000-');
+
+    db.purge_runs.push({
+      id: runId,
+      performed_by: auth.userId,
+      performed_at: new Date().toISOString(),
+      kind: 'orphaned_uploads',
+      retention_months: null,
+      evidence_count: orphans.length,
+      bytes_freed: 0,
+      event_ids: [...new Set(orphans.map((g) => g.event_id))],
+    });
+
+    for (const grant of orphans) {
+      grant.reclaimed_at = new Date().toISOString();
+      grant.purge_run_id = runId;
+      db.purge_run_objects.push({
+        id: uuid('q9000000-0000-4000-a000-'),
+        purge_run_id: runId,
+        bucket: grant.bucket_id ?? 'evidence',
+        object_path: grant.object_path,
+        deleted_at: null,
+      });
+    }
+
+    audit(auth, 'purge_orphaned_uploads', 'purge_run', runId, {
+      grants_reclaimed: orphans.length,
+      objects_to_delete: orphans.length,
+    });
+    record({ fn: 'purge_orphaned_uploads', actor: auth.userId, count: orphans.length });
+
+    json(res, 200, {
+      purge_run_id: runId,
+      grants_reclaimed: orphans.length,
+      objects_to_delete: orphans.length,
+      object_paths: orphans.map((g) => g.object_path),
+    });
+  },
+
+  /**
+   * finish_purge_run(p_run_id, p_object_paths) returns table(...). Stamps
+   * the paths Storage actually confirmed deleting for one run, so a run the
+   * browser only partly finished can be closed out later. Officer only.
+   */
+  finish_purge_run(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'finish_purge_run', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    // For a check to prove that a browser-side Storage delete succeeding is
+    // never enough on its own: deleteAndFinish() (src/storage.js) has to
+    // read "deleted" off what this call confirms, not off what Storage
+    // echoed, and a finish_purge_run() that dies here is the case that
+    // proves it.
+    if (injectedFailure(res, 'finish_purge_run', helpers)) return;
+
+    const run = db.purge_runs.find((r) => r.id === body.p_run_id);
+    if (!run) {
+      pds(res, 'PDS03', 'Unknown purge run.');
+      return;
+    }
+
+    const paths = [...new Set(Array.isArray(body.p_object_paths) ? body.p_object_paths : [])];
+    const results = paths.map((path) => {
+      const row = db.purge_run_objects.find(
+        (o) => o.purge_run_id === run.id && o.object_path === path,
+      );
+      if (!row) return { object_path: path, outcome: 'unknown_object' };
+      if (row.deleted_at) return { object_path: path, outcome: 'already_marked' };
+      row.deleted_at = new Date().toISOString();
+      return { object_path: path, outcome: 'marked_deleted' };
+    });
+
+    audit(auth, 'finish_purge_run', 'purge_run', run.id, { object_paths: paths });
+    record({ fn: 'finish_purge_run', actor: auth.userId, runId: run.id, results });
+
+    json(res, 200, results);
   },
 
   // -------------------------------------------------------------------------
@@ -3155,6 +3546,118 @@ export const ADMIN_RPC = {
     );
   },
 };
+
+// ---------------------------------------------------------------------------
+// Deleting evidence objects: the purge screen's second step
+// ---------------------------------------------------------------------------
+// deleteEvidenceObjects() (src/rest.js) sends one bulk DELETE per run, the
+// same shape Storage's own bulk delete takes: a JSON body of `prefixes`, and
+// a response listing only the objects it actually removed. A path absent
+// from that response is exactly what "not confirmed deleted" means, which is
+// the state finish_purge_run() and purge_run_objects exist to track and let
+// an officer close out later.
+//
+// Officer gated the same way migration 12's evidence_delete_officer policy
+// gates the real bucket: purging is a decision only an officer or admin
+// makes, and a viewer reading this screen has no delete button to press.
+
+let pendingDeleteFailures = null; // Set of object paths to report as NOT deleted, next call only
+
+/**
+ * For a check to prove a partial Storage failure is never reported as a
+ * clean success: a path named here is genuinely still in the bucket after
+ * this call, the same as a real transient Storage failure, not merely
+ * unreported. Set from the check process, never over HTTP, and cleared the
+ * moment it fires.
+ */
+export function failStorageDeleteOnce(paths) {
+  pendingDeleteFailures = new Set(paths);
+}
+
+/**
+ * For a check to prove that a path a bulk delete does not echo back is not
+ * automatically a failure: this removes it from the bucket directly,
+ * simulating an object already gone before the delete call ran (deleted out
+ * of band, or claimed by a second purge run racing for the same
+ * object_path). evidenceObjectExists() (src/rest.js) is what is supposed to
+ * tell these two cases apart; this is how a check makes one of them real.
+ * Unlike failStorageDeleteOnce(), this is a direct, standing removal rather
+ * than a one-shot flag: the object really is gone, for every call after
+ * this one, exactly as it would be in the real bucket.
+ */
+export function removeFromBucket(paths) {
+  for (const path of paths) bucketObjects.delete(path);
+}
+
+export function handleStorageDelete(req, res, url, body, helpers, anonKey) {
+  const { json } = helpers;
+  const auth = resolveAuth(req, anonKey);
+
+  if (!isOfficer(auth)) {
+    record({ fn: 'storage.delete', outcome: 'refused', role: auth.role ?? auth.kind });
+    json(res, 400, {
+      statusCode: '403',
+      error: 'Unauthorized',
+      message: 'new row violates row-level security policy',
+    });
+    return;
+  }
+
+  const requested = [...new Set(Array.isArray(body?.prefixes) ? body.prefixes : [])];
+  const failing = pendingDeleteFailures;
+  pendingDeleteFailures = null;
+
+  // Real Storage only echoes back what it actually removed: a path already
+  // missing from the bucket (never there, already deleted, claimed by a
+  // second run) is silently absent from the response too, the same as a
+  // path failing is. failing models the other case, an object that IS in
+  // the bucket but this call could not remove.
+  const deleted = requested.filter((path) => bucketObjects.has(path) && !failing?.has(path));
+  for (const path of deleted) bucketObjects.delete(path);
+
+  record({
+    fn: 'storage.delete',
+    actor: auth.userId,
+    requested: requested.length,
+    deleted: deleted.length,
+  });
+  json(res, 200, deleted.map((name) => ({ name })));
+}
+
+/**
+ * Storage's own object-info endpoint, the question evidenceObjectExists()
+ * (src/rest.js) asks for the one path deleteAndFinish() (src/storage.js)
+ * cannot answer from a bulk delete's response alone. 200 with a stand-in
+ * metadata body if the path is still in the bucket, 404 if it is not.
+ * Officer gated the same as every other Storage endpoint here: a viewer has
+ * no delete button, and so no reason to be asking this either.
+ */
+export function handleStorageInfo(req, res, url, helpers, anonKey) {
+  const { json } = helpers;
+  const auth = resolveAuth(req, anonKey);
+
+  if (!isOfficer(auth)) {
+    record({ fn: 'storage.info', outcome: 'refused', role: auth.role ?? auth.kind });
+    json(res, 400, {
+      statusCode: '403',
+      error: 'Unauthorized',
+      message: 'new row violates row-level security policy',
+    });
+    return;
+  }
+
+  const prefix = '/storage/v1/object/info/evidence/';
+  const path = decodeURIComponent(url.pathname.slice(prefix.length));
+
+  if (!bucketObjects.has(path)) {
+    record({ fn: 'storage.info', actor: auth.userId, path, outcome: 'not_found' });
+    json(res, 404, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+    return;
+  }
+
+  record({ fn: 'storage.info', actor: auth.userId, path, outcome: 'exists' });
+  json(res, 200, { name: path, bucket_id: 'evidence' });
+}
 
 // ---------------------------------------------------------------------------
 // Signed photo URLs

@@ -201,4 +201,82 @@ export async function signPhotoUrls(paths, { expiresIn = 3600, bucket = 'evidenc
   return urls;
 }
 
+/**
+ * Removes objects from a private bucket, for the storage screen's purge flow.
+ * Storage's bulk delete is a DELETE to the bucket itself with the paths in
+ * the body, not one request per photo: a run can name hundreds of objects,
+ * and a request per photo is the same "forty-three round trips" problem
+ * signPhotoUrls() above already avoids for reading.
+ *
+ * Deletion is the officer's own RLS, not a grant: migration 12's
+ * evidence_delete_officer policy already admits fn_is_officer() on the
+ * evidence bucket, so this rides the signed-in session like every other call
+ * in this file.
+ *
+ * @returns {Promise<string[]>} the paths Storage actually reports deleting.
+ *   A path that was already gone, or never existed, is simply absent from
+ *   this list rather than an error: the caller (storage.js) checks any
+ *   absent path with evidenceObjectExists() before deciding whether it is a
+ *   real failure or already-gone and safe to finish.
+ */
+export async function deleteEvidenceObjects(paths, { bucket = 'evidence', ...opts } = {}) {
+  const wanted = [...new Set(paths.filter(Boolean))];
+  if (!wanted.length) return [];
+
+  const result = await send(`/storage/v1/object/${encodeURIComponent(bucket)}`, {
+    method: 'DELETE',
+    body: { prefixes: wanted },
+    opts,
+  });
+
+  return (Array.isArray(result) ? result : [])
+    .map((entry) => entry?.name)
+    .filter(Boolean);
+}
+
+/**
+ * Whether an object is still in the bucket, for the one question a bulk
+ * delete's response cannot answer on its own: a path Storage did not echo
+ * back as deleted. That can mean two different things: Storage genuinely
+ * failed to remove it (still there, a real failure worth reporting), or the
+ * object was already gone before this call ran (deleted out of band, or
+ * claimed by a second purge run racing for the same object_path, see
+ * purge_evidence()'s eligibility locking in
+ * supabase/migrations/20260815100000_storage_ops.sql). Only the first is
+ * something an officer needs to hear about; the second is safe to record as
+ * finished.
+ *
+ * Storage's own object-info endpoint answers this directly: 200 with the
+ * object's metadata if it is there, an error if it is not. One request per
+ * path, not a bulk call: this only runs for the handful of paths a delete
+ * call did not confirm, never for the common case of a clean run, so the
+ * "forty-three round trips" problem signPhotoUrls() and
+ * deleteEvidenceObjects() exist to avoid does not apply here.
+ *
+ * The route is `/object/info/{bucket}/{path}`, with no `authenticated`
+ * segment: that segment belongs to the download routes (`/object/
+ * authenticated|public|sign/...`), a different endpoint family, and does not
+ * exist on `/object/info`. Confirmed against @supabase/storage-js's own
+ * `StorageFileApi.info()`, which builds `${url}/object/info/${bucketId}/
+ * ${path}`. Sending the wrong route here would 404 unconditionally, and
+ * this function treats any 404 as "confirmed absent", so a wrong route
+ * would silently mark objects Storage never actually deleted as finished,
+ * the opposite of what the object-info check exists to guard against.
+ */
+export async function evidenceObjectExists(path, { bucket = 'evidence', ...opts } = {}) {
+  const encodedPath = String(path)
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/');
+  try {
+    await send(`/storage/v1/object/info/${encodeURIComponent(bucket)}/${encodedPath}`, {
+      opts,
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof RpcError && err.status === 404) return false;
+    throw err;
+  }
+}
+
 export { RpcError, SessionExpiredError };

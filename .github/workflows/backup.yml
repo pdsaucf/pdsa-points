@@ -1,0 +1,156 @@
+# Nightly logical backup of the Supabase Postgres database, encrypted, and
+# uploaded as a workflow artifact.
+#
+# WHAT THIS DOES NOT COVER, SAID PLAINLY: A DATABASE DUMP HAS NO PHOTOS IN IT.
+# `pg_dump` captures rows, not the bytes Supabase Storage holds for them.
+# attendance_evidence.object_path is a pointer into the `evidence` bucket, and
+# restoring this dump brings every pointer back with nothing at the other end
+# of it until the bucket is restored separately (Supabase's own project-level
+# backups, or a bucket sync, cover that half; this workflow does not attempt
+# it). See docs/02-storage.md and README.md for the fuller version of this
+# note and how a restore is actually performed.
+#
+# TWO REPOSITORY SECRETS PLUS ONE REPOSITORY VARIABLE, AND WHY THREE STATES,
+# NOT TWO. `SUPABASE_DB_URL` is the Postgres connection string from the
+# Supabase dashboard (Project Settings, Database, Connection string).
+# `BACKUP_ENCRYPTION_PASSPHRASE` is a passphrase this project makes up, used
+# to symmetrically encrypt the dump before it is uploaded (see below). Both
+# are credentials, never committed, and live only as repository secrets.
+#
+# A clone of this repository where nobody has turned backups on yet is a
+# completely normal state (a fork, a fresh checkout before an admin has
+# configured any of this), and failing a nightly cron for every such clone
+# would just teach people to ignore a red workflow. But a project that HAD
+# backups configured and then lost a secret (rotated it out, a typo'd repo
+# transfer, whatever) is a different situation entirely, and reads identical
+# to "never configured" if the only signal available is "is the secret set".
+# That is exactly the silent-failure mode this workflow exists to avoid, so a
+# missing secret alone cannot mean "skip".
+#
+# The `BACKUPS_ENABLED` repository variable (Settings, Secrets and variables,
+# Actions, Variables tab) is the missing signal: an admin sets it to `true`
+# once, the same time they add the two secrets. From there:
+#
+#   * BACKUPS_ENABLED unset (or anything but `true`): a clean skip, whatever
+#     the secrets say. This is the fresh-clone state.
+#   * BACKUPS_ENABLED=true and SUPABASE_DB_URL missing: a loud failure. This
+#     is "backups were configured and the connection string is gone."
+#   * BACKUPS_ENABLED=true and BACKUP_ENCRYPTION_PASSPHRASE missing: also a
+#     loud failure, for the reason directly below.
+#   * All three present: the backup runs.
+#
+# WHY THE DUMP IS ENCRYPTED. The nightly dump is the full `public` schema,
+# meaning every member's name and email on file. This repository currently
+# has no git remote, so nobody has yet decided public vs. private, and a
+# workflow artifact on a public repo is downloadable by anyone with read
+# access to the repository; artifact retention is not a privacy boundary.
+# So the dump is encrypted (`gpg --symmetric`, AES-256) before it is ever
+# written to disk as an upload candidate, with the passphrase piped in over
+# stdin rather than placed on a command line or interpolated into generated
+# shell text (see the SECRET INTERPOLATION note below). If the passphrase
+# secret is missing while backups are otherwise enabled, this fails loudly
+# instead of silently uploading the dump unencrypted, since an unencrypted
+# upload happening by omission is the exact failure being guarded against.
+# See docs/02-storage.md for the matching decrypt step.
+#
+# SECRET INTERPOLATION, SAID ONCE FOR THE WHOLE FILE. Every step below that
+# needs a secret's value receives it through `env:`, then references it as a
+# shell variable (`$SUPABASE_DB_URL`, `$BACKUP_ENCRYPTION_PASSPHRASE`).
+# `${{ secrets.* }}` is never written directly into a `run:` block's script
+# text: that would interpolate the raw secret into generated shell source,
+# and a connection string or passphrase containing shell metacharacters
+# becomes command injection into the runner.
+#
+# SCOPED TO THE public SCHEMA ON PURPOSE. Supabase's auth and storage schemas
+# are its own internal bookkeeping, including real members' sign-in
+# addresses, which is exactly the kind of data this project already keeps out
+# of the repository proper (see README.md, "Privacy", on the roster CSV). The
+# tables this project actually owns and would need restoring live in `public`
+# (see README.md, "The migrations"), so the backup is scoped there.
+name: Nightly database backup
+
+on:
+  schedule:
+    - cron: '11 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - id: check
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+          BACKUPS_ENABLED: ${{ vars.BACKUPS_ENABLED }}
+        run: |
+          if [ "$BACKUPS_ENABLED" != "true" ]; then
+            echo "state=unconfigured" >> "$GITHUB_OUTPUT"
+          elif [ -z "$SUPABASE_DB_URL" ]; then
+            echo "state=missing_db_url" >> "$GITHUB_OUTPUT"
+          elif [ -z "$BACKUP_ENCRYPTION_PASSPHRASE" ]; then
+            echo "state=missing_passphrase" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=configured" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Backups not configured, skipping
+        if: steps.check.outputs.state == 'unconfigured'
+        run: |
+          echo "::notice::The BACKUPS_ENABLED repository variable is not set to true, so there is nothing to back up from. See README.md for how to turn nightly backups on. Skipping, not failing: a clone with backups not yet configured is a normal state."
+
+      - name: Backups are enabled but SUPABASE_DB_URL is missing
+        if: steps.check.outputs.state == 'missing_db_url'
+        run: |
+          echo "::error::BACKUPS_ENABLED is true but the SUPABASE_DB_URL repository secret is missing. Backups were configured at some point and the connection string is now gone (rotated out, never added, or lost in a repo transfer). See README.md. Failing loudly instead of skipping, because a missing secret here is not the same as backups never having been turned on."
+          exit 1
+
+      - name: Backups are enabled but BACKUP_ENCRYPTION_PASSPHRASE is missing
+        if: steps.check.outputs.state == 'missing_passphrase'
+        run: |
+          echo "::error::BACKUPS_ENABLED is true but the BACKUP_ENCRYPTION_PASSPHRASE repository secret is missing. The dump holds real members' names and emails, so this fails loudly rather than uploading it unencrypted. See README.md."
+          exit 1
+
+      - name: Install the Postgres client
+        if: steps.check.outputs.state == 'configured'
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+
+      - name: pg_dump
+        if: steps.check.outputs.state == 'configured'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          mkdir -p backup
+          pg_dump "$SUPABASE_DB_URL" \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --format=custom \
+            --file="backup/pdsa-points-$(date -u +%Y-%m-%d).dump"
+
+      # AES-256, passphrase over stdin so it never appears on the process
+      # list or in a shell history, and the plaintext dump is removed
+      # immediately after so only the encrypted file is ever a candidate for
+      # the upload step below.
+      - name: Encrypt the dump
+        if: steps.check.outputs.state == 'configured'
+        env:
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          for dump in backup/*.dump; do
+            echo "$BACKUP_ENCRYPTION_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+              --symmetric --cipher-algo AES256 --output "$dump.gpg" "$dump"
+            rm -f "$dump"
+          done
+
+      # 14 nightly dumps, so a problem noticed a week or two late still has a
+      # same-shape restore point behind it. Raise this if that window is not
+      # enough; GitHub charges private-repo artifact storage against the
+      # account's Actions quota, so it is a deliberate, not a default, number.
+      - name: Upload the encrypted dump
+        if: steps.check.outputs.state == 'configured'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdsa-points-db-backup
+          path: backup/*.dump.gpg
+          retention-days: 14

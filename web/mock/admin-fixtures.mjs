@@ -309,6 +309,43 @@ const IMPORT_RACE = {
   second: { name: 'Cornelius Applewhite', email: 'cornelius.applewhite@knights.ucf.edu' },
 };
 
+/*
+  The storage screen. Written against
+  supabase/migrations/20260815100000_storage_ops.sql, whose eligibility rule
+  is exactly three things: the record's own status (approved or rejected,
+  nothing else), whether the evidence row already carries a purged_at, and
+  the event's occurred_on against the retention window (12 months by
+  default, the app_settings default below). None of that needs a category or
+  a requirement, so the events these ids belong to carry neither.
+
+  eventOldA and eventOldB sit well before the twelve-month cutoff and are
+  what the "ready to clear" preview and the confirmation dialog's per-event
+  checkboxes exist to show: two events, so unchecking one in the dialog
+  really does leave the other behind. eventOldRejected is equally old but
+  the one record on it was REJECTED, not approved, which purge_evidence()
+  treats as just as eligible. eventOldPending is equally old too, but its
+  record is still pending, which must never turn up in a preview however far
+  past the window it sits. eventRecent is approved and reviewed but inside
+  the window, so a preview that forgot the cutoff entirely would still look
+  right without it.
+
+  runClean, runOutstanding and runOrphan are three rows of "Previously
+  cleared" history, attributed to two different people so the by-line is
+  exercised, and one of them (runOutstanding) left with objects nobody has
+  confirmed deleting, which is what the "Finish deleting" path on the screen
+  is for.
+*/
+const STORAGE = {
+  eventOldA: 's0000000-0000-4000-a000-000000000001',
+  eventOldB: 's0000000-0000-4000-a000-000000000002',
+  eventOldRejected: 's0000000-0000-4000-a000-000000000003',
+  eventOldPending: 's0000000-0000-4000-a000-000000000004',
+  eventRecent: 's0000000-0000-4000-a000-000000000005',
+  runClean: 'p8000000-0000-4000-a000-000000000001',
+  runOutstanding: 'p8000000-0000-4000-a000-000000000002',
+  runOrphan: 'p8000000-0000-4000-a000-000000000003',
+};
+
 function buildMembers() {
   const members = NAMED.map(([id, first, last, email]) => ({
     id,
@@ -453,10 +490,19 @@ export function buildDatabase() {
   const evidence = [];
   let evidenceSeq = 0;
 
-  const addEvidence = (recordId, kind, sha256) => {
+  // byteSize defaults to a plausible compressed shirt photo, and is only ever
+  // varied by the storage fixtures below: giving each one a distinct size is
+  // what lets fn_storage_usage()'s bytes_held and a purge run's bytes_freed
+  // be told apart from a row count that merely looks right.
+  //
+  // Returns the pushed row itself, not just its path, because the storage
+  // fixtures also need to stamp purged_at on one of these after the fact, to
+  // prove an already-cleared photo does not reappear just because its event
+  // is eligible again.
+  const addEvidence = (recordId, kind, sha256, byteSize = 184320) => {
     evidenceSeq += 1;
     const objectPath = `${YEAR_CURRENT}/${kind}/photo-${String(evidenceSeq).padStart(3, '0')}.jpg`;
-    evidence.push({
+    const row = {
       id: `v0000000-0000-4000-a000-${String(evidenceSeq).padStart(12, '0')}`,
       attendance_record_id: recordId,
       kind,
@@ -464,13 +510,14 @@ export function buildDatabase() {
       object_path: objectPath,
       drive_file_id: null,
       content_type: 'image/jpeg',
-      byte_size: 184320,
+      byte_size: byteSize,
       sha256: sha256 ?? `sha256-${recordId}`,
       uploaded_at: '2026-08-11T18:02:00.000Z',
       archived_at: null,
       purged_at: null,
-    });
-    return objectPath;
+    };
+    evidence.push(row);
+    return row;
   };
 
   const add = (record) => {
@@ -800,6 +847,226 @@ export function buildDatabase() {
     addEvidence(record.id, 'shirt_photo');
   });
 
+  // ---- the storage screen ---------------------------------------------------
+  // See the STORAGE comment above for why each event and record exists.
+
+  const storageEvents = [
+    { id: STORAGE.eventOldA, academic_year_id: YEAR_PAST, title: 'Career Night', occurred_on: '2025-03-10', location: 'Business Admin 101', is_published: true },
+    { id: STORAGE.eventOldB, academic_year_id: YEAR_PAST, title: 'Movie Night', occurred_on: '2025-03-24', location: 'Student Union 316', is_published: true },
+    { id: STORAGE.eventOldRejected, academic_year_id: YEAR_PAST, title: 'Blood Drive', occurred_on: '2025-04-07', location: 'Recreation and Wellness Center', is_published: true },
+    { id: STORAGE.eventOldPending, academic_year_id: YEAR_PAST, title: 'Beach Cleanup', occurred_on: '2025-04-21', location: 'Cocoa Beach', is_published: true },
+    { id: STORAGE.eventRecent, academic_year_id: YEAR_CURRENT, title: 'Trivia Night', occurred_on: '2026-08-10', location: 'HPA-1 205', is_published: true },
+  ];
+
+  // Two reviewed, unpurged photos at eventOldA, plus a third that an earlier
+  // run already cleared: proof that an already-purged row does not reappear
+  // in the preview or the usage bar just because its event is eligible again.
+  const storageA1 = add({
+    id: 's1000000-0000-4000-a000-000000000001',
+    event_id: STORAGE.eventOldA,
+    member_id: byName('Daniel Nguyen').id,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2025-03-11T10:00:00.000Z',
+    submitted_at: '2025-03-10T18:00:00.000Z',
+  });
+  addEvidence(storageA1.id, 'shirt_photo', undefined, 262144);
+
+  const storageA2 = add({
+    id: 's1000000-0000-4000-a000-000000000002',
+    event_id: STORAGE.eventOldA,
+    member_id: byName('Jonathan Pak').id,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2025-03-11T10:05:00.000Z',
+    submitted_at: '2025-03-10T18:05:00.000Z',
+  });
+  addEvidence(storageA2.id, 'shirt_photo', undefined, 307200);
+
+  const storageAPurged = add({
+    id: 's1000000-0000-4000-a000-000000000003',
+    event_id: STORAGE.eventOldA,
+    member_id: byName('Priya Raman').id,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2025-03-11T10:10:00.000Z',
+    submitted_at: '2025-03-10T18:10:00.000Z',
+  });
+  const storagePurgedEvidence = addEvidence(storageAPurged.id, 'shirt_photo', undefined, 200000);
+  storagePurgedEvidence.purged_at = '2026-06-01T10:00:00.000Z';
+  storagePurgedEvidence.purge_run_id = STORAGE.runClean;
+
+  const storageB1 = add({
+    id: 's1000000-0000-4000-a000-000000000004',
+    event_id: STORAGE.eventOldB,
+    member_id: byName('Leah Ortiz').id,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2025-03-25T09:00:00.000Z',
+    submitted_at: '2025-03-24T19:00:00.000Z',
+  });
+  addEvidence(storageB1.id, 'shirt_photo', undefined, 358400);
+
+  // Rejected, not approved, and just as eligible: purge_evidence() reads
+  // status in ('approved', 'rejected'), never just the one.
+  const storageRejected = add({
+    id: 's1000000-0000-4000-a000-000000000005',
+    event_id: STORAGE.eventOldRejected,
+    member_id: byName('Catherine Diaz').id,
+    status: 'rejected',
+    review_note: 'Shirt not visible in the photo.',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2025-04-08T09:00:00.000Z',
+    submitted_at: '2025-04-07T19:00:00.000Z',
+  });
+  addEvidence(storageRejected.id, 'shirt_photo', undefined, 184320);
+
+  // Equally old, but still pending: never eligible, however far past the
+  // window it sits.
+  const storagePending = add({
+    id: 's1000000-0000-4000-a000-000000000006',
+    event_id: STORAGE.eventOldPending,
+    member_id: byName('Grace Okonkwo').id,
+    submitted_at: '2025-04-21T18:00:00.000Z',
+  });
+  addEvidence(storagePending.id, 'shirt_photo', undefined, 184320);
+
+  // Reviewed and approved, but inside the retention window: a preview that
+  // forgot the cutoff entirely would still look right without this one.
+  const storageRecent = add({
+    id: 's1000000-0000-4000-a000-000000000007',
+    event_id: STORAGE.eventRecent,
+    member_id: byName('Ethan Wallace').id,
+    status: 'approved',
+    reviewed_by: USERS.officer,
+    reviewed_at: '2026-08-10T20:00:00.000Z',
+    submitted_at: '2026-08-10T18:00:00.000Z',
+  });
+  addEvidence(storageRecent.id, 'shirt_photo', undefined, 184320);
+
+  // ---- purge history ---------------------------------------------------
+  // Three rows for "Previously cleared": one attributed to the officer, one
+  // to the admin, and the third the orphaned-uploads kind, whose bytes are
+  // always "size unknown" rather than a number the screen has no way to know.
+  const purgeRuns = [
+    {
+      id: STORAGE.runClean,
+      performed_by: USERS.officer,
+      performed_at: '2026-06-01T10:00:00.000Z',
+      kind: 'evidence',
+      retention_months: 12,
+      evidence_count: 1,
+      bytes_freed: 200000,
+      event_ids: [STORAGE.eventOldA],
+    },
+    {
+      // Left outstanding on purpose: two of its three objects were never
+      // confirmed deleted from Storage, which is exactly the state
+      // "Finish deleting" exists for.
+      id: STORAGE.runOutstanding,
+      performed_by: USERS.admin,
+      performed_at: '2026-07-15T09:30:00.000Z',
+      kind: 'evidence',
+      retention_months: 12,
+      evidence_count: 3,
+      bytes_freed: 552960,
+      event_ids: [STORAGE.eventOldRejected],
+    },
+    {
+      id: STORAGE.runOrphan,
+      performed_by: USERS.officer,
+      performed_at: '2026-05-01T14:00:00.000Z',
+      kind: 'orphaned_uploads',
+      retention_months: null,
+      evidence_count: 2,
+      bytes_freed: 0,
+      event_ids: [],
+    },
+  ];
+
+  const purgeRunObjects = [
+    {
+      id: 'q8000000-0000-4000-a000-000000000001',
+      purge_run_id: STORAGE.runClean,
+      bucket: 'evidence',
+      object_path: storagePurgedEvidence.object_path,
+      deleted_at: '2026-06-01T10:05:00.000Z',
+    },
+    {
+      id: 'q8000000-0000-4000-a000-000000000002',
+      purge_run_id: STORAGE.runOutstanding,
+      bucket: 'evidence',
+      object_path: `${YEAR_PAST}/shirt_photo/outstanding-1.jpg`,
+      deleted_at: '2026-07-15T09:35:00.000Z',
+    },
+    {
+      id: 'q8000000-0000-4000-a000-000000000003',
+      purge_run_id: STORAGE.runOutstanding,
+      bucket: 'evidence',
+      object_path: `${YEAR_PAST}/shirt_photo/outstanding-2.jpg`,
+      deleted_at: null,
+    },
+    {
+      id: 'q8000000-0000-4000-a000-000000000004',
+      purge_run_id: STORAGE.runOutstanding,
+      bucket: 'evidence',
+      object_path: `${YEAR_PAST}/shirt_photo/outstanding-3.jpg`,
+      deleted_at: null,
+    },
+    {
+      id: 'q8000000-0000-4000-a000-000000000005',
+      purge_run_id: STORAGE.runOrphan,
+      bucket: 'evidence',
+      object_path: `${YEAR_CURRENT}/orphan/reclaimed-1.jpg`,
+      deleted_at: '2026-05-01T14:05:00.000Z',
+    },
+    {
+      id: 'q8000000-0000-4000-a000-000000000006',
+      purge_run_id: STORAGE.runOrphan,
+      bucket: 'evidence',
+      object_path: `${YEAR_CURRENT}/orphan/reclaimed-2.jpg`,
+      deleted_at: '2026-05-01T14:05:00.000Z',
+    },
+  ];
+
+  // ---- orphaned uploads ---------------------------------------------------
+  // One truly abandoned grant (expired, unconsumed, nothing wrote a
+  // byte_size for it, so its bytes stay out of bytes_held) and one still
+  // within its window, which must never count as orphaned just because it
+  // is unconsumed.
+  const uploadGrants = [
+    {
+      id: 'w0000000-0000-4000-a000-000000000001',
+      token: 'storage-fixture-orphan-1',
+      event_id: GBM,
+      member_id: null,
+      client_nonce: null,
+      kind: 'shirt_photo',
+      bucket_id: 'evidence',
+      object_path: `${YEAR_CURRENT}/orphan/never-uploaded-1.jpg`,
+      created_at: '2026-08-01T10:00:00.000Z',
+      expires_at: '2026-08-01T10:30:00.000Z',
+      consumed_at: null,
+      reclaimed_at: null,
+      purge_run_id: null,
+    },
+    {
+      id: 'w0000000-0000-4000-a000-000000000002',
+      token: 'storage-fixture-active-1',
+      event_id: GBM,
+      member_id: null,
+      client_nonce: null,
+      kind: 'shirt_photo',
+      bucket_id: 'evidence',
+      object_path: `${YEAR_CURRENT}/orphan/still-active.jpg`,
+      created_at: '2026-08-16T10:00:00.000Z',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      consumed_at: null,
+      reclaimed_at: null,
+      purge_run_id: null,
+    },
+  ];
+
   // ---- credit already earned, so the preview has something to count --------
   //
   // The requirements screen is worth nothing without real numbers behind it:
@@ -1024,6 +1291,7 @@ export function buildDatabase() {
     events: [
       ...EVENTS.map((e) => ({ ...e })),
       ...historyEvents.map(({ category_id, credit_mode, ...event }) => event),
+      ...storageEvents,
     ],
     event_categories: [
       ...EVENT_CATEGORIES.map((ec) => ({ ...ec })),
@@ -1051,6 +1319,17 @@ export function buildDatabase() {
     // the next load, which is the behaviour the officer just said no to.
     duplicate_dismissals: [],
     audit_log: [],
+    // The storage screen. Defaults match
+    // supabase/migrations/20260811100800_ops_tables.sql exactly, so a
+    // retention change made here is the same edit an admin would make there.
+    app_settings: [
+      { key: 'evidence_retention_months', value: 12, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      { key: 'storage_warn_percent', value: 75, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      { key: 'storage_quota_bytes', value: 1073741824, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+    ],
+    purge_runs: purgeRuns,
+    purge_run_objects: purgeRunObjects,
+    evidence_upload_grants: uploadGrants,
   };
 }
 
@@ -1093,4 +1372,22 @@ export const IDS = {
   CATEGORY_JOURNAL_CLUB: 'c0000000-0000-4000-a000-00000000000a',
   CATEGORY_MEDIA_SPEAKING: 'c0000000-0000-4000-a000-00000000000c',
   CATEGORY_RETIRED: 'c0000000-0000-4000-a000-0000000000ff',
+
+  STORAGE: {
+    ...STORAGE,
+    MEMBER_DANIEL: 'm0000000-0000-4000-a000-00000000000a',
+    MEMBER_JONATHAN: 'm0000000-0000-4000-a000-000000000008',
+    MEMBER_LEAH: 'm0000000-0000-4000-a000-000000000009',
+    MEMBER_CATHERINE: 'm0000000-0000-4000-a000-000000000003',
+    MEMBER_GRACE: 'm0000000-0000-4000-a000-00000000000b',
+    RECORD_OLD_A_1: 's1000000-0000-4000-a000-000000000001',
+    RECORD_OLD_A_2: 's1000000-0000-4000-a000-000000000002',
+    RECORD_OLD_A_PURGED: 's1000000-0000-4000-a000-000000000003',
+    RECORD_OLD_B: 's1000000-0000-4000-a000-000000000004',
+    RECORD_REJECTED: 's1000000-0000-4000-a000-000000000005',
+    RECORD_PENDING: 's1000000-0000-4000-a000-000000000006',
+    RECORD_RECENT: 's1000000-0000-4000-a000-000000000007',
+    UPLOAD_GRANT_ORPHAN: 'w0000000-0000-4000-a000-000000000001',
+    UPLOAD_GRANT_ACTIVE: 'w0000000-0000-4000-a000-000000000002',
+  },
 };

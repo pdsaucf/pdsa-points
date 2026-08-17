@@ -269,6 +269,49 @@ only ever touches photos whose record has actually been reviewed and whose
 event is past the window, and it writes a `purge_runs` row attributing the run.
 See [docs/02-storage.md](docs/02-storage.md) for the arithmetic behind that.
 
+## Keeping the project running
+
+Two scheduled workflows in `.github/workflows/`:
+
+- **`keepalive.yml`** pings the Supabase project daily so the free tier does not
+  auto-pause it for inactivity, by calling `fn_keepalive()`, an anon-callable RPC
+  that actually executes a query against Postgres (not just GoTrue's own health
+  check, which proves nothing about whether the database itself is awake). It
+  reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` straight out of `web/config.js`,
+  both of which are public by design (see "The security model in one paragraph"
+  above), so nothing extra needs configuring.
+- **`backup.yml`** runs `pg_dump` nightly, encrypts the dump, and uploads it as a
+  workflow artifact, kept 14 days. **A dump has no photos in it**: it captures the
+  `public` schema's rows, never the `evidence` bucket's bytes, which have to be
+  restored separately. See
+  [docs/02-storage.md](docs/02-storage.md#backups-what-githubworkflowsbackupyml-actually-saves)
+  for the restore and decrypt steps.
+
+  Backups are off until turned on, and "off" and "was on, now broken" read
+  differently on purpose: with the `BACKUPS_ENABLED` repository variable unset,
+  the workflow skips cleanly, which is the state a fresh clone starts in and
+  stays in until an admin turns backups on. Once `BACKUPS_ENABLED` is `true`, a
+  missing `SUPABASE_DB_URL` or `BACKUP_ENCRYPTION_PASSPHRASE` secret fails the
+  run loudly instead of skipping it, because at that point a missing secret
+  means backups broke, not that they were never configured.
+
+To turn backups on:
+
+1. Repository Settings, Secrets and variables, Actions, Secrets tab: add
+   `SUPABASE_DB_URL`, the Postgres connection string from the Supabase dashboard
+   (Project Settings, Database, Connection string), and `BACKUP_ENCRYPTION_PASSPHRASE`,
+   a passphrase this project makes up (a password manager's generator is fine).
+   Both are credentials, unlike the two public values above, so neither goes in
+   a file the repository ships.
+2. Same page, Variables tab: add `BACKUPS_ENABLED` set to `true`.
+
+The dump is encrypted with that passphrase before it is ever uploaded (AES-256
+via `gpg --symmetric`), because this repository currently has no git remote, so
+nobody has decided public vs. private yet, and a workflow artifact on a public
+repo is downloadable by anyone with read access. Losing the passphrase means
+losing the ability to restore, the same as losing any encryption key; keep it
+wherever `SUPABASE_DB_URL` itself is kept.
+
 ## House rules
 
 No em dashes, anywhere, including SQL comments and this file:

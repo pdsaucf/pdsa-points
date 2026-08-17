@@ -1,0 +1,85 @@
+# Pings Supabase on a schedule so the free tier does not auto-pause the
+# project for inactivity.
+#
+# THE PROBLEM. Check-in and every admin screen read straight from this one
+# Supabase project. A free-tier project the API sees no traffic on for a
+# stretch gets paused, and a paused project is a QR code that goes nowhere at
+# the door of an event. The real calendar (docs/00-spreadsheet-findings.md)
+# has genuine gaps between GBMs where nobody signs in or scans anything, so
+# something has to hit the API on a schedule comfortably shorter than the
+# pause window, whether or not a person happens to use the site that week.
+#
+# WHAT IT HITS, AND WHY THAT NEEDS NO SECRET. web/config.js documents both
+# SUPABASE_URL and SUPABASE_ANON_KEY as public by design: the anon key grants
+# nothing on its own, every table is behind RLS, and anon has no table grant
+# at all (see README.md, "The security model in one paragraph"). So this
+# workflow reads both values out of that file rather than keeping a second,
+# driftable copy as a repository secret. Rotating the key is one commit to
+# config.js and this workflow follows it automatically.
+#
+# WHY THIS CALLS fn_keepalive(), NOT GoTrue's /auth/v1/health. This workflow
+# used to ping GoTrue's own health check, which touches no table and proves
+# only that GoTrue is answering. If Supabase's free-tier auto-pause triggers
+# on Postgres inactivity specifically, not on API traffic in general, that
+# ping could stay green forever while the database itself paused anyway: a
+# green workflow and a check-in page that goes nowhere, at the same time,
+# which is exactly the failure this workflow exists to catch. fn_keepalive()
+# (supabase/migrations/20260815100000_storage_ops.sql, section 20.8) is a
+# parameterless RPC that actually executes `select now()` against Postgres,
+# anon callable, no table, no PII, no write, so a ping through it proves the
+# one thing that actually matters here: the database answered a query.
+#
+# A GREEN TICK ON A PAUSED PROJECT IS WORSE THAN NO WORKFLOW AT ALL: it would
+# read as "everything is fine" while check-in is actually broken. So a
+# non-2xx response, or no response, fails the job loudly rather than being
+# swallowed.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    # Once a day is comfortably inside the free tier's inactivity window
+    # under any reading of it, and an off-peak minute rather than the top of
+    # the hour, so this is not queued behind every other project's cron.
+    - cron: '17 13 * * *'
+  # So an officer can confirm the project answers right now, from the Actions
+  # tab, without waiting for the next scheduled run.
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Read straight from the file an officer actually edits, so a rotated
+      # URL or key is picked up the moment config.js is, with nothing else to
+      # remember to update.
+      - id: config
+        run: |
+          node -e "
+            const fs = require('fs');
+            import('./web/config.js').then((m) => {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'url=' + m.SUPABASE_URL + '\n');
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'key=' + m.SUPABASE_ANON_KEY + '\n');
+            });
+          "
+
+      - name: Ping the project
+        run: |
+          status="$(curl -sS -o /tmp/keepalive.body -w '%{http_code}' \
+            -X POST \
+            -H "apikey: ${{ steps.config.outputs.key }}" \
+            -H "Authorization: Bearer ${{ steps.config.outputs.key }}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "${{ steps.config.outputs.url }}/rest/v1/rpc/fn_keepalive")"
+          echo "Supabase answered with HTTP $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::Supabase did not answer 2xx from fn_keepalive() (got $status). The project may be paused, config.js may be stale, or the migration adding fn_keepalive() may not have been applied yet."
+            cat /tmp/keepalive.body
+            exit 1
+          fi

@@ -120,6 +120,9 @@
           <button id="tab-categories" type="button" class="tab" aria-selected="false" aria-controls="panel-categories">
             Categories
           </button>
+          <button id="tab-storage" type="button" class="tab" aria-selected="false" aria-controls="panel-storage">
+            Storage
+          </button>
         </nav>
 
         <div class="topbar-right">
@@ -501,6 +504,82 @@
           <div id="category-retired" class="category-list"></div>
         </section>
       </main>
+
+      <!--
+        Photo storage and the purge flow (docs/03-admin-ui.md section 7).
+        Purging is an action a person takes, never a job that runs on its
+        own: nothing here deletes on a timer (invariant 7).
+      -->
+      <main id="panel-storage" class="panel-view" hidden>
+        <section id="loading-storage" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading storage…</p>
+        </section>
+
+        <div id="storage-body" hidden>
+          <section class="storage-usage">
+            <p id="storage-usage-count" class="storage-usage-count"></p>
+            <div id="storage-usage-bar" class="usage-bar">
+              <div id="storage-usage-fill" class="usage-bar-fill"></div>
+            </div>
+            <p id="storage-usage-line" class="usage-line"></p>
+            <p id="storage-orphaned" class="storage-orphaned muted small" hidden>
+              <span id="storage-orphaned-text"></span>
+              <button id="storage-reclaim" type="button" class="button button-small">
+                Reclaim
+              </button>
+            </p>
+          </section>
+
+          <section id="storage-outstanding" class="notice notice-block" hidden>
+            <p id="storage-outstanding-title" class="notice-title"></p>
+            <p class="notice-body">
+              Marked cleared, but storage never confirmed the delete. Nothing else was affected.
+            </p>
+            <button id="storage-finish" type="button" class="button">Finish deleting</button>
+          </section>
+
+          <div id="storage-ready" class="panel storage-ready" hidden>
+            <h2 class="panel-title">Ready to clear</h2>
+            <p id="storage-ready-body" class="body"></p>
+            <div class="zone-footer">
+              <button id="storage-review" type="button" class="button button-primary">
+                Review and clear…
+              </button>
+            </div>
+          </div>
+
+          <p id="storage-ready-note" class="muted small" hidden>
+            An officer can review what is ready to clear.
+          </p>
+
+          <div class="storage-retention">
+            <label class="label" for="storage-retention-select">Keep photos for</label>
+            <select id="storage-retention-select" class="select" hidden></select>
+            <span id="storage-retention-text" class="body" hidden></span>
+            <p id="storage-retention-note" class="muted small storage-retention-note"></p>
+          </div>
+
+          <section class="zone">
+            <h2 class="zone-title">Previously cleared</h2>
+            <p id="storage-history-empty" class="muted small" hidden>Nothing cleared yet.</p>
+            <p id="storage-history-note" class="muted small" hidden>
+              An officer can see the clearing history.
+            </p>
+            <table id="storage-history-table" class="board board-plain" hidden>
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">By</th>
+                  <th class="board-number" scope="col">Photos</th>
+                  <th class="board-number" scope="col">Freed</th>
+                </tr>
+              </thead>
+              <tbody id="storage-history-rows"></tbody>
+            </table>
+          </section>
+        </div>
+      </main>
     </div>
 
     <!-- Rejection always captures a reason. -->
@@ -762,6 +841,24 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button type="submit" class="button button-primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      Clearing photos, grouped by event. Checked by default: an officer holds
+      one back for an ongoing dispute by unchecking it, rather than building
+      the clear set up from nothing.
+    -->
+    <dialog id="storage-purge-dialog" class="dialog dialog-wide">
+      <form id="storage-purge-form" method="dialog" novalidate>
+        <h2 id="storage-purge-title" class="dialog-title"></h2>
+        <div id="storage-purge-list" class="storage-purge-list"></div>
+        <p class="body">Attendance records, points and Honorary status are all kept.</p>
+        <p class="body">Only the photos are deleted. This can't be undone.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="storage-purge-confirm" type="submit" class="button button-danger"></button>
         </div>
       </form>
     </dialog>

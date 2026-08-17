@@ -140,16 +140,17 @@ npm run verify:admin         # the review queue checks
 npm run verify:requirements  # the rule editor checks
 npm run verify:board         # the board, member, roster and merge checks
 npm run verify:portal        # the member portal: four screens, claims, missing credit
-npm run check                # em dash gate, then all five suites
+npm run verify:storage       # the storage screen: usage, the purge dialog, roles
+npm run check                # em dash gate, then all six suites
 ```
 
-`verify:board` and `verify:portal` are the two suites that mount the shipped page
-rather than only the modules. `mock/dom.mjs` parses `admin/index.html` or
-`me/index.html`, the page's own `start()` runs against it, and what is asserted is
-the rendered DOM, so an id that stops matching between the markup and a module
-fails there rather than in front of somebody. It is a deliberate subset of a DOM:
-no layout, no CSS, and a selector it cannot parse throws instead of quietly
-matching nothing.
+`verify:board`, `verify:portal` and `verify:storage` are the three suites that mount
+the shipped page rather than only the modules. `mock/dom.mjs` parses
+`admin/index.html` or `me/index.html`, the page's own `start()` runs against it, and
+what is asserted is the rendered DOM, so an id that stops matching between the
+markup and a module fails there rather than in front of somebody. It is a
+deliberate subset of a DOM: no layout, no CSS, and a selector it cannot parse
+throws instead of quietly matching nothing.
 
 `npm run mock` prints one URL per scenario. Each check-in token is a different
 event:

@@ -63,6 +63,12 @@ let db;
 // this way, a new overload fails as an unexpected entry that names itself.
 const ANON_MAY_EXECUTE = [
   'create_evidence_upload(text,uuid,evidence_kind_t,text)',
+  // Not part of the check-in surface: .github/workflows/keepalive.yml calls
+  // this, unauthenticated, so a free-tier pause on Postgres inactivity
+  // specifically (not just API traffic) is something the workflow can
+  // actually detect. See supabase/migrations/20260815100000_storage_ops.sql
+  // section 20.8.
+  'fn_keepalive()',
   'fn_upload_grant_is_live(text,text)',
   'get_checkin_context(text)',
   'search_members(text,text,text)',
@@ -226,8 +232,15 @@ function officerRpcs() {
     ['review_records', `select review_records($1::uuid[], 'approve', null)`, [[]]],
     ['resolve_unmatched', `select resolve_unmatched($1::uuid, null, null)`, [null]],
     ['merge_members', `select merge_members($1::uuid, $2::uuid)`, [MEMBERS.dorian, MEMBERS.ada]],
-    ['purge_evidence', `select purge_evidence(null)`, []],
+    ['purge_evidence', `select purge_evidence(null, null)`, []],
     ['purge_orphaned_uploads', `select purge_orphaned_uploads()`, []],
+    ['fn_purge_preview', `select * from fn_purge_preview(null)`, []],
+    ['fn_storage_usage', `select * from fn_storage_usage()`, []],
+    [
+      'finish_purge_run',
+      `select * from finish_purge_run($1::uuid, $2::text[])`,
+      ['00000000-0000-4000-a000-000000000000', []],
+    ],
     ['clone_requirement_set', `select clone_requirement_set($1::uuid)`, [REQ_SET]],
     ['publish_requirement_set', `select publish_requirement_set($1::uuid)`, [REQ_SET]],
     ['validate_requirement_set', `select * from validate_requirement_set($1::uuid)`, [REQ_SET]],
