@@ -60,6 +60,11 @@ Before adding or changing any user-facing text, apply this test:
 
 If not, cut it. When uncertain, default to less copy.
 
+Default is no explanatory prose at all. A heading, a button, and metadata should
+carry the screen on their own. Add a helper line only for a fact the interface
+cannot otherwise convey (a hidden constraint, a reason a state looks ambiguous),
+and prefer deleting a line over shortening it.
+
 Order information as: **what happened**, then **why it was flagged** only if the reason
 is not obvious, then **what to do**. Then stop.
 
