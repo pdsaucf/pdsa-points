@@ -1,10 +1,25 @@
 // Sign-in, and the session behind every request a signed-in screen makes.
 //
-// SHARED WITH THE MEMBER PORTAL. This was written for the officer screens and
-// is not officer-specific: magic-link sign-in, the redirect fragment, storage,
-// expiry-aware refresh and sign-out are the same on /me as on /admin/. The one
-// thing that differs is whether signing in may create the account, which is now
-// an argument to sendMagicLink() with the officer answer as its default.
+// ONE SHARED OFFICER ACCOUNT, REACHED WITH A PASSCODE. The screen is a single
+// box. What it does is GoTrue's password grant against a fixed address that
+// nobody reads mail at (OFFICER_ACCOUNT_EMAIL in config.js): the passcode is
+// the password on that account, checked against a bcrypt hash in auth.users,
+// and what comes back is an ordinary `authenticated` JWT.
+//
+// WHY THE PASSCODE IS NOT CHECKED IN THIS FILE. It cannot be. This is a static
+// site on GitHub Pages out of a public repository, so any comparison written
+// here ships as readable source, and the anon key it would be guarding is
+// published in config.js on purpose. More to the point, a passcode checked in
+// the browser protects nothing: every officer table is behind RLS keyed on the
+// JWT, so a client-side gate would only work if `anon` were granted the officer
+// surface, which would put 355 members' records, writable, behind a JavaScript
+// `if`. Sending the passcode to GoTrue keeps the check on the server and keeps
+// every policy in migration 11 doing its job unchanged.
+//
+// WHAT THIS COSTS, SAID PLAINLY. One account means one `reviewed_by` on every
+// approval, so the audit trail records that an officer did it and not which
+// officer. That is inherent in a shared passcode, not in this implementation.
+// docs/06-officer-passcode.md has the rest.
 //
 // WHY THIS IS NOT @supabase/supabase-js
 //
@@ -16,10 +31,10 @@
 //     compiled, bundled, minified or transpiled, so what is in the repo is
 //     exactly what runs" (web/README.md). That sentence stops being true the
 //     moment a build artifact lands in src/.
-//   * The surface actually needed is three HTTP calls and one fragment parse:
-//     POST /auth/v1/otp, POST /auth/v1/token?grant_type=refresh_token,
-//     POST /auth/v1/logout, and reading #access_token= off the redirect. That
-//     is the file below.
+//   * The surface actually needed is three HTTP calls:
+//     POST /auth/v1/token?grant_type=password, the same endpoint again with
+//     grant_type=refresh_token, and POST /auth/v1/logout. That is the file
+//     below.
 //   * What the library would add on top (storage, expiry-aware refresh,
 //     single-flight, sign-out) is roughly a hundred lines, and those hundred
 //     lines are the ones you actually want to be able to read when somebody is
@@ -40,7 +55,7 @@
 // that this page loads no third party script at all: no CDN, no analytics, no
 // font host.
 
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, OFFICER_ACCOUNT_EMAIL } from '../config.js';
 import { RpcError, NetworkError } from './errors.js';
 import { withRetries, requestOnce, API_BASE } from './api.js';
 
@@ -50,7 +65,7 @@ const STORAGE_KEY = `pdsa:auth:${SUPABASE_URL}`;
 // out holding one that dies in flight.
 const REFRESH_SKEW_SECONDS = 90;
 
-/** The session is gone and cannot be recovered without a fresh magic link. */
+/** The session is gone and cannot be recovered without entering the passcode. */
 export class SessionExpiredError extends Error {
   constructor(message) {
     super(message || 'That sign-in has expired.');
@@ -114,9 +129,8 @@ function removeRaw() {
  * verified, because the browser has no key to verify it with and no reason to:
  * the database checks the signature on every request, and lying to yourself
  * about your own user id only produces queries that come back empty. It is
- * read for one practical reason, which is that the redirect fragment carries
- * the token but not the user, and knowing who is signed in without a second
- * round trip is worth twelve lines.
+ * read for one practical reason, which is that knowing who is signed in
+ * without a second round trip is worth twelve lines.
  */
 export function decodeToken(token) {
   try {
@@ -147,9 +161,9 @@ function normaliseSession(raw) {
     refresh_token: String(raw.refresh_token),
     expires_at: expiresAt,
     user: {
-      // The redirect fragment carries no user object, so the token's own
-      // claims are the fallback. `sub` is the auth.users id every RLS policy
-      // in migration 11 keys on.
+      // The token's own claims are the fallback for a response that carries
+      // no user object. `sub` is the auth.users id every RLS policy in
+      // migration 11 keys on.
       id: raw.user?.id ?? raw.user_id ?? claims.sub ?? null,
       email: raw.user?.email ?? claims.email ?? null,
     },
@@ -229,91 +243,31 @@ async function authFetch(path, { method = 'POST', body, accessToken, opts = {} }
 }
 
 /**
- * Sends the magic link.
+ * Exchanges the passcode for a session.
  *
- * `create_user` IS THE ONE THING THE TWO SIGN-INS DISAGREE ABOUT, and it
- * defaults to the officer answer.
+ * The address is fixed and public; the passcode is the only thing the officer
+ * supplies and the only thing that is secret. GoTrue compares it against the
+ * bcrypt hash on that account and answers 400 `invalid_grant` when it is wrong,
+ * which is the one refusal the sign-in screen has to render.
  *
- * The officer screens send false. Officer accounts are provisioned by an admin,
- * and without this any address on earth could sign itself up. The account it
- * created would land on `profiles.role` default 'viewer' and therefore see
- * nothing, but "anyone can create a row in your auth.users" is not a property
- * worth having.
- *
- * The member portal sends true, because there the first sign-in IS the account
- * being created. docs/04-member-ui.md is explicit about why: the imported
- * roster carries names and no email addresses, so 355 members arrive with
- * `email IS NULL` and there is nobody for an admin to provision an account for.
- * What that account can then see is decided entirely by the portal's own RPCs:
- * start_portal_session() writes role `member` rather than the viewer default,
- * and until an officer confirms a claim, `profiles.member_id` stays null and
- * every member-scoped policy in migration 11 matches no row. A stranger who
- * signs in gets a screen that asks who they are and nothing else.
- *
- * The reply is deliberately not inspected for whether the address exists.
- * GoTrue answers 200 either way for exactly that reason, and the copy on both
- * screens is written to match.
- *
- * @param {{createUser?: boolean}} [opts] also carries the retry options
+ * Signups are irrelevant to this endpoint: the password grant authenticates an
+ * existing account and never creates one, so there is no `create_user` question
+ * to get wrong.
  */
-export async function sendMagicLink(email, redirectTo, opts = {}) {
-  const query = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : '';
-  await authFetch(`/auth/v1/otp${query}`, {
-    body: { email: String(email).trim(), create_user: opts.createUser === true },
+export async function signInWithPasscode(passcode, opts = {}) {
+  const body = await authFetch('/auth/v1/token?grant_type=password', {
+    body: { email: OFFICER_ACCOUNT_EMAIL, password: String(passcode) },
     opts,
   });
-  return true;
-}
 
-/**
- * Reads the session GoTrue put on the end of the redirect.
- *
- * Implicit flow, so the tokens arrive in the URL fragment and never reach a
- * server log. A refusal (expired link, already used) arrives the same way, or
- * as query parameters on some GoTrue versions, so both are read.
- *
- * Pure, and takes the href rather than reading location itself, so it can be
- * checked without a browser.
- *
- * @returns {{session: Session}|{error: {code: string, description: string}}|null}
- */
-export function parseAuthRedirect(href) {
-  let url;
-  try {
-    url = new URL(href);
-  } catch {
-    return null;
+  const session = adoptSession(body);
+  if (!session) {
+    // A 200 with nothing usable in it. Treated as a refusal rather than as a
+    // sign-in, because the alternative is a screen that says it worked and
+    // then 401s on its first read.
+    throw new RpcError('NO_SESSION', 'That sign-in did not complete.', 500);
   }
-
-  const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
-  const query = url.searchParams;
-  const pick = (key) => hash.get(key) ?? query.get(key);
-
-  const error = pick('error') ?? pick('error_code');
-  if (error) {
-    return {
-      error: {
-        code: pick('error_code') ?? error,
-        description: pick('error_description')?.replace(/\+/g, ' ') ?? '',
-      },
-    };
-  }
-
-  const accessToken = pick('access_token');
-  const refreshToken = pick('refresh_token');
-  if (!accessToken || !refreshToken) return null;
-
-  return {
-    session: normaliseSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      expires_in: Number(pick('expires_in')) || 3600,
-      expires_at: Number(pick('expires_at')) || 0,
-      // The user object is not in the fragment. It is filled in by the first
-      // profile read, which the guard does anyway.
-      user: null,
-    }),
-  };
+  return session;
 }
 
 // Single flight. Two requests noticing an expired token at the same instant
@@ -339,7 +293,7 @@ async function refreshSession(session) {
       // refusal from GoTrue clears the stored session.
       if (err instanceof NetworkError) throw err;
       forgetSession();
-      throw new SessionExpiredError('That sign-in has expired. Send yourself a new link.');
+      throw new SessionExpiredError('That sign-in has expired.');
     } finally {
       refreshInFlight = null;
     }

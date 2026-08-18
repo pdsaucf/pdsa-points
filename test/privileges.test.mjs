@@ -123,8 +123,8 @@ test.before(async () => {
   db = await freshDb();
   await loadFixture(db);
 
-  // In auth.users but not in profiles, which is precisely the state a
-  // magic-link sign-in leaves an account in. Registering them matters: without
+  // In auth.users but not in profiles, which is precisely the state any
+  // sign-in leaves an account in. Registering them matters: without
   // the auth.users row the FK on audit_log.actor_user_id would refuse the
   // audit write, and an RPC that got past its role check would look refused
   // for a reason that has nothing to do with the role check.
@@ -283,9 +283,9 @@ test('an account with no profiles row is refused by every officer RPC', async ()
   // migration 16 this caller walked into nine SECURITY DEFINER functions
   // running with the owner's rights.
   //
-  // Anyone who completes a magic-link sign-in with the anon key holds an
-  // authenticated JWT, and nothing creates a profiles row for them, so this is
-  // the state a brand new account is in rather than a contrived one.
+  // Anyone holding an authenticated JWT is in this state until somebody gives
+  // them a role: nothing in this schema creates a profiles row on sign-in, so
+  // this is what a brand new account is rather than a contrived case.
   assert.equal(
     await db.val(`select count(*)::int from profiles where user_id = $1`, [NO_PROFILE]),
     0,

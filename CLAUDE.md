@@ -11,6 +11,8 @@ Design docs, signed off before implementation:
 - [docs/02-storage.md](docs/02-storage.md) - photo storage decision
 - [docs/03-admin-ui.md](docs/03-admin-ui.md) - officer screens and build phasing
 - [docs/04-member-ui.md](docs/04-member-ui.md) - member portal
+- [docs/06-officer-passcode.md](docs/06-officer-passcode.md) - how officers sign in, and
+  why the passcode is checked by the server rather than by the page
 
 ## House rules
 

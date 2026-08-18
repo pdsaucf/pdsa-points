@@ -39,6 +39,7 @@ Design docs, signed off before implementation:
 - [docs/02-storage.md](docs/02-storage.md)
 - [docs/03-admin-ui.md](docs/03-admin-ui.md)
 - [docs/04-member-ui.md](docs/04-member-ui.md)
+- [docs/06-officer-passcode.md](docs/06-officer-passcode.md)
 
 House rules and architectural invariants are in [CLAUDE.md](CLAUDE.md). They
 are requirements, not preferences.
@@ -197,6 +198,13 @@ old spreadsheet showed it. Each function answers a shaped question with the
 club-facing figures and nothing else, and `test/public_portal.test.mjs` holds
 that line: no address, no student id, no notes, no officer's decline reason,
 no photo, nobody else's records.
+
+Officers sign in with a passcode, which is a password on one shared account
+and is checked by GoTrue rather than by the page: on a static site out of a
+public repository a comparison in JavaScript would be readable, and worse, a
+gate that did not produce a JWT would only work if `anon` were granted the
+officer tables. See [docs/06-officer-passcode.md](docs/06-officer-passcode.md),
+including what a shared account costs the audit trail.
 
 Everyone signed in shares the `authenticated` database role; admin, officer,
 viewer and member are values of `profiles.role`, read through `SECURITY

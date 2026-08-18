@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { IDS } from './admin-fixtures.mjs';
 
 const PORT = 8797;
@@ -67,15 +68,7 @@ const reset = async () => {
   auth.forgetSession();
 };
 
-async function signInAs(email) {
-  auth.forgetSession();
-  await auth.sendMagicLink(email, `http://localhost:${PORT}/admin/`);
-  const { url } = await api(`/__mock/magic-link?email=${encodeURIComponent(email)}`);
-  const parsed = auth.parseAuthRedirect(url);
-  assert.ok(parsed?.session, `no session in the sign-in link for ${email}`);
-  auth.adoptSession(parsed.session);
-  return parsed.session;
-}
+const signInAs = (email) => signInAsAccount(email, PORT);
 
 // The same two queries the screen makes.
 const NODE_SELECT =

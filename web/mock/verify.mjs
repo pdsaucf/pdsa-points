@@ -472,10 +472,10 @@ await check('the emblem is on the page, above the form', () => {
 });
 
 await check('the check-in page never loads the full lockup', () => {
-  // 250KB, on venue wifi, with the whole room on it at once. The wordmark is
+  // Venue wifi, with the whole room on it at once, and the wordmark is
   // unreadable at this size anyway.
-  assert.doesNotMatch(checkinHtml, /pdsa-logo-512/, 'the 512 lockup is on the check-in page');
-  assert.doesNotMatch(checkinCss, /pdsa-logo-512/, 'the 512 lockup is loaded from checkin.css');
+  assert.doesNotMatch(checkinHtml, /pdsa-logo/, 'the lockup is on the check-in page');
+  assert.doesNotMatch(checkinCss, /pdsa-logo/, 'the lockup is loaded from checkin.css');
 });
 
 await check('the emblem stays small enough not to push Check in down the screen', () => {

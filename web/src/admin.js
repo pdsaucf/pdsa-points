@@ -19,14 +19,7 @@
 //   member   refused outright, with a pointer at the portal that is theirs
 
 import { IS_CONFIGURED } from '../config.js';
-import {
-  sendMagicLink,
-  parseAuthRedirect,
-  adoptSession,
-  currentSession,
-  forgetSession,
-  signOut,
-} from './auth.js';
+import { signInWithPasscode, currentSession, forgetSession, signOut } from './auth.js';
 import { select } from './rest.js';
 import { describeOfficer, describeSignIn } from './officer-errors.js';
 import { createReview } from './review.js';
@@ -78,17 +71,17 @@ function showView(name) {
   setHidden(el.appView, name !== 'app');
 }
 
-function showSignIn(message) {
+/**
+ * The passcode screen. `status` is said only to a screen reader: the visible
+ * signal is the box itself, because a sentence on this page would undo the
+ * reason it looks the way it does.
+ */
+function showSignIn(status) {
   showView('signin');
-  if (message) {
-    el.signinMessageTitle.textContent = message.title;
-    el.signinMessageBody.textContent = ` ${message.body}`;
-    setHidden(el.signinMessage, false);
-    announce(`${message.title}. ${message.body}`);
-  } else {
-    setHidden(el.signinMessage, true);
-  }
-  el.signinEmail.focus({ preventScroll: true });
+  el.signinPasscode.setAttribute('aria-invalid', String(Boolean(status)));
+  el.signinStatus.textContent = status ?? '';
+  if (status) announce(status);
+  el.signinPasscode.focus({ preventScroll: true });
 }
 
 function showDenied(body) {
@@ -136,7 +129,7 @@ function fail(err, retry) {
 
   if (copy.recover === 'signin') {
     forgetSession();
-    showSignIn({ title: copy.title, body: copy.body });
+    showSignIn(copy.title);
     return;
   }
 
@@ -181,56 +174,26 @@ function setCount(node, count) {
 
 async function onSignInSubmit(event) {
   event.preventDefault();
-  const email = el.signinEmail.value.trim();
-  if (!email || !email.includes('@')) {
-    showSignIn({
-      title: 'That is not an email address.',
-      body: 'Use the address your officer account was set up with.',
-    });
+  const passcode = el.signinPasscode.value;
+  if (!passcode) {
+    showSignIn('Enter the passcode.');
     return;
   }
 
-  el.signinSubmit.disabled = true;
-  el.signinSubmitLabel.textContent = 'Sending…';
+  // No "Signing in…" label to change, because there is no button. The box goes
+  // read-only for the round trip so a second Enter cannot start a second one.
+  el.signinPasscode.readOnly = true;
+  el.signinPasscode.setAttribute('aria-invalid', 'false');
   try {
-    // Back to this exact page, with no hash and no query of our own, so the
-    // tokens GoTrue appends are the only thing in the fragment.
-    const redirectTo = `${window.location.origin}${window.location.pathname}`;
-    await sendMagicLink(email, redirectTo);
-    showSignIn({
-      title: 'Check your inbox.',
-      body: `If ${email} has an officer account, a sign-in link is on its way. It works once.`,
-    });
+    await signInWithPasscode(passcode);
+    el.signinPasscode.value = '';
+    guard();
   } catch (err) {
+    el.signinPasscode.select();
     showSignIn(describeSignIn(err));
   } finally {
-    el.signinSubmit.disabled = false;
-    el.signinSubmitLabel.textContent = 'Email me a sign-in link';
+    el.signinPasscode.readOnly = false;
   }
-}
-
-/**
- * The tokens arrive in the URL fragment. They are taken out of the address bar
- * straight away: a sign-in link that stays in the history, or gets pasted into
- * a chat, is a live session anybody can pick up.
- */
-function captureRedirect() {
-  const result = parseAuthRedirect(window.location.href);
-  if (!result) return null;
-
-  window.history.replaceState(null, '', window.location.pathname);
-
-  if (result.error) {
-    return {
-      error: {
-        title: 'That sign-in link did not work',
-        body: result.error.description || 'Links work once and expire. Ask for a new one below.',
-      },
-    };
-  }
-
-  adoptSession(result.session);
-  return { signedIn: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -256,15 +219,12 @@ async function guard() {
     });
   } catch (err) {
     const copy = describeOfficer(err);
-    if (copy.recover === 'signin') {
-      forgetSession();
-      showSignIn({ title: copy.title, body: copy.body });
-    } else {
-      showSignIn({
-        title: 'Could not check your account',
-        body: `${copy.body} Send yourself a new link.`,
-      });
-    }
+    // Either way this lands on the passcode box, which is the only thing the
+    // officer can do about it. The session is cleared only when the failure
+    // says the session is the problem: a dropped connection is not a reason to
+    // make somebody type the passcode again once the wifi comes back.
+    if (copy.recover === 'signin') forgetSession();
+    showSignIn(copy.title);
     return;
   }
 
@@ -273,7 +233,7 @@ async function guard() {
   // Signed in with no profile row at all. That is an account nobody has set
   // up, which is different from an account that is set up as something else.
   if (!profile) {
-    showDenied('This address has no account yet. An admin needs to add it.');
+    showDenied('This account has no role yet. An admin needs to set one.');
     return;
   }
 
@@ -424,12 +384,8 @@ function cacheElements() {
     appView: $('view-app'),
 
     signinForm: $('signin-form'),
-    signinEmail: $('signin-email'),
-    signinSubmit: $('signin-submit'),
-    signinSubmitLabel: $('signin-submit-label'),
-    signinMessage: $('signin-message'),
-    signinMessageTitle: $('signin-message-title'),
-    signinMessageBody: $('signin-message-body'),
+    signinPasscode: $('signin-passcode'),
+    signinStatus: $('signin-status'),
 
     deniedBody: $('denied-body'),
     deniedSignout: $('denied-signout'),
@@ -503,12 +459,6 @@ export function start() {
   if (!IS_CONFIGURED) {
     showDenied('No database is connected. An admin needs to fill in web/config.js.');
     el.deniedSignout.hidden = true;
-    return;
-  }
-
-  const redirect = captureRedirect();
-  if (redirect?.error) {
-    showSignIn(redirect.error);
     return;
   }
 

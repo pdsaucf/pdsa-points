@@ -211,8 +211,8 @@ The emblem at the top of this page is a link to `/admin/`. Officers are told to 
 logo, which is less to explain than a path to type, and most of them are opening the site
 on a phone. Nothing on screen labels it: a member has no use for it, and the page has no
 room for a control that is not theirs. This hides the door, it does not lock it. The
-magic-link sign-in and the role guard behind `/admin/` are the gate, and they are
-unchanged by anyone finding the link.
+passcode and the role guard behind `/admin/` are the gate, and they are unchanged by
+anyone finding the link (docs/06-officer-passcode.md).
 
 `mock/verify-portal.mjs` holds the door to three things: it opens `/admin/`, it is named
 for a screen reader, and it draws no text on screen.

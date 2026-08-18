@@ -3,7 +3,7 @@
 // http://localhost:8787/c/ is the check-in page exactly as it ships and
 // http://localhost:8787/admin/ is the review queue exactly as it ships.
 //
-// The anonymous check-in half is below. The officer half (magic-link auth,
+// The anonymous check-in half is below. The officer half (passcode auth,
 // PostgREST with a stand-in for RLS, the two officer RPCs, signed photo URLs)
 // lives in admin-server.mjs and is routed to from here, so nothing added for
 // the review queue can change how the check-in page behaves.
@@ -32,10 +32,10 @@ import {
   handleStorageDelete,
   handleStorageInfo,
   handleStorageSign,
-  magicLinkFor,
   resetAdmin,
   serveSignedObject,
 } from './admin-server.mjs';
+import { MOCK_PASSCODE } from './admin-fixtures.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PORT = Number(process.argv[process.argv.indexOf('--port') + 1]) || 8787;
@@ -571,17 +571,6 @@ export function startMock(port = PORT) {
       json(res, 200, { ok: true });
       return;
     }
-    // Standing in for opening the email and pressing the link in it.
-    if (url.pathname === '/__mock/magic-link') {
-      const link = magicLinkFor(url.searchParams.get('email') ?? '');
-      if (!link) {
-        json(res, 404, { error: 'No sign-in link was sent to that address.' });
-        return;
-      }
-      json(res, 200, { url: link });
-      return;
-    }
-
     if (url.pathname.startsWith('/auth/v1/')) {
       const raw = await readBody(req);
       let body = {};
@@ -717,19 +706,11 @@ if (isMain) {
       `  ${base}?e=nosuchtoken   (unknown token, PDS01)`,
       '',
       `Review queue:  http://localhost:${PORT}/admin/`,
-      '  Sign in as one of these, then open the link the "email" would have contained:',
-      '    sara@pdsaucf.com        officer',
-      '    ben@pdsaucf.com         admin, and the only role that can publish rules',
-      '    advisor@ucf.edu         viewer, reads the queue and decides nothing',
-      '    priya@knights.ucf.edu   member, refused',
-      `  The link: http://localhost:${PORT}/__mock/magic-link?email=sara@pdsaucf.com`,
+      `  The passcode box takes ${MOCK_PASSCODE}, which signs in as admin.`,
+      '  Anything else is refused, which is the other half worth looking at.',
       '',
       `Member portal:  http://localhost:${PORT}/me/`,
-      '  Same sign-in, and the address decides which of the four screens opens:',
-      '    priya@knights.ucf.edu       matches a roster row, so it links itself',
-      '    a.catto.2027@knights.ucf.edu  a claim already waiting for an officer',
-      '    ewallace99@gmail.com        a claim an officer can decline from /admin/',
-      '    anything else               no account yet: it is created, and asks who you are',
+      '  No sign-in. Type a name: Priya Raman, Abigail Catto, Marcus Bell.',
       '',
       'Audit: http://localhost:' + PORT + '/__mock/audit',
       '',

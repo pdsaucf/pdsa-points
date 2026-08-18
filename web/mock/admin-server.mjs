@@ -1,4 +1,4 @@
-// The officer half of the mock: magic-link auth, PostgREST reads and writes
+// The officer half of the mock: passcode auth, PostgREST reads and writes
 // with a stand-in for RLS, the two officer RPCs, and signed photo URLs.
 //
 // It is not a Postgres emulator and it is not GoTrue. It reproduces the parts
@@ -20,7 +20,7 @@
 // mock behaves. server.mjs imports it and routes to it.
 
 import { randomBytes } from 'node:crypto';
-import { buildDatabase, ACCOUNTS } from './admin-fixtures.mjs';
+import { buildDatabase, ACCOUNTS, MOCK_PASSCODE } from './admin-fixtures.mjs';
 // The same trigram measure the review queue ranks with, so the duplicate view
 // here pairs the same people the database's pg_trgm one would.
 import { normaliseName, similarity } from '../src/match.js';
@@ -60,17 +60,7 @@ let bucketObjects = seedBucketObjects();
 
 const sessions = new Map(); // access token -> { userId, email, expiresAt }
 const refreshTokens = new Map(); // refresh token -> { userId, email }
-const magicLinks = new Map(); // email -> the URL the email would contain
 const auditCalls = []; // every officer-side request, for the checks to read
-
-// auth.users rows that were not in the fixtures.
-//
-// The member portal signs in with create_user, because docs/04-member-ui.md
-// has 355 members arriving with no email on file: the first sign-in IS the
-// account being made. So an address this mock has never seen gets an auth user
-// and NO profiles row, which is exactly the state start_portal_session() has to
-// bootstrap and the state every member-scoped policy reads as "nothing".
-const newAccounts = new Map(); // email -> { user_id }
 
 // fn_rate_limit_check(), keyed the same way and counted per calendar minute,
 // because that is what makes a full bucket clear on its own rather than ease
@@ -153,8 +143,6 @@ export function resetAdmin() {
   bucketObjects = seedBucketObjects();
   sessions.clear();
   refreshTokens.clear();
-  magicLinks.clear();
-  newAccounts.clear();
   rateCounters.clear();
   auditCalls.length = 0;
   pendingFailure = null;
@@ -167,7 +155,6 @@ export function adminState() {
   return {
     auditLog: db.audit_log,
     calls: auditCalls,
-    magicLinks: [...magicLinks.entries()].map(([email, url]) => ({ email, url })),
     attendance: db.attendance_records.map((r) => ({
       id: r.id,
       event_id: r.event_id,
@@ -262,12 +249,10 @@ export function resolveAuth(req, anonKey) {
  * schema, auth.users is not in it, and no view in P0 surfaces this column.
  */
 const emailOfUser = (userId) =>
-  Object.entries(ACCOUNTS).find(([, account]) => account.user_id === userId)?.[0] ??
-  [...newAccounts.entries()].find(([, account]) => account.user_id === userId)?.[0] ??
-  null;
+  Object.entries(ACCOUNTS).find(([, account]) => account.user_id === userId)?.[0] ?? null;
 
-/** An auth.users row, whether it came from the fixtures or from a first sign-in. */
-const accountFor = (email) => ACCOUNTS[email] ?? newAccounts.get(email) ?? null;
+/** An auth.users row, or null for an address this mock has never seen. */
+const accountFor = (email) => ACCOUNTS[email] ?? null;
 
 const isStaff = (auth) => auth.kind === 'user' && STAFF_ROLES.includes(auth.role);
 const isOfficer = (auth) => auth.kind === 'user' && OFFICER_ROLES.includes(auth.role);
@@ -281,47 +266,37 @@ export function handleAuth(req, res, url, body, helpers) {
   const { json } = helpers;
   const path = url.pathname;
 
-  if (path === '/auth/v1/otp') {
-    const email = String(body?.email ?? '').trim().toLowerCase();
-    const redirectTo = url.searchParams.get('redirect_to') ?? 'http://localhost/admin/';
-    let account = accountFor(email);
-    const known = Boolean(account);
-
-    // THE ONE PLACE THE TWO SIGN-INS DIFFER. The officer screens send
-    // create_user: false, so an address nobody provisioned gets nothing and is
-    // told nothing (admin.js). The member portal sends create_user: true,
-    // because there the first sign-in is the account being created: docs/04
-    // has 355 members with no email on file, and an admin cannot provision
-    // accounts for people whose addresses the club does not hold.
-    //
-    // The account created here has no profiles row and no member_id, which is
-    // the state that reads nothing at all until start_portal_session() runs.
-    if (!account && body?.create_user) {
-      account = { user_id: `u9000000-0000-4000-a000-${randomBytes(6).toString('hex')}` };
-      newAccounts.set(email, account);
-    }
-
-    // Answered the same way whether or not the address has an account. GoTrue
-    // does this so a sign-in form cannot be used to test which addresses
-    // exist, and the copy in admin.js is written to match.
-    record({ fn: 'auth.otp', email, known, create_user: body?.create_user });
-
-    if (account) {
-      const session = issueSession(account.user_id, email);
-      magicLinks.set(
-        email,
-        `${redirectTo}#access_token=${session.access_token}` +
-          `&refresh_token=${session.refresh_token}` +
-          `&expires_in=${session.expires_in}&token_type=bearer&type=magiclink`,
-      );
-    }
-
-    json(res, 200, {});
-    return true;
-  }
-
   if (path === '/auth/v1/token') {
-    if (url.searchParams.get('grant_type') !== 'refresh_token') {
+    const grant = url.searchParams.get('grant_type');
+
+    // The passcode. GoTrue refuses a wrong password with 400 invalid_grant and
+    // an unknown address with the same 400, which is what makes the sign-in
+    // screen's one message ("Incorrect passcode.") the honest one: this
+    // endpoint does not distinguish either, and neither should the copy.
+    if (grant === 'password') {
+      const email = String(body?.email ?? '').trim().toLowerCase();
+      const account = accountFor(email);
+      const ok = Boolean(account) && String(body?.password ?? '') === MOCK_PASSCODE;
+      record({ fn: 'auth.password', email, outcome: ok ? 'signed in' : 'refused' });
+
+      if (!ok) {
+        json(res, 400, {
+          error: 'invalid_grant',
+          error_description: 'Invalid login credentials',
+        });
+        return true;
+      }
+
+      const session = issueSession(account.user_id, email);
+      json(res, 200, {
+        ...session,
+        token_type: 'bearer',
+        user: { id: account.user_id, email },
+      });
+      return true;
+    }
+
+    if (grant !== 'refresh_token') {
       json(res, 400, { error: 'unsupported_grant_type', error_description: 'Unsupported grant type' });
       return true;
     }
@@ -356,10 +331,6 @@ export function handleAuth(req, res, url, body, helpers) {
   return false;
 }
 
-/** What clicking the link in the email would open. */
-export function magicLinkFor(email) {
-  return magicLinks.get(String(email).trim().toLowerCase()) ?? null;
-}
 
 // ---------------------------------------------------------------------------
 // PostgREST

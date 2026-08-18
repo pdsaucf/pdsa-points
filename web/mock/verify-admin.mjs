@@ -27,7 +27,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
-import { IDS, UNKNOWN_EMAIL } from './admin-fixtures.mjs';
+import { signInAs as signInAsAccount } from './sign-in.mjs';
+import { IDS, MOCK_PASSCODE, UNKNOWN_EMAIL } from './admin-fixtures.mjs';
 import { declarations, rule } from './css-rules.mjs';
 import {
   BRAND_TOKENS,
@@ -64,7 +65,8 @@ const { select, patch, callRpc, signPhotoUrls } = await import('../src/rest.js')
 const { rankMembers, splitName, similarity, normaliseName } = await import('../src/match.js');
 const { actionsFor, FLAG_COPY, primaryFlag } = await import('../src/flags.js');
 const { membersAlreadyOnEvent } = await import('../src/review.js');
-const { describeOfficer } = await import('../src/officer-errors.js');
+const { describeOfficer, describeSignIn } = await import('../src/officer-errors.js');
+const { OFFICER_ACCOUNT_EMAIL } = await import('../config.js');
 const { RpcError } = await import('../src/errors.js');
 
 let failures = 0;
@@ -86,16 +88,7 @@ const reset = async () => {
   auth.forgetSession();
 };
 
-/** Signs in the way a person does: ask for the link, then open it. */
-async function signInAs(email) {
-  auth.forgetSession();
-  await auth.sendMagicLink(email, `http://localhost:${PORT}/admin/`);
-  const { url } = await api(`/__mock/magic-link?email=${encodeURIComponent(email)}`);
-  const parsed = auth.parseAuthRedirect(url);
-  assert.ok(parsed?.session, `no session in the sign-in link for ${email}`);
-  auth.adoptSession(parsed.session);
-  return parsed.session;
-}
+const signInAs = (email) => signInAsAccount(email, PORT);
 
 const QUEUE_SELECT = [
   'id,event_id,member_id,claimed_name,status,flags,submitted_at',
@@ -241,7 +234,7 @@ await check('the focus ring is drawn clear of the control, not on top of it', ()
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\nthe emblem and the lockup\n');
+process.stdout.write('\nthe emblem, and the sign-in screen that carries nothing\n');
 // ---------------------------------------------------------------------------
 
 await check('the emblem is in the brand bar, and says nothing a screen reader already heard', () => {
@@ -252,16 +245,58 @@ await check('the emblem is in the brand bar, and says nothing a screen reader al
   assert.match(bar[1], /PDSA Points/, 'the wordmark left the brand bar');
 });
 
-await check('the full lockup is on the sign-in screen and nowhere else', () => {
-  // 250KB. It is worth it once, on the screen where the wordmark is large
-  // enough to read, and nowhere the officer goes repeatedly.
+await check('the sign-in screen is a box and nothing else', () => {
   const signin = /<main id="view-signin"[\s\S]*?<\/main>/.exec(adminHtml);
   assert.ok(signin, 'there is no sign-in screen');
-  assert.match(signin[0], /pdsa-logo-512\.png/, 'the sign-in screen does not carry the lockup');
-  assert.equal(
-    adminHtml.split('pdsa-logo-512').length - 1,
-    1,
-    'the 250KB lockup is used more than once',
+
+  // No wordmark, no emblem, no lockup: nothing that names the club to somebody
+  // who does not already know what this page is.
+  assert.equal(images(signin[0]).length, 0, 'there is an image on the sign-in screen');
+  assert.doesNotMatch(signin[0], /PDSA/, 'the sign-in screen names the club');
+  assert.doesNotMatch(signin[0], /<h1|<h2/, 'the sign-in screen has a heading');
+
+  // One visible control, and it is masked.
+  const inputs = signin[0].match(/<input\b[^>]*>/g) ?? [];
+  assert.equal(inputs.length, 1, 'the sign-in screen has more than one field');
+  assert.match(inputs[0], /type="password"/, 'the passcode is typed in the clear');
+});
+
+await check('a refused passcode is visible, and not hidden under the focus ring', () => {
+  // The regression this exists for: submitting is Enter, so the field is
+  // focused every time it is refused, and a 3px focus ring outside a 1px red
+  // border reads as an ordinary focused box. On a screen with no text on it,
+  // that leaves nothing at all saying the passcode was wrong.
+  const border = declarations(rule(adminCss, ".passcode[aria-invalid='true']"));
+  assert.match(border.get('border-color') ?? '', /var\(--danger\)/, 'a refused passcode does not turn the box');
+
+  const ring = declarations(rule(adminCss, ".passcode[aria-invalid='true']:focus-visible"));
+  assert.ok(ring.size, 'the focus ring keeps its usual colour when the passcode was refused');
+  assert.match(ring.get('outline-color') ?? '', /var\(--danger\)/, 'the ring is not drawn in --danger');
+});
+
+await check('discreet is not the same as unusable', () => {
+  const signin = /<main id="view-signin"[\s\S]*?<\/main>/.exec(adminHtml)[0];
+
+  // Nothing is drawn, but everything is still said. A label a screen reader can
+  // read, and a live region for the refusal that the red border is the only
+  // visible sign of.
+  assert.match(signin, /<label class="visually-hidden" for="signin-passcode"/, 'the field has no label');
+  assert.match(signin, /id="signin-status"[^>]*role="status"/, 'nothing announces a refused passcode');
+
+  // The form has no visible button, so Enter is the only way to submit it. A
+  // hidden submit keeps that working everywhere rather than relying on the
+  // single-input default.
+  assert.match(signin, /<button type="submit" class="visually-hidden"/, 'there is no way to submit');
+});
+
+await check('the lockup is gone from the product, not merely unreferenced', async () => {
+  const css = await readFile(new URL('../assets/css/admin.css', import.meta.url), 'utf8');
+  for (const [label, text] of [['admin/index.html', adminHtml], ['admin.css', css]]) {
+    assert.doesNotMatch(text, /pdsa-logo/, `${label} still loads the lockup`);
+  }
+  await assert.rejects(
+    () => readFile(new URL('../assets/img/pdsa-logo-360.png', import.meta.url)),
+    'the lockup file is still in the repository',
   );
 });
 
@@ -425,37 +460,45 @@ process.stdout.write('\nsigning in\n');
 
 await reset();
 
-await check('the tokens are read out of the URL fragment', () => {
-  const parsed = auth.parseAuthRedirect(
-    'http://localhost/admin/#access_token=a.b.c&refresh_token=r1&expires_in=3600&token_type=bearer',
-  );
-  assert.equal(parsed.session.refresh_token, 'r1');
-  assert.ok(parsed.session.expires_at > Math.floor(Date.now() / 1000));
+await check('the passcode signs in, and the screen never chooses the account', async () => {
+  // signInWithPasscode takes one argument. The address is config, not input, so
+  // there is no form field anywhere that can aim this at another account.
+  assert.equal(auth.signInWithPasscode.length, 1, 'signInWithPasscode takes more than a passcode');
+
+  const session = await auth.signInWithPasscode(MOCK_PASSCODE);
+  assert.equal(session.user.email, OFFICER_ACCOUNT_EMAIL);
+  assert.equal(auth.currentSession().user.email, OFFICER_ACCOUNT_EMAIL);
 });
 
-await check('a link that has already been used is reported, not swallowed', () => {
-  const parsed = auth.parseAuthRedirect(
-    'http://localhost/admin/#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired',
-  );
-  assert.equal(parsed.error.code, 'otp_expired');
-  assert.match(parsed.error.description, /expired/);
+await check('a wrong passcode is refused, and leaves nothing signed in behind it', async () => {
+  auth.forgetSession();
+  await assert.rejects(() => auth.signInWithPasscode('not the passcode'), (err) => {
+    assert.equal(err.status, 400, 'a wrong passcode came back as something other than 400');
+    assert.equal(describeSignIn(err), 'Incorrect passcode.');
+    return true;
+  });
+  assert.equal(auth.currentSession(), null, 'a refused passcode left a session in storage');
 });
 
-await check('an address with no officer account gets no link and no clue that it has none', async () => {
-  await auth.sendMagicLink(UNKNOWN_EMAIL, `http://localhost:${PORT}/admin/`);
-  const answer = await api(`/__mock/magic-link?email=${encodeURIComponent(UNKNOWN_EMAIL)}`);
-  assert.ok(answer.error, 'a link was minted for an address with no account');
-  // The important half: sendMagicLink resolved rather than threw, so the page
-  // shows the same "check your inbox" either way.
-});
-
-await check('signups are off, so the request says so explicitly', async () => {
-  const { calls } = await api('/__mock/audit').then((body) => body.admin);
-  const otp = calls.filter((call) => call.fn === 'auth.otp');
-  assert.ok(otp.length > 0);
-  for (const call of otp) {
-    assert.equal(call.create_user, false, 'sendMagicLink would let a stranger create an account');
+await check('the passcode goes to the server, never to a comparison in the page', async () => {
+  // The whole security argument in auth.js rests on this: the browser does not
+  // know the passcode and cannot, because this repository is public. What it
+  // does is post it and believe the answer.
+  const source = await readFile(new URL('../src/auth.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../admin/index.html', import.meta.url), 'utf8');
+  for (const [label, text] of [['auth.js', source], ['admin/index.html', html]]) {
+    assert.doesNotMatch(text, /SECfam/i, `${label} carries the real passcode`);
   }
+  assert.match(source, /grant_type=password/, 'auth.js does not use the password grant');
+});
+
+await check('an address nobody provisioned cannot sign in with the passcode either', async () => {
+  const res = await fetch(`http://localhost:${PORT}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: 'mock-anon-key', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: UNKNOWN_EMAIL, password: MOCK_PASSCODE }),
+  });
+  assert.equal(res.status, 400, 'an unknown address was signed in');
 });
 
 await check('signing in as an officer produces a session that knows its own user id', async () => {

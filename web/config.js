@@ -22,6 +22,14 @@ export const SUPABASE_ANON_KEY =
   override.SUPABASE_ANON_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzdm9kbHRocnhlaW1sZXp2bWxxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODQzNDAsImV4cCI6MjEwMjA2MDM0MH0.yHNQPbTSD-ENgcutpXSH8WaoaIO2ul8pq_80LWUMXNE';
 
+// The account the officer passcode signs in to.
+//
+// PUBLIC, like everything else in this file, and it is not a secret: it is a
+// username. The passcode is the secret, it is never in this repository, and it
+// lives as a bcrypt hash in auth.users. Nothing is ever sent to this address.
+// See docs/06-officer-passcode.md for how it is set and rotated.
+export const OFFICER_ACCOUNT_EMAIL = override.OFFICER_ACCOUNT_EMAIL ?? 'officers@pdsaucf.com';
+
 // The bucket the evidence photos go to. Matches supabase/migrations/…_storage.sql.
 export const EVIDENCE_BUCKET = 'evidence';
 

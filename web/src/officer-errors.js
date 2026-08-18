@@ -22,7 +22,7 @@ import { SessionExpiredError } from './auth.js';
 /** Said in two places, so it is written once. */
 const SESSION_EXPIRED = {
   title: 'Sign-in expired',
-  body: 'Send yourself a new link. Nothing you have approved is affected.',
+  body: 'Enter the passcode again. Nothing you have approved is affected.',
   recover: 'signin',
 };
 
@@ -158,38 +158,27 @@ export function describeRetroOutcome(outcome) {
   return RETRO_OUTCOME[outcome] ?? 'Unknown outcome.';
 }
 
-/** The sign-in screen has its own small set, because GoTrue has its own codes. */
+/**
+ * The passcode screen, which has room for one short line and says it only to a
+ * screen reader (admin.js). Everything here is therefore a whole message in a
+ * few words rather than a title and a body.
+ *
+ * GoTrue answers a wrong password with 400 `invalid_grant`. 422 is a malformed
+ * request, which from this form means an empty passcode got past the check.
+ */
 export function describeSignIn(err) {
-  if (err instanceof NetworkError) {
-    return {
-      title: 'No connection',
-      body: 'The link could not be sent. Try again in a moment.',
-    };
-  }
+  if (err instanceof NetworkError) return 'No connection. Try again.';
 
   if (err instanceof RpcError) {
-    // Signups are off (create_user: false), so an address with no officer
-    // account can land here on some GoTrue versions rather than a quiet 200.
-    // The copy stays deliberately neutral: telling a stranger which addresses
-    // have accounts is not information this page should hand out.
-    if (err.status === 422 || err.status === 400) {
-      return {
-        title: 'Check your inbox',
-        body: 'If that address has an officer account, a sign-in link is on its way.',
-      };
-    }
-    if (err.status === 429 || err.code === 'over_email_send_rate_limit') {
-      return {
-        title: 'A link was just sent',
-        body: 'Wait a minute, then check the inbox and the spam folder.',
-      };
-    }
+    if (err.status === 400 || err.status === 422) return 'Incorrect passcode.';
+    // GoTrue rate limits repeated failures per address, and there is only one
+    // address here, so this is reachable by an officer who mistyped it a few
+    // times as well as by somebody guessing.
+    if (err.status === 429) return 'Too many attempts. Wait a minute.';
+    if (err.status >= 500) return 'The database is not responding.';
   }
 
-  return {
-    title: 'The link could not be sent',
-    body: 'Try again in a moment. If it keeps happening, an admin needs to check the site settings.',
-  };
+  return 'That did not go through.';
 }
 
 export { RpcError, NetworkError, SessionExpiredError };

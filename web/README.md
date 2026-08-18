@@ -4,7 +4,7 @@ Three surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
   This is **P1**.
-- **`/admin/`** the officer screens, behind a magic-link sign-in: the review queue and
+- **`/admin/`** the officer screens, behind a passcode: the review queue and
   account claims (**P2**), the requirements editor and categories (**P3**), and the
   progress board, member detail and roster (**P4**).
 - **`/me/`** the member portal, behind the same sign-in: their own progress, their own
@@ -27,7 +27,7 @@ web/
   src/format.js              dates, labels, units
 
   src/admin.js               sign-in, the role guard, the tabs
-  src/auth.js                the session: magic link, refresh, sign out
+  src/auth.js                the session: passcode, refresh, sign out
   src/rest.js                authenticated PostgREST reads and writes
   src/review.js              the review queue
   src/claims.js              account claims
@@ -57,12 +57,13 @@ web/
 
 ## What the member portal shares, and what it deliberately does not
 
-`auth.js`, `rest.js`, `api.js`, `ui.js`, `format.js` and `requirement-model.js` are all
-used by both signed-in surfaces. Nothing was forked to make `/me/` work. One argument
-was added: `sendMagicLink()` takes `createUser`, because the officer screens must refuse
-an address an admin never provisioned and the portal must accept one. Signing in there
-IS the account being made, since the imported roster carries 355 members with no email
-on file.
+`rest.js`, `api.js`, `ui.js`, `format.js` and `requirement-model.js` are used by both
+surfaces. Nothing was forked to make `/me/` work.
+
+`auth.js` is **not** shared any more, and nothing on `/me/` imports it. The portal
+stopped being an account: a member types their name and reads their own points, through
+`SECURITY DEFINER` functions that `anon` may call. Sessions exist on the officer screens
+only.
 
 `officer-errors.js` is **not** shared, and `member-errors.js` is not a copy of it. The
 same PDS code means a different thing to each audience and needs a different next step
@@ -191,24 +192,26 @@ record filed, any nonce violations, and the officer-side audit trail.
 
 ### The review queue, locally
 
-There is no email in development, so the mock keeps the link it would have sent
-and hands it over on request:
-
 ```
 http://localhost:8787/admin/
-http://localhost:8787/__mock/magic-link?email=sara@pdsaucf.com
 ```
 
-Type the address into the sign-in form, then open the link that second URL
-returns. Four accounts exist, and the differences between them are the point:
+The passcode box takes `mock-passcode`, which signs in as admin. That is the mock's
+passcode and not the club's: the real one is a bcrypt hash in `auth.users` and is in no
+file here (docs/06-officer-passcode.md). Anything else is refused, which is the half
+worth looking at, because the refusal is the only thing that screen ever draws.
+
+The product signs in to one shared account. The checks need more than one, because half
+of what they prove is that the database tells the roles apart, so `mock/sign-in.mjs`
+names an account and posts to the same endpoint the box does:
 
 | address | role | what it can do |
 |---|---|---|
+| `officers@pdsaucf.com` | admin | the shared account the passcode box itself signs in to |
 | `sara@pdsaucf.com` | officer | the whole queue |
 | `ben@pdsaucf.com` | admin | the queue, and publishing a requirement set |
 | `advisor@ucf.edu` | viewer | reads the queue, decides nothing, and sees no account claims |
 | `priya@knights.ucf.edu` | member | refused, and told where their own points are |
-| anything else | none | no link is sent, and the form says the same thing either way |
 
 ### The member portal, locally
 

@@ -16,67 +16,49 @@
   </head>
   <body>
     <!-- 1. Working out whether anybody is signed in. Never shown for long. -->
-    <section id="view-boot" class="view view-centred" aria-busy="true">
+    <section id="view-boot" class="view view-centred" aria-busy="true" hidden>
       <p class="spinner" aria-hidden="true"></p>
       <p class="muted">Checking sign-in…</p>
     </section>
 
-    <!-- 2. Sign in -->
-    <main id="view-signin" class="view view-narrow" hidden>
-      <!--
-        The one screen that carries the full lockup. It is 250KB, it is shown
-        once per officer per session, and it is the only place where the
-        wordmark is large enough to read. alt is empty because the heading
-        underneath already names the product to a screen reader.
-      -->
-      <h1 class="brand-mark brand-lockup">
-        <img
-          class="lockup"
-          src="../assets/img/pdsa-logo-512.png"
-          width="512"
-          height="561"
-          decoding="async"
-          alt=""
-        />
-        PDSA Points
-      </h1>
-      <form id="signin-form" class="panel" novalidate>
-        <h2 class="panel-title">Officer sign-in</h2>
-        <p class="muted small">No password required</p>
-        <label class="label" for="signin-email">Your email</label>
+    <!--
+      2. Sign in.
+
+      Deliberately bare: no wordmark, no heading, no label, no button, no
+      instructions. Somebody who does not already know what this box is has
+      nothing here to work with, which is the point.
+
+      What is NOT decoration and stays: a visually hidden label, so the box is
+      not a mystery to a screen reader, and a hidden live region, so a refused
+      passcode is announced to somebody who cannot see the field turn red.
+      Discreet means nothing is drawn, not that nothing is said.
+
+      type="password" so it is masked. Officers type this in a room.
+    -->
+    <main id="view-signin" class="view view-passcode" hidden>
+      <form id="signin-form" novalidate>
+        <label class="visually-hidden" for="signin-passcode">Passcode</label>
         <input
-          id="signin-email"
-          class="input"
-          type="email"
-          inputmode="email"
-          autocomplete="email"
+          id="signin-passcode"
+          class="input passcode"
+          type="password"
+          autocomplete="current-password"
           autocapitalize="off"
           autocorrect="off"
           spellcheck="false"
-          enterkeyhint="send"
-          placeholder="you@ucf.edu"
+          enterkeyhint="go"
           required
         />
-        <p id="signin-message" class="notice" role="alert" hidden>
-          <span id="signin-message-title" class="notice-title"></span>
-          <span id="signin-message-body" class="notice-body"></span>
-        </p>
-        <button id="signin-submit" type="submit" class="button button-primary full">
-          <span id="signin-submit-label">Send sign-in link</span>
-        </button>
-        <p class="muted small">
-          Accounts are created by an admin, ask them if nothing arrives
-        </p>
+        <button type="submit" class="visually-hidden">Sign in</button>
+        <p id="signin-status" class="visually-hidden" role="status"></p>
       </form>
     </main>
 
     <!-- 3. Signed in, but this account is not allowed in here -->
     <main id="view-denied" class="view view-narrow" hidden>
-      <h1 class="brand-mark">PDSA Points</h1>
       <div class="panel">
         <h2 class="panel-title">This account cannot open the review queue</h2>
         <p id="denied-body" class="body"></p>
-        <p class="muted small">Members see their own points in the member portal.</p>
         <button id="denied-signout" type="button" class="button full">Sign out</button>
       </div>
     </main>

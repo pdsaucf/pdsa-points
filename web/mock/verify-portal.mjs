@@ -37,6 +37,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { IDS } from './admin-fixtures.mjs';
 import { installDom } from './dom.mjs';
 import {
@@ -121,14 +122,7 @@ async function until(predicate, message, timeout = 4000) {
  * on the admin screens, made from here so that "the rules move and the screen
  * moves with them" is driven rather than asserted about the source.
  */
-async function signInAs(email) {
-  auth.forgetSession();
-  await auth.sendMagicLink(email, `http://localhost:${PORT}/admin/`, { createUser: false });
-  const answer = await api(`/__mock/magic-link?email=${encodeURIComponent(email)}`);
-  const parsed = auth.parseAuthRedirect(answer.url);
-  assert.ok(parsed?.session, `no session in the sign-in link for ${email}`);
-  auth.adoptSession(parsed.session);
-}
+const signInAs = (email) => signInAsAccount(email, PORT);
 
 /** A fresh copy of the shipped page, with the portal mounted on it. */
 function mountPortal() {
@@ -336,7 +330,7 @@ await check('there is no sign-in, and nothing asks a member for an address', () 
   for (const [label, source] of Object.entries(sources)) {
     assert.doesNotMatch(
       withoutComments(source),
-      /sendMagicLink|adoptSession|currentSession/,
+      /signInWithPasscode|adoptSession|currentSession/,
       `${label} still handles a session`,
     );
   }

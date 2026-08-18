@@ -31,6 +31,11 @@ const USERS = {
 // email the queue shows as missing, which is a real state and is why the card
 // has copy for it.
 export const ACCOUNTS = {
+  // The shared account the passcode box actually signs in to, matching
+  // OFFICER_ACCOUNT_EMAIL in web/config.js. Every other account below exists
+  // so the role tests have something to be refused as; this is the only one
+  // the product itself ever names.
+  'officers@pdsaucf.com': { user_id: USERS.admin, role: 'admin', full_name: null },
   'sara@pdsaucf.com': { user_id: USERS.officer, role: 'officer', full_name: 'Sara Whitfield' },
   'ben@pdsaucf.com': { user_id: USERS.admin, role: 'admin', full_name: 'Ben Le' },
   'advisor@ucf.edu': { user_id: USERS.viewer, role: 'viewer', full_name: 'Dr Okafor' },
@@ -41,6 +46,12 @@ export const ACCOUNTS = {
 
 // Somebody with no account at all, for the "no profile row" branch of the guard.
 export const UNKNOWN_EMAIL = 'stranger@example.com';
+
+// What every account above answers to. Deliberately not the club's real
+// passcode: this repository is public, the real one lives as a bcrypt hash in
+// auth.users and nowhere else, and a test that needed the real value would be
+// a test that leaked it. See docs/06-officer-passcode.md.
+export const MOCK_PASSCODE = 'mock-passcode';
 
 // Slugs and ids match supabase/migrations/20260811101300_seed_2026_2027.sql, so
 // a rule copied off this mock is the same rule the seed describes. Volunteering

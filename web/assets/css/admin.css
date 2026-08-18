@@ -150,35 +150,6 @@ body {
 /* Shared type                                                                  */
 /* --------------------------------------------------------------------------- */
 
-.brand-mark {
-  margin: 0 0 1.25rem;
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-/* ---------------------------------------------------------------------------
-   The lockup, on the sign-in screen only
-
-   width and height attributes are on the element, so the aspect ratio is known
-   before the 250KB arrives and the form below it does not jump. Capped by the
-   column it sits in rather than by a second fixed number.
-   --------------------------------------------------------------------------- */
-.brand-lockup {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-
-.lockup {
-  display: block;
-  width: 180px;
-  max-width: 100%;
-  height: auto;
-  aspect-ratio: 512 / 561;
-}
-
 .body {
   margin: 0;
 }
@@ -217,6 +188,52 @@ body {
   justify-content: center;
   gap: 0.75rem;
   min-height: 60vh;
+}
+
+/* ---------------------------------------------------------------------------
+   The passcode screen
+
+   One box on an empty page. No wordmark, no heading, no button: everything
+   that would tell a passer-by what this is has been taken off, so the layout
+   is just "centre the one thing that is left".
+
+   Kept narrow rather than full width, because a text field stretched across a
+   desktop reads as a search bar somebody forgot to style, which draws more
+   attention than a small box does.
+   --------------------------------------------------------------------------- */
+.view-passcode {
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: 1rem;
+}
+
+.passcode {
+  width: min(15rem, 100%);
+  text-align: center;
+  /* The one place in this product where digits are not in a column, and where
+     a masked field looks wrong with the tabular spacing body sets. */
+  font-variant-numeric: normal;
+  letter-spacing: 0.15em;
+}
+
+/* A refused passcode says so by turning the box, not by adding a sentence.
+   The screen reader hears it from #signin-status instead. */
+.passcode[aria-invalid='true'] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
+/* THE RING HAS TO TURN TOO, or the refusal is invisible. Submitting is Enter,
+   so the field is focused every time this state is reached, and the 3px
+   focus-visible outline sits directly outside a 1px border and swamps it: the
+   officer sees an ordinary blue focused box and no sign that anything was
+   refused. Recolouring the ring keeps the focus indicator exactly where it was
+   and makes it carry the refusal, rather than adding a second thing to look
+   at. */
+.passcode[aria-invalid='true']:focus-visible {
+  outline-color: var(--danger);
 }
 
 .view-narrow {

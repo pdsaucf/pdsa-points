@@ -34,6 +34,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { failRpcOnce, failStorageDeleteOnce, removeFromBucket } from './admin-server.mjs';
 import { IDS } from './admin-fixtures.mjs';
 import { installDom } from './dom.mjs';
@@ -89,15 +90,7 @@ async function check(name, fn) {
 const api = (path) => fetch(`http://localhost:${PORT}${path}`).then((r) => r.json());
 const reset = () => api('/__mock/reset');
 
-async function signInAs(email) {
-  auth.forgetSession();
-  await auth.sendMagicLink(email, `http://localhost:${PORT}/admin/`);
-  const { url } = await api(`/__mock/magic-link?email=${encodeURIComponent(email)}`);
-  const parsed = auth.parseAuthRedirect(url);
-  assert.ok(parsed?.session, `no session in the sign-in link for ${email}`);
-  auth.adoptSession(parsed.session);
-  return parsed.session;
-}
+const signInAs = (email) => signInAsAccount(email, PORT);
 
 /**
  * Waits for the screen to settle, rather than for a fixed number of turns.
