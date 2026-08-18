@@ -3689,6 +3689,130 @@ export const ADMIN_RPC = {
     });
   },
 
+  /**
+   * portal_attendance(p_member_id uuid) returns jsonb
+   *
+   * Migration 23. Every published event of this year, by category, with what
+   * this member did about each one. The three rules that are easy to get
+   * subtly wrong and are therefore written out rather than inlined: a live
+   * record beats a superseded rejected one, an archived category still shows
+   * when the member has a record in it, and credit comes off creditRows()
+   * rather than being worked out a second time here.
+   */
+  portal_attendance(res, body, req, helpers) {
+    const { json, pds } = helpers;
+    const year = portalYear();
+    if (!year) {
+      pds(res, 'PDS03', 'No academic year is set up yet.');
+      return;
+    }
+
+    const member = db.members.find((row) => row.id === body.p_member_id) ?? null;
+    const enrollment = db.member_enrollments.find(
+      (row) => row.member_id === body.p_member_id && row.academic_year_id === year.id,
+    );
+    if (!member || member.archived_at || member.merged_into_id || !enrollment) {
+      record({ fn: 'portal_attendance', outcome: 'PDS03' });
+      pds(res, 'PDS03', 'Nobody by that name is on this years roster.');
+      return;
+    }
+
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const eventById = new Map(db.events.map((row) => [row.id, row]));
+
+    // distinct on (event_id) order by (status <> 'rejected') desc, submitted_at desc
+    const live = (row) => (row.status === 'rejected' ? 0 : 1);
+    const mine = new Map();
+    for (const row of db.attendance_records) {
+      if (row.member_id !== member.id) continue;
+      const event = eventById.get(row.event_id);
+      if (!event || event.academic_year_id !== year.id) continue;
+      const held = mine.get(row.event_id);
+      const wins =
+        !held ||
+        live(row) > live(held) ||
+        (live(row) === live(held) &&
+          String(row.submitted_at ?? '') > String(held.submitted_at ?? ''));
+      if (wins) mine.set(row.event_id, row);
+    }
+
+    // v_attendance_credit, keyed the way the join reads it.
+    const credit = new Map();
+    for (const row of creditRows()) {
+      credit.set(`${row.attendance_id}:${row.category_id}`, row.credit);
+    }
+
+    const heldCategories = new Set();
+    for (const eventId of mine.keys()) {
+      for (const link of db.event_categories) {
+        if (link.event_id === eventId) heldCategories.add(link.category_id);
+      }
+    }
+
+    const totals = totalsByMember(year.id).get(member.id) ?? new Map();
+
+    const categories = db.categories
+      .filter((row) => !row.archived_at || heldCategories.has(row.id))
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name))
+      .map((category) => {
+        const events = db.events
+          .filter(
+            (event) =>
+              event.academic_year_id === year.id &&
+              event.is_published &&
+              db.event_categories.some(
+                (link) => link.event_id === event.id && link.category_id === category.id,
+              ),
+          )
+          .sort(
+            (a, b) =>
+              String(a.occurred_on).localeCompare(String(b.occurred_on)) ||
+              a.title.localeCompare(b.title),
+          )
+          .map((event) => {
+            const held = mine.get(event.id) ?? null;
+            const open =
+              event.checkin_closes_at && new Date(event.checkin_closes_at) > now ? true : false;
+            const status =
+              held?.status === 'approved'
+                ? 'attended'
+                : held?.status === 'pending'
+                  ? 'waiting'
+                  : held?.status === 'rejected'
+                    ? 'declined'
+                    : event.occurred_on > today || open
+                      ? 'upcoming'
+                      : 'none';
+            return {
+              id: event.id,
+              title: event.title,
+              occurred_on: event.occurred_on,
+              status,
+              credit:
+                held?.status === 'approved'
+                  ? (credit.get(`${held.id}:${category.id}`) ?? null)
+                  : null,
+            };
+          });
+
+        return {
+          id: category.id,
+          name: category.name,
+          total: totals.get(category.id) ?? 0,
+          events,
+        };
+      })
+      .filter((section) => section.events.length > 0 || section.total !== 0);
+
+    record({ fn: 'portal_attendance', memberId: member.id });
+    json(res, 200, {
+      year: { id: year.id, label: year.label },
+      member: { id: member.id, display_name: member.display_name },
+      categories,
+    });
+  },
+
   /** portal_requirements() returns jsonb */
   portal_requirements(res, body, req, helpers) {
     const { json, pds } = helpers;

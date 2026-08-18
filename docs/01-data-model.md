@@ -254,9 +254,12 @@ create unique index one_live_record_per_member_event
 ```
 
 `review_note` and `member_note` are two columns because they have two authors.
-`review_records()` writes `review_note`, and the portal shows it to the member as the
-reason a record was declined ([04-member-ui.md](04-member-ui.md)), so a member's own
-words left in that column would be read back to them as an officer's.
+`review_records()` writes `review_note`, and it is officer-only: `portal_attendance()`
+shows a member their own declined record as the word `declined` and nothing more
+([04-member-ui.md](04-member-ui.md)), so an officer's reasoning about one member is never
+read back to a stranger who typed that member's name. A member's own words in
+`member_note` are likewise kept off the portal, so they are never read back to the member
+as if they were an officer's.
 
 One table with a status beats a `submissions` → `attendance` promotion because:
 un-approving is symmetric with approving, the officer sees *why* something was

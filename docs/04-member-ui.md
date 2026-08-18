@@ -39,23 +39,31 @@ totals on it were the whole social function of the point system.
 What is deliberately NOT public:
 
 - no email address, no student id, no notes
-- no individual check-ins, so nothing pending and nothing declined
-- no officer's decline reason
+- no officer's decline reason, no flags, no reviewer, no reviewed timestamp
+- no photo or other evidence
 - nothing about anybody who is not on this year's roster
 
-Approved credit is a total. The individual records behind it are the part an officer needs
-and a stranger does not, so they are on the officer's member screen and not here.
+**A member's own event-by-event attendance for the current year is public**, once they
+have typed their name. Migration 21 originally withheld this: "the individual records are
+the part an officer needs and a stranger does not." The club asked for that reversed. The
+spreadsheet this product replaces showed a member every event of the year and whether
+they made it, and a point total alone cannot answer that. So `portal_attendance()`
+(migration 23) hands back every published event of the year, by category, with attended,
+waiting, declined, upcoming or nothing next to each one, for the member looked up. It
+still carries none of an officer's context: no decline reason, no flags, no reviewer, no
+photo, no other member. That boundary is tested the same way the rest of this file is.
 
-## The four functions the page is made of
+## The five functions the page is made of
 
 Every one is a `SECURITY DEFINER` function that any caller may execute, including one
-holding nothing but the anon key. They are defined in
-`..._public_member_portal.sql` (migration 21).
+holding nothing but the anon key. Four are defined in `..._public_member_portal.sql`
+(migration 21); `portal_attendance()` is `..._member_event_history.sql` (migration 23).
 
 | What the page needs | Function |
 |---|---|
 | the name box | `portal_find_members(first_name, last_name)` |
 | one member's points | `portal_scorecard(member_id)` |
+| that member's event history | `portal_attendance(member_id)` |
 | the leaderboard, with breakdowns | `portal_leaderboard()` |
 | "What is an Honorary Member?" | `portal_requirements()` |
 
@@ -119,6 +127,53 @@ requires the screen to follow it.
 The box at the bottom is what the page says before anybody has typed anything, which is
 the common case for somebody who followed a link from a group chat.
 
+## Your events
+
+Below the scorecard, one collapsible section per category, drawn from
+`portal_attendance()` once the points have already loaded. The figures are the answer;
+this is the detail behind them, so it is fetched after and fails silently if it does not
+come back, the same as the requirements box does.
+
+```
+┌──────────────────────────────────┐
+│ ▾ GBMs                        9  │
+│    Fall GBM 1        Sep 4     9 │
+│    Fall GBM 2        Sep 18      │
+│ ▸ Volunteering                30 │
+│ ▸ Clinical Workshops           6 │
+└──────────────────────────────────┘
+```
+
+Every published event of the year is a row, grouped under the category it counts for. An
+event linked to two categories, like Soap Carving, is a row under both. What is in the
+last column:
+
+| Status | Shown as |
+|---|---|
+| approved | the credit earned, the spreadsheet's `1` |
+| pending | `Waiting` |
+| rejected | `Declined` |
+| no record, not yet held | `Upcoming` |
+| no record, already held | blank, the spreadsheet's blank cell |
+
+A section the member has any record in opens; one they have never touched stays shut with
+its total on the summary line. A club year is on the order of a hundred events across
+thirteen categories, and drawn flat that is a page nobody scrolls to the bottom of. Their
+own history is never behind an interaction they have to discover; the events they have
+not been to are.
+
+Where more than one `attendance_records` row exists for the same event (a rejection
+followed by a fresh check-in, which `one_live_record_per_member_event` permits because a
+rejected row sits outside that index), the live row wins. A member who was turned down,
+fixed the problem and checked in again reads where they stand now, not the state that was
+superseded.
+
+Nothing here is denormalised. The title, the date and the credit are read from `events`,
+`event_categories` and `v_attendance_credit` on every call, keyed off `member_id`, so
+renaming an event, moving its date, or merging a duplicate member into another all show up
+with nothing to run. `test/public_portal.test.mjs` proves this by doing exactly those
+three things and reading the answer back, rather than assuming a live join implies it.
+
 ## The leaderboard
 
 ```
@@ -164,16 +219,16 @@ for a screen reader, and it draws no text on screen.
 
 ## Security
 
-`anon` holds EXECUTE on the four functions above and on nothing else: not the evaluator
+`anon` holds EXECUTE on the five functions above and on nothing else: not the evaluator
 they call, not `fn_portal_year()`, and not one table, view or sequence.
 `test/privileges.test.mjs` compares the anon surface against a written-out list, so
 widening it again is a deliberate edit to that list rather than something that happens
 quietly.
 
 The one refusal these functions make is a member who is not on this year's roster:
-`portal_scorecard()` raises `PDS03` rather than answering with zeroes, because a screen of
-zeroes reads as "you have attended nothing" when the truth is "you are not on this year's
-list, go and see an officer".
+`portal_scorecard()` and `portal_attendance()` both raise `PDS03` rather than answering
+with zeroes, because a screen of zeroes reads as "you have attended nothing" when the
+truth is "you are not on this year's list, go and see an officer".
 
 Nothing on this page writes anything. There is no missing-credit form and no way for a
 member to file a record: invariant 6 says every attendance record is approved by a person,

@@ -1110,6 +1110,45 @@ export function buildDatabase() {
   const postEvent = addHistory('PDSA Post', CAT['pdsa-post'], 1);
   const writingEvent = addHistory('Media Writing', CAT['media-writing'], 1);
 
+  // ---- the two events the member's own history has to treat differently ----
+  //
+  // Neither carries an attendance record, so no board figure, queue count or
+  // preview total moves because they exist. They are here for
+  // portal_attendance() (migration 23), which has two states nothing else in
+  // these fixtures produces:
+  //
+  //   the draft   not published, so no member may see it at all. A history
+  //               that forgot is_published would show the club an event its
+  //               officers have not finished writing
+  //   the future  scheduled and not yet held, which has to read "Upcoming"
+  //               rather than sit blank among the events they did not attend
+  //
+  // The future one's date is computed rather than written down. "Has not
+  // happened yet" is a fact about today, not about a string, and a date typed
+  // into a fixture stops being in the future on a morning nobody is watching.
+  const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const portalEvents = [
+    {
+      id: 'e0000000-0000-4000-a000-00000000000d',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Draft Workshop',
+      occurred_on: '2026-08-12',
+      location: null,
+      is_published: false,
+      category_id: CATEGORIES[0].id,
+    },
+    {
+      id: 'e0000000-0000-4000-a000-00000000000e',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Field Day',
+      occurred_on: future,
+      location: 'Memory Mall',
+      is_published: true,
+      category_id: CATEGORIES[2].id,
+    },
+  ];
+
   let historySeq = 0;
   const approve = (memberId, eventId, value = null) => {
     historySeq += 1;
@@ -1291,6 +1330,7 @@ export function buildDatabase() {
     events: [
       ...EVENTS.map((e) => ({ ...e })),
       ...historyEvents.map(({ category_id, credit_mode, ...event }) => event),
+      ...portalEvents.map(({ category_id, ...event }) => event),
       ...storageEvents,
     ],
     event_categories: [
@@ -1299,6 +1339,12 @@ export function buildDatabase() {
         event_id: event.id,
         category_id: event.category_id,
         credit_mode: event.credit_mode,
+        fixed_credit: 1,
+      })),
+      ...portalEvents.map((event) => ({
+        event_id: event.id,
+        category_id: event.category_id,
+        credit_mode: 'fixed',
         fixed_credit: 1,
       })),
     ],

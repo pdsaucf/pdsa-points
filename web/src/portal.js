@@ -38,11 +38,13 @@ import { rpc } from './api.js';
 import { describeMember } from './member-errors.js';
 import { createScorecard } from './portal-scorecard.js';
 import { createLeaderboard } from './portal-leaderboard.js';
+import { createHistory } from './portal-history.js';
 import { $, h, announce, setHidden } from './ui.js';
 
 const el = {};
 const app = {
   scorecard: null,
+  history: null,
   leaderboard: null,
   tab: 'points',
   candidates: [],
@@ -198,26 +200,43 @@ const joinedLabel = (isoDate) => {
   })}`;
 };
 
+// Who show() last started looking up. Somebody can press "Not you?" and
+// submit a second name before the first lookup answers, and the network gives
+// no promise that answers arrive in the order the requests left: a slow first
+// answer landing after the second would paint member A's points under member
+// B's name. Every await below checks this before touching the screen, so a
+// superseded answer is dropped rather than shown.
+let activeMemberId = null;
+
 async function show(memberId) {
+  activeMemberId = memberId;
   setHidden(el.pickBlock, true);
   clearMessage();
   setLooking(true);
   try {
     const card = await rpc('portal_scorecard', { p_member_id: memberId });
+    if (activeMemberId !== memberId) return; // superseded while this was in flight
     app.scorecard.render(card);
     setHidden(el.lookupForm, true);
+    // Not awaited. The figures are the answer and they are already on screen;
+    // the event list is the detail behind them and arrives when it arrives.
+    // load() carries its own guard against this same staleness.
+    app.history.load(memberId);
     // The name they typed is not cleared: pressing "Not you?" puts them back on
     // the form with it still in the boxes, which is what somebody who mistyped
     // one letter needs.
   } catch (err) {
+    if (activeMemberId !== memberId) return;
     fail(err, () => show(memberId));
   } finally {
-    setLooking(false);
+    if (activeMemberId === memberId) setLooking(false);
   }
 }
 
 function forget() {
+  activeMemberId = null;
   app.scorecard.clear();
+  app.history.clear();
   setHidden(el.lookupForm, false);
   setHidden(el.pickBlock, app.candidates.length < 2);
   el.lookupFirst.focus();
@@ -256,6 +275,7 @@ export function start() {
 
   const ctx = { fail, clearMessage };
   app.scorecard = createScorecard(ctx);
+  app.history = createHistory();
   app.leaderboard = createLeaderboard(ctx);
 
   el.lookupForm.addEventListener('submit', onLookup);

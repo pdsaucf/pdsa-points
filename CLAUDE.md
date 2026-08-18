@@ -135,11 +135,15 @@ Breaking any of these reintroduces a problem the design exists to solve:
 8. **A member has no email address, and the member portal is not an account.** Somebody
    types their name and reads their own points. Nothing collects an address anywhere in
    the product; `members.email` is a column holding history that nothing reads.
-9. **What the portal exposes is club-facing figures and nothing else.** Category totals,
-   point totals, the honorary verdict and the published rules, through four shaped
-   functions. Never an address, a student id, a note, an individual check-in, or anything
-   pending or declined. Widening that surface means editing the written-out list in
-   `test/privileges.test.mjs` on purpose.
+9. **What the portal exposes is club-facing figures, plus a member's own event-by-event
+   attendance for the current year, and nothing else.** Category totals, point totals,
+   the honorary verdict, the published rules, and (through `portal_attendance()`) every
+   published event of the year with that member's own status against it: attended,
+   waiting, declined, upcoming, or nothing. Never an address, a student id, a note, an
+   officer's decline reason, a photo, or anybody else's records. The portal has no login,
+   so this is readable by anyone who can open the site and type a name, the same
+   decision the leaderboard already makes. Widening that surface further means editing
+   the written-out list in `test/privileges.test.mjs` on purpose.
 
 ## Multi-agent workflow
 

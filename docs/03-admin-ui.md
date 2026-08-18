@@ -453,7 +453,7 @@ Rules behind it:
 | **P2** Review queue | Triage flags, flagged/routine split, unmatched-name resolution, grid + lightbox, bulk approve/reject, audit | 1 block |
 | **P3** Requirements engine | Node model, evaluator, editor UI, live preview | **2 blocks**, the real cost centre |
 | **P4** Board + roster | Progress board, member detail, CSV import/export UI, duplicate detection + merge | 1 block |
-| **P5** Member portal | Name lookup, the scorecard, the leaderboard, the Honorary explainer, four public functions | 1 block |
+| **P5** Member portal | Name lookup, the scorecard, the event history, the leaderboard, the Honorary explainer, five public functions | 1 block |
 | **P6** Ops | Storage screen + purge flow, keep-alive ping, backups | 1 block |
 
 **Roster loading is not in P4.** The system starts with no members, so a bulk roster

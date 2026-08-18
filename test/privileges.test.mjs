@@ -66,6 +66,20 @@ let db;
 // a grant on v_member_status. If one of them ever starts carrying an address, a
 // student id or an unapproved record, that test fails rather than this one.
 //
+// PORTAL_ATTENDANCE(UUID) IS A SECOND, LATER WIDENING (migration 23), and it is
+// worth being honest about what it opens rather than folding it quietly into
+// the sentence above. Migration 21 deliberately withheld a member's own
+// check-in history: "the individual records are the part an officer needs and
+// a stranger does not." The club asked for that reversed, because the
+// spreadsheet this product replaces showed a member every event of the year
+// and whether they made it, and a point total alone cannot answer that. So this
+// function hands back, for one member, every published event of this year by
+// category with attended, waiting, declined, upcoming or nothing next to each
+// one. It still carries none of an officer's context: no decline reason, no
+// flags, no reviewer, no reviewed timestamp, no photo, no other member. That
+// boundary is asserted in test/public_portal.test.mjs, the same as the other
+// four.
+//
 // Full signatures rather than bare names. Postgres identifies a function by
 // name AND argument types, so an overload is a different function with its own
 // ACL: adding `search_members(text, text)` alongside the existing one and
@@ -81,6 +95,7 @@ const ANON_MAY_EXECUTE = [
   'fn_keepalive()',
   'fn_upload_grant_is_live(text,text)',
   'get_checkin_context(text)',
+  'portal_attendance(uuid)',
   'portal_find_members(text,text)',
   'portal_leaderboard()',
   'portal_requirements()',
