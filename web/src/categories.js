@@ -1,15 +1,26 @@
 // Categories: the things requirements measure.
 //
-// CATEGORIES ARCHIVE, THEY NEVER DELETE (invariant 4). Every reference from a
-// rule or an event is `on delete restrict`, so a delete would be refused by the
-// database anyway; what this screen offers instead is Retire, which sets
-// archived_at and takes the category out of every list that offers a choice,
-// while last year's published rules and last year's events keep resolving. The
+// A CATEGORY WITH ANY HISTORY ARCHIVES, AND NEVER DELETES (invariant 4). Every
+// reference from a rule or an event is `on delete restrict`, so a delete would
+// be refused by the database anyway; what this screen offers instead is Retire,
+// which sets archived_at and takes the category out of every list that offers a
+// choice, while last year's rules and last year's events keep resolving. The
 // #REF! column in the old spreadsheet is what happens when that is not true.
 //
 // Retiring one a rule still measures is allowed, and is sometimes exactly what
 // an officer means to do, so it is not refused. It is explained: the dialog
 // names the requirements that measure it before anybody presses the button.
+//
+// DELETE IS OFFERED TOO, AND IS NOT A VIOLATION OF INVARIANT 4. The invariant
+// exists so a reference can never dangle; a category nothing references, ever
+// (zero events in any year, zero requirements), cannot dangle, because there
+// is nothing for it to leave behind. canDelete() in category-model.js is what
+// decides "nothing" honestly: it reads the all-year event count, not the
+// current year's display count, because a category retired from this year's
+// events can still be attached to one from last year. Even so, the button is
+// only ever a shortcut for the database's own answer: del() still catches the
+// on-delete-restrict error the database throws if this screen's copy of the
+// data was stale, and reloads rather than pretending the delete happened.
 //
 // `slug` is the identity and `name` is only a label, so renaming "Visits" to
 // "Dental School Visits" rewrites nothing and is not a decision anybody needs
@@ -31,13 +42,15 @@
 //                       count of events. With hours gone it was a checkbox whose
 //                       only remaining use was making somebody's total wrong.
 
-import { select, insert, patch } from './rest.js';
+import { select, insert, patch, remove } from './rest.js';
 import { READ_ONLY } from './officer-errors.js';
 import { reorderWithin, nextOrder } from './requirement-model.js';
-import { uniqueSlug } from './category-model.js';
+import { uniqueSlug, countByCategory, groupRequirementUses, canDelete } from './category-model.js';
 import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
 const CATEGORY_SELECT = 'id,slug,name,sort_order,archived_at';
+const REQUIREMENT_USE_SELECT =
+  'category_id,requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))';
 
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
@@ -56,10 +69,22 @@ export function createCategories(ctx) {
     dialogTitle: $('retire-title'),
     dialogMeta: $('retire-meta'),
     dialogUses: $('retire-uses'),
+    deleteDialog: $('delete-category-dialog'),
+    deleteDialogForm: $('delete-category-form'),
+    deleteDialogMeta: $('delete-category-meta'),
   };
 
   const state = {
     categories: [],
+    // Current-year event usage, for the subline. Reloaded whenever the year
+    // changes (see admin.js's year select handler), because this count is the
+    // one thing on this row that is not true for every year at once.
+    displayEventCounts: new Map(),
+    // Every-year event usage, for delete-eligibility only. Never shown: a
+    // count on screen that nobody asked "since when" about is read as "right
+    // now", and this one deliberately is not.
+    allEventCounts: new Map(),
+    requirementUses: new Map(),
     busy: false,
     loaded: false,
   };
@@ -70,16 +95,41 @@ export function createCategories(ctx) {
   async function load() {
     setHidden(el.loading, false);
     try {
-      state.categories = await select('categories', {
-        select: CATEGORY_SELECT,
-        order: 'sort_order.asc',
-      });
+      // Four bulk reads, never one request per row: the categories themselves,
+      // this year's event usage (for the subline), every year's event usage
+      // (for delete-eligibility, which must not be fooled by a category that
+      // is merely unused THIS year), and every requirement's category links.
+      const [categories, yearEventRows, allEventRows, requirementRows] = await Promise.all([
+        select('categories', { select: CATEGORY_SELECT, order: 'sort_order.asc' }),
+        select('event_categories', {
+          select: 'category_id,events!inner(id,academic_year_id)',
+          filters: { 'events.academic_year_id': `eq.${ctx.year.id}` },
+        }),
+        select('event_categories', { select: 'category_id' }),
+        select('requirement_node_categories', { select: REQUIREMENT_USE_SELECT }),
+      ]);
+
+      state.categories = categories;
+      state.displayEventCounts = countByCategory(yearEventRows);
+      state.allEventCounts = countByCategory(allEventRows);
+      state.requirementUses = groupRequirementUses(requirementRows, ctx.years);
       state.loaded = true;
       render();
     } catch (err) {
       setHidden(el.loading, true);
       ctx.fail(err, load);
     }
+  }
+
+  /** The subline under a row's name: '4 events · 2 requirements'. Either half
+   *  is omitted when zero, and the whole line is omitted when both are. */
+  function usageSubline(categoryId) {
+    const events = state.displayEventCounts.get(categoryId) ?? 0;
+    const requirements = state.requirementUses.get(categoryId)?.length ?? 0;
+    const parts = [];
+    if (events) parts.push(plural(events, 'event'));
+    if (requirements) parts.push(plural(requirements, 'requirement'));
+    return parts.length ? parts.join(' · ') : null;
   }
 
   function render() {
@@ -101,7 +151,8 @@ export function createCategories(ctx) {
   function renderRow(category, index, count) {
     const row = h('div', { class: 'category-row', dataset: { id: category.id } });
 
-    row.append(
+    const main = h('div', { class: 'category-row-main' });
+    main.append(
       h('input', {
         class: 'rule-label',
         type: 'text',
@@ -113,6 +164,9 @@ export function createCategories(ctx) {
         onChange: (event) => rename(category, event.target.value),
       }),
     );
+    const subline = usageSubline(category.id);
+    if (subline) main.append(h('p', { class: 'muted small' }, subline));
+    row.append(main);
 
     const actions = h('div', { class: 'rule-actions' });
     if (ctx.canReview) {
@@ -141,6 +195,30 @@ export function createCategories(ctx) {
           'Retire',
         ),
       );
+
+      // Delete is appended separately, and only when it exists. Node.append()
+      // is not h(): it stringifies what it is given, so appending a null
+      // branch inline puts the word "null" on screen beside Retire.
+      if (
+        canDelete(category, {
+          allEventCount: state.allEventCounts.get(category.id) ?? 0,
+          requirementUses: state.requirementUses.get(category.id) ?? [],
+        })
+      ) {
+        actions.append(
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'button button-small button-danger',
+              disabled: state.busy,
+              'aria-label': `Delete ${category.name}`,
+              onClick: () => del(category),
+            },
+            'Delete',
+          ),
+        );
+      }
     } else {
       actions.append(h('p', { class: 'muted small' }, READ_ONLY));
     }
@@ -280,43 +358,12 @@ export function createCategories(ctx) {
   // -------------------------------------------------------------------------
 
   async function retire(category) {
-    setBusy(true);
-    let uses = [];
-    try {
-      uses = await usesOf(category);
-    } catch (err) {
-      setBusy(false);
-      ctx.fail(err, null);
-      return;
-    }
-    setBusy(false);
-
+    const uses = state.requirementUses.get(category.id) ?? [];
     if (uses.length) {
       const go = await confirmRetire(category, uses);
       if (!go) return;
     }
     await write(category, { archived_at: new Date().toISOString() }, `${category.name} retired.`);
-  }
-
-  /** Which requirements measure this category, and in which set. */
-  async function usesOf(category) {
-    const rows = await select('requirement_node_categories', {
-      select:
-        'category_id,requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))',
-      filters: { category_id: `eq.${category.id}` },
-    });
-
-    return rows
-      .map((row) => row.requirement_nodes)
-      .filter(Boolean)
-      .map((node) => {
-        const set = node.requirement_sets ?? {};
-        const year = (ctx.years ?? []).find((row) => row.id === set.academic_year_id);
-        return {
-          label: node.label,
-          where: [year?.label, set.status].filter(Boolean).join(' · '),
-        };
-      });
   }
 
   function confirmRetire(category, uses) {
@@ -356,9 +403,72 @@ export function createCategories(ctx) {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Deleting, offered only when nothing references the category at all
+  // -------------------------------------------------------------------------
+
+  async function del(category) {
+    const go = await confirmDelete(category);
+    if (!go) return;
+
+    setBusy(true);
+    ctx.clearMessage();
+    try {
+      const rows = await remove('categories', { id: `eq.${category.id}` });
+      if (!rows.length) {
+        ctx.note(NOT_CHANGED, 'warn');
+        return;
+      }
+      state.categories = state.categories.filter((row) => row.id !== category.id);
+      const said = `${category.name} deleted.`;
+      ctx.note(said);
+      announce(said);
+      render();
+    } catch (err) {
+      // A race: something attached this category to an event or a
+      // requirement between page load and this button press, so the database
+      // refuses with a genuine foreign-key error rather than an empty array.
+      // Reloading is what makes the Delete button disappear once the fresh
+      // data shows the reference (see the file header).
+      ctx.fail(err, null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function confirmDelete(category) {
+    return new Promise((resolve) => {
+      el.deleteDialogMeta.textContent = category.name;
+
+      // Same guard as confirmRetire(): a close event queued behind submit
+      // must not undo the decision submit already made.
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        el.deleteDialogForm.removeEventListener('submit', onSubmit);
+        el.deleteDialog.removeEventListener('close', onClose);
+        resolve(value);
+      };
+      const onSubmit = () => {
+        el.deleteDialog.close();
+        finish(true);
+      };
+      const onClose = () => finish(false);
+
+      el.deleteDialogForm.addEventListener('submit', onSubmit);
+      el.deleteDialog.addEventListener('close', onClose, { once: true });
+      el.deleteDialog.showModal();
+    });
+  }
+
   function wire() {
     el.form.addEventListener('submit', add);
     el.dialog.querySelector('[data-close]')?.addEventListener('click', () => el.dialog.close());
+    el.deleteDialog
+      .querySelector('[data-close]')
+      ?.addEventListener('click', () => el.deleteDialog.close());
   }
 
   return {

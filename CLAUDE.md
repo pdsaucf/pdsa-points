@@ -127,7 +127,14 @@ Breaking any of these reintroduces a problem the design exists to solve:
 2. **Honorary status is computed in Postgres**, never in client JS.
 3. **The anonymous pages touch no table.** The check-in page and the member portal call
    `SECURITY DEFINER` RPCs only. An anonymous caller can never set `status`.
-4. **Categories archive, never delete.** Every reference is `on delete restrict`.
+4. **A category with any history archives, and never deletes.** Every reference is
+   `on delete restrict`, so the database refuses to drop one an event or a rule still
+   points at, and Retire is what takes it out of the lists that offer a choice while
+   last year's events and last year's published rules go on resolving. A category
+   nothing references at all is the one exception: it has no history to strand, and
+   Delete is offered on it so a name typed by mistake does not sit in the Retired list
+   for the rest of the club's life. Eligibility counts events across EVERY year, not
+   the year on screen, because a category unused this year is not an unused category.
 5. **An event is defined once.** Categories attach via `event_categories`. Never add a
    `category_id` column to `events`.
 6. **No auto-approval.** Every attendance record is approved by a person. The triaged

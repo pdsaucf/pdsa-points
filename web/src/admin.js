@@ -22,6 +22,7 @@ import { IS_CONFIGURED } from '../config.js';
 import { signInWithPasscode, currentSession, forgetSession, signOut } from './auth.js';
 import { select } from './rest.js';
 import { describeOfficer, describeSignIn } from './officer-errors.js';
+import { createEvents } from './events.js';
 import { createReview } from './review.js';
 import { createRequirements } from './requirements.js';
 import { createCategories } from './categories.js';
@@ -34,9 +35,11 @@ import { $, h, announce, setHidden } from './ui.js';
 const REVIEWING_ROLES = ['officer', 'admin'];
 const READING_ROLES = ['officer', 'admin', 'viewer'];
 
-// The six panels, in tab order. Each one is mounted once and reloaded when the
-// year changes, so switching tabs costs nothing.
-const TABS = ['review', 'progress', 'roster', 'requirements', 'categories', 'storage'];
+// The seven panels, in tab order. Each one is mounted once and reloaded when
+// the year changes, so switching tabs costs nothing. Events is first: it is
+// where an officer's day starts (make the event, print the code), and the
+// app lands on it (see start()).
+const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -49,6 +52,7 @@ const app = {
   profile: null,
   years: [],
   year: null,
+  events: null,
   review: null,
   requirements: null,
   categories: null,
@@ -56,7 +60,7 @@ const app = {
   roster: null,
   member: null,
   storage: null,
-  tab: 'review',
+  tab: 'events',
   returnTab: 'roster',
 };
 
@@ -311,6 +315,13 @@ function context() {
     onCategoriesChanged: () => {
       app.categories?.reload();
     },
+    // A new or edited event can change which events the review queue's
+    // filter offers, and an event's categories changing can change the
+    // board underneath it.
+    onEventsChanged: () => {
+      app.review?.reload();
+      app.progress?.reload();
+    },
   };
 }
 
@@ -355,6 +366,7 @@ function startApp() {
   el.yearSelect.value = app.year.id;
 
   const ctx = context();
+  app.events = createEvents(ctx);
   app.review = createReview(ctx);
   app.requirements = createRequirements(ctx);
   app.categories = createCategories(ctx);
@@ -363,6 +375,7 @@ function startApp() {
   app.member = createMember(ctx);
   app.storage = createStorage(ctx);
 
+  app.events.mount();
   app.review.mount();
   app.requirements.mount();
   app.categories.mount();
@@ -392,6 +405,7 @@ function cacheElements() {
 
     yearSelect: $('year-select'),
     tabs: {
+      events: $('tab-events'),
       review: $('tab-review'),
       progress: $('tab-progress'),
       roster: $('tab-roster'),
@@ -400,6 +414,7 @@ function cacheElements() {
       storage: $('tab-storage'),
     },
     panels: {
+      events: $('panel-events'),
       review: $('panel-review'),
       progress: $('panel-progress'),
       roster: $('panel-roster'),
@@ -437,10 +452,14 @@ function wire() {
     if (!year) return;
     app.year = year;
     clearMessage();
+    app.events?.reload();
     app.review?.reload();
     // Requirements are scoped to the year in the top bar, so this is the one
     // control that decides which rules are on screen.
     app.requirements?.reload();
+    // Each category's usage count is per year, so a year change without this
+    // would leave last year's counts on screen under this year's selector.
+    app.categories?.reload();
     // Every number on these three is per year: the totals, the star, who is on
     // the roster, and which records a member has. A year change that left them
     // showing last year's figures is the "why do the numbers look wrong"
@@ -454,7 +473,7 @@ function wire() {
 export function start() {
   cacheElements();
   wire();
-  selectTab('review');
+  selectTab('events');
 
   if (!IS_CONFIGURED) {
     showDenied('No database is connected. An admin needs to fill in web/config.js.');

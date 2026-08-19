@@ -13,6 +13,7 @@
     "check": "npm run lint:no-em-dash && npm test"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.4"
+    "@electric-sql/pglite": "^0.5.4",
+    "jsqr": "^1.4.0"
   }
 }

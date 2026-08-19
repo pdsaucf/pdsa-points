@@ -66,6 +66,14 @@ const CATEGORIES = [
   { id: 'c0000000-0000-4000-a000-00000000000c', slug: 'media-speaking', name: 'Media Speaking', sort_order: 60 },
   { id: 'c0000000-0000-4000-a000-00000000000b', slug: 'pdsa-post', name: 'PDSA Post', sort_order: 70 },
   { id: 'c0000000-0000-4000-a000-00000000000d', slug: 'media-writing', name: 'Media Writing', sort_order: 80 },
+  // The year-scoping trap: an event_categories row for YEAR_PAST only (see
+  // EVENT_CATEGORIES below, attached to EVENTS[3]), and no requirement
+  // measures it. Current-year display usage must read zero; delete-eligibility
+  // must not, because the past-year record would dangle.
+  { id: 'c0000000-0000-4000-a000-00000000000e', slug: 'last-year-only', name: 'Last Year Only', sort_order: 85 },
+  // Genuinely unused: no event_categories row in any year, no requirement
+  // measures it. The one category the delete button is actually for.
+  { id: 'c0000000-0000-4000-a000-00000000000f', slug: 'unused', name: 'Unused', sort_order: 86 },
   // Already retired. It is what the dead "President Workshops" tab in the old
   // spreadsheet became: nothing measures it, and nothing may delete it either.
   { id: 'c0000000-0000-4000-a000-0000000000ff', slug: 'president-workshops', name: 'President Workshops', sort_order: 90, archived_at: '2026-06-01T00:00:00.000Z' },
@@ -143,9 +151,48 @@ const EVENT_CATEGORIES = [
   { event_id: EVENTS[1].id, category_id: CATEGORIES[2].id, credit_mode: 'fixed', fixed_credit: 1 },
   { event_id: EVENTS[2].id, category_id: CATEGORIES[1].id, credit_mode: 'from_submission', fixed_credit: 1 },
   { event_id: EVENTS[3].id, category_id: CATEGORIES[0].id, credit_mode: 'fixed', fixed_credit: 1 },
+  // Fall GBM 1 (EVENTS[3], YEAR_PAST) also carries the "Last Year Only"
+  // category, so this category has a real all-year reference despite showing
+  // zero events for the current year. See the CATEGORIES entry above.
+  { event_id: EVENTS[3].id, category_id: 'c0000000-0000-4000-a000-00000000000e', credit_mode: 'fixed', fixed_credit: 1 },
   // Health Fair: Tabling, and Volunteering hours off the submission.
   { event_id: EVENTS[4].id, category_id: CATEGORIES[3].id, credit_mode: 'fixed', fixed_credit: 1 },
   { event_id: EVENTS[4].id, category_id: CATEGORIES[1].id, credit_mode: 'from_submission', fixed_credit: 1 },
+];
+
+// Soap Carving is already, in the review queue's own fixture narrative
+// above, "the event that requires one" (a photo): record #4 in the flagged
+// zone is a check-in with no photo attached for exactly this event. This is
+// that requirement made real as a row, for the events screen to read and
+// edit.
+const EVENT_EVIDENCE = [
+  {
+    id: 'v1000000-0000-4000-a000-000000000001',
+    event_id: EVENTS[1].id,
+    kind: 'shirt_photo',
+    is_required: true,
+    prompt: null,
+  },
+];
+
+// One term for the current year, so events.js has something to prove the
+// term field appears when a year actually has terms. Last year carries none,
+// which is the other half of that: the field has to stay absent there.
+const TERMS = [
+  {
+    id: 't0000000-0000-4000-a000-000000000001',
+    academic_year_id: YEAR_CURRENT,
+    label: 'Fall 2026',
+    starts_on: '2026-08-01',
+    ends_on: '2026-12-15',
+  },
+  {
+    id: 't0000000-0000-4000-a000-000000000002',
+    academic_year_id: YEAR_CURRENT,
+    label: 'Spring 2027',
+    starts_on: '2027-01-05',
+    ends_on: '2027-05-31',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1336,14 +1383,31 @@ export function buildDatabase() {
       { id: YEAR_CURRENT, label: '2026-2027', starts_on: '2026-08-01', ends_on: '2027-05-31', is_current: true },
       { id: YEAR_PAST, label: '2025-2026', starts_on: '2025-08-01', ends_on: '2026-05-31', is_current: false },
     ],
-    terms: [],
+    terms: TERMS.map((t) => ({ ...t })),
     categories: CATEGORIES.map((c) => ({ archived_at: null, ...c })),
+    // checkin_token is NOT NULL UNIQUE on the real table, so every event here
+    // gets one, the way a database default would: derived from the event's
+    // own id, which is already unique. Without this, opening the events
+    // screen's QR code for any seeded event (as opposed to one created fresh
+    // through the screen itself, which does mint its own) encodes a URL
+    // ending "?e=null" and nothing scans it.
     events: [
       ...EVENTS.map((e) => ({ ...e })),
       ...historyEvents.map(({ category_id, credit_mode, ...event }) => event),
       ...portalEvents.map(({ category_id, ...event }) => event),
       ...storageEvents,
-    ],
+    ].map((event) => ({
+      term_id: null,
+      notes: null,
+      review_policy: 'manual_review',
+      checkin_opens_at: null,
+      checkin_closes_at: null,
+      token_rotated_at: null,
+      created_by: null,
+      created_at: '2026-08-01T12:00:00.000Z',
+      ...event,
+      checkin_token: event.checkin_token ?? `tok-${event.id.slice(-12)}`,
+    })),
     event_categories: [
       ...EVENT_CATEGORIES.map((ec) => ({ ...ec })),
       ...historyEvents.map((event) => ({
@@ -1359,6 +1423,7 @@ export function buildDatabase() {
         fixed_credit: 1,
       })),
     ],
+    event_evidence_requirements: EVENT_EVIDENCE.map((row) => ({ ...row })),
     requirement_sets: sets,
     requirement_nodes: nodes,
     requirement_node_categories: nodeCategories,
@@ -1428,6 +1493,8 @@ export const IDS = {
   CATEGORY_SOCIALS: 'c0000000-0000-4000-a000-000000000005',
   CATEGORY_JOURNAL_CLUB: 'c0000000-0000-4000-a000-00000000000a',
   CATEGORY_MEDIA_SPEAKING: 'c0000000-0000-4000-a000-00000000000c',
+  CATEGORY_LAST_YEAR_ONLY: 'c0000000-0000-4000-a000-00000000000e',
+  CATEGORY_UNUSED: 'c0000000-0000-4000-a000-00000000000f',
   CATEGORY_RETIRED: 'c0000000-0000-4000-a000-0000000000ff',
 
   STORAGE: {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Review | PDSA Points</title>
+    <title>PDSA Points</title>
     <meta name="description" content="Officer review queue for PDSA UCF points." />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#59328f" media="(prefers-color-scheme: light)" />
@@ -84,7 +84,10 @@
         </div>
 
         <nav class="tabs" aria-label="Sections">
-          <button id="tab-review" type="button" class="tab" aria-selected="true" aria-controls="panel-review">
+          <button id="tab-events" type="button" class="tab" aria-selected="true" aria-controls="panel-events">
+            Events
+          </button>
+          <button id="tab-review" type="button" class="tab" aria-selected="false" aria-controls="panel-review">
             Review <span id="tab-review-count" class="pill">0</span>
           </button>
           <button id="tab-progress" type="button" class="tab" aria-selected="false" aria-controls="panel-progress">
@@ -97,7 +100,7 @@
             Requirements
           </button>
           <button id="tab-categories" type="button" class="tab" aria-selected="false" aria-controls="panel-categories">
-            Categories
+            Event categories
           </button>
           <button id="tab-storage" type="button" class="tab" aria-selected="false" aria-controls="panel-storage">
             Storage
@@ -118,7 +121,91 @@
         <button id="screen-message-action" type="button" class="button" hidden></button>
       </div>
 
-      <main id="panel-review" class="panel-view">
+      <!--
+        Events: what the QR code on the wall points at. The list and the form
+        are one screen. The form replaces the list in place, Cancel and Save
+        both return to it, and there is no separate route for new versus
+        edit.
+
+        Check-in opens the moment an event exists: there is no "opens" field
+        anywhere below, because checkin_opens_at is never written here.
+      -->
+      <main id="panel-events" class="panel-view">
+        <div id="events-toolbar" class="toolbar">
+          <p id="events-count" class="count" aria-live="polite"></p>
+          <button id="event-new" type="button" class="button button-primary">New event</button>
+        </div>
+
+        <section id="loading-events" class="empty" aria-busy="true">
+          <p class="spinner" aria-hidden="true"></p>
+          <p class="muted">Loading events…</p>
+        </section>
+
+        <section id="empty-events" class="empty" hidden>
+          <h2 class="empty-title">No events yet</h2>
+          <p class="muted">Create the first event for this year.</p>
+        </section>
+
+        <div id="event-list" class="event-list" hidden></div>
+
+        <div id="event-form-view" hidden>
+          <form id="event-form" novalidate>
+            <div class="toolbar event-form-toolbar">
+              <h2 id="event-form-title" class="panel-title"></h2>
+              <div class="event-form-actions">
+                <button id="event-cancel" type="button" class="button">Cancel</button>
+                <button id="event-save" type="submit" class="button button-primary">Save</button>
+              </div>
+            </div>
+            <p id="event-error" class="field-error" hidden></p>
+
+            <label class="label" for="event-title">Title</label>
+            <input id="event-title" class="input" type="text" maxlength="120" autocomplete="off" required />
+
+            <label class="label" for="event-date">Date</label>
+            <input id="event-date" class="input" type="date" required />
+
+            <label class="label" for="event-closes">Check-in closes</label>
+            <input id="event-closes" class="input" type="datetime-local" />
+            <label class="event-checkbox">
+              <input id="event-no-close" type="checkbox" />
+              No close time
+            </label>
+
+            <label class="label" for="event-location">Location</label>
+            <input id="event-location" class="input" type="text" autocomplete="off" />
+
+            <div id="event-term-field" hidden>
+              <label class="label" for="event-term">Term</label>
+              <select id="event-term" class="select"></select>
+            </div>
+
+            <h3 class="zone-title">Counts toward</h3>
+            <div id="event-categories" class="event-category-list"></div>
+            <button id="event-category-add" type="button" class="button button-small">
+              Add category
+            </button>
+
+            <h3 class="zone-title">Photo</h3>
+            <label class="event-checkbox">
+              <input id="event-evidence-required" type="checkbox" />
+              Require a photo
+            </label>
+            <div id="event-evidence-fields" hidden>
+              <label class="label" for="event-evidence-kind">Kind</label>
+              <select id="event-evidence-kind" class="select">
+                <option value="shirt_photo">Member shirt</option>
+                <option value="receipt_photo">Receipt</option>
+                <option value="other_photo">Other</option>
+              </select>
+              <label class="label" for="event-evidence-prompt">Prompt (optional)</label>
+              <input id="event-evidence-prompt" class="input" type="text" autocomplete="off" />
+            </div>
+          </form>
+        </div>
+      </main>
+
+      <main id="panel-review" class="panel-view" hidden>
         <div class="toolbar">
           <div class="toolbar-field">
             <label class="label" for="event-select">Event</label>
@@ -437,9 +524,11 @@
       </main>
 
       <!--
-        Categories are what requirements measure. They archive and never
-        delete, so every reference from a rule or an event stays resolvable
-        (invariant 4).
+        Categories are what requirements measure. They archive, so every
+        reference from a rule or an event stays resolvable (invariant 4).
+        Delete is offered too, but only when nothing references the category
+        at all, in which case nothing is left to dangle: see the header of
+        src/categories.js.
 
         A category is a name and an order. It carried a unit picker and a
         "Counts toward points" checkbox until migration 22, and neither did
@@ -450,7 +539,7 @@
       <main id="panel-categories" class="panel-view" hidden>
         <form id="category-form" class="toolbar" novalidate>
           <div class="toolbar-field">
-            <label class="label" for="category-name">New category</label>
+            <label class="label" for="category-name">New event category</label>
             <input
               id="category-name"
               class="input"
@@ -667,6 +756,52 @@
       </form>
     </dialog>
 
+    <!--
+      A category made from inside the event form. Same row the categories
+      screen writes, and attached to the row on the event that asked for it.
+      A second, separate dialog from the one above: each screen owns its own.
+    -->
+    <dialog id="event-new-category-dialog" class="dialog">
+      <form id="event-new-category-form" method="dialog" novalidate>
+        <h2 class="dialog-title">New event category</h2>
+        <label class="label" for="event-new-category-name">Name</label>
+        <input
+          id="event-new-category-name"
+          class="input"
+          type="text"
+          maxlength="60"
+          autocomplete="off"
+          placeholder="Journal Club"
+          required
+        />
+        <p id="event-new-category-error" class="field-error" hidden>Type a name.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="event-new-category-confirm" type="submit" class="button button-primary">
+            Add
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!--
+      The QR code for one event's check-in link. No print sheet, no rotate
+      link: just what an officer needs to put the code somewhere and grab
+      the URL.
+    -->
+    <dialog id="qr-dialog" class="dialog">
+      <h2 id="qr-title" class="dialog-title"></h2>
+      <p id="qr-meta" class="muted small"></p>
+      <div id="qr-image" class="qr-image"></div>
+      <p id="qr-url" class="qr-url"></p>
+      <p id="qr-copy-status" class="muted small" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Close</button>
+        <button id="qr-copy" type="button" class="button">Copy link</button>
+        <button id="qr-download" type="button" class="button button-primary">Download PNG</button>
+      </div>
+    </dialog>
+
     <!-- Retiring a category a rule still measures needs the officer to see it. -->
     <dialog id="retire-dialog" class="dialog">
       <form id="retire-form" method="dialog" novalidate>
@@ -676,6 +811,19 @@
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>
           <button id="retire-confirm" type="submit" class="button button-danger">Retire</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Only offered when nothing references the category, so this dialog never
+         needs a uses list: see canDelete() in src/category-model.js. -->
+    <dialog id="delete-category-dialog" class="dialog">
+      <form id="delete-category-form" method="dialog" novalidate>
+        <h2 id="delete-category-title" class="dialog-title">Delete category</h2>
+        <p id="delete-category-meta" class="muted small"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="delete-category-confirm" type="submit" class="button button-danger">Delete</button>
         </div>
       </form>
     </dialog>

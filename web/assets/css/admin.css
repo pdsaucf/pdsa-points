@@ -1316,6 +1316,14 @@ kbd {
   border-style: dashed;
 }
 
+/* Name and its usage subline, stacked, so the subline reads as metadata under
+   the name rather than another field on the row. */
+.category-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
 .category-name {
   min-width: 9rem;
   font-weight: 600;
@@ -2158,4 +2166,198 @@ kbd {
   font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Events
+
+   The list is a stack of rows in date order, and the form replaces it in
+   place rather than opening as a dialog: Cancel and Save both return to the
+   same spot in the list.
+   --------------------------------------------------------------------------- */
+
+.event-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(9rem, 1.4fr) minmax(10rem, 2fr) auto auto auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.event-date {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.event-title-cell {
+  font-weight: 600;
+}
+
+.event-status {
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.event-status[data-status='closed'] {
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+}
+
+.event-form-toolbar {
+  justify-content: space-between;
+}
+
+.event-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* The form is a single sheet, centred, rather than a column of controls
+   pinned to the left of a wide screen. It is the one screen in this product
+   somebody fills in top to bottom, so it reads as a form and not as a
+   settings page. */
+#event-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+  max-width: 42rem;
+  margin-inline: auto;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* The heading and its two buttons sit above the fields, divided from them,
+   so Save is findable without reading the whole form first. */
+#event-form .event-form-toolbar {
+  margin: 0 0 0.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Vertical rhythm: a label starts a new field, so it carries the space
+   between fields rather than every element carrying a uniform gap. */
+#event-form .label {
+  margin-top: 0.75rem;
+}
+
+#event-form .event-form-toolbar + .label,
+#event-form .label:first-of-type {
+  margin-top: 0;
+}
+
+/* "Counts toward" and "Photo" are sections, not fields. */
+#event-form .zone-title {
+  margin: 1.5rem 0 0.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+  font-size: 1rem;
+}
+
+#event-form .event-checkbox {
+  margin-top: 0.5rem;
+}
+
+.event-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.event-checkbox-inline {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.event-category-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* One row, one line, down to a narrow phone. Remove is pushed to the end
+   rather than allowed to wrap onto a line of its own, which read as a
+   broken layout rather than as a row of controls. */
+/* One row on one line: category, its credit, the submission toggle, Remove.
+   A grid rather than wrapping flex, because Remove dropping onto a line of
+   its own read as a broken layout rather than as a row of controls. It folds
+   to two lines only on a narrow phone, where it genuinely cannot fit. */
+.event-category-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5rem auto auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.event-category-row > .select {
+  min-width: 0;
+}
+
+.event-category-row .event-checkbox-inline {
+  margin-top: 0;
+}
+
+@media (max-width: 34rem) {
+  .event-category-row {
+    grid-template-columns: minmax(0, 1fr) 5rem;
+  }
+
+  .event-category-row .event-checkbox-inline {
+    grid-column: 1 / -1;
+  }
+
+  .event-category-row > .button-danger {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+.event-category-row .select {
+  width: auto;
+  min-width: 10rem;
+  flex: 1;
+}
+
+.event-credit {
+  width: 5rem;
+  min-height: var(--tap);
+}
+
+.qr-image {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0 0.5rem;
+}
+
+.qr-image svg {
+  width: 240px;
+  height: 240px;
+}
+
+.qr-url {
+  word-break: break-all;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  user-select: all;
 }

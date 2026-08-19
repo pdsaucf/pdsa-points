@@ -349,9 +349,16 @@ const RELATIONS = {
   },
   events: {
     event_categories: { table: 'event_categories', kind: 'many', from: 'id', to: 'event_id' },
+    event_evidence_requirements: {
+      table: 'event_evidence_requirements',
+      kind: 'many',
+      from: 'id',
+      to: 'event_id',
+    },
   },
   event_categories: {
     categories: { table: 'categories', kind: 'one', from: 'category_id', to: 'id' },
+    events: { table: 'events', kind: 'one', from: 'event_id', to: 'id' },
   },
   member_claims: {
     members: { table: 'members', kind: 'one', from: 'member_id', to: 'id' },
@@ -861,6 +868,7 @@ function visibleRows(table, auth) {
     case 'categories':
     case 'events':
     case 'event_categories':
+    case 'event_evidence_requirements':
     // "Everyone signed in can read the rules they are being judged by", which
     // is req_sets_read and its two siblings in migration 11.
     case 'requirement_sets':
@@ -1031,6 +1039,9 @@ const WRITE_POLICY = {
   member_claims: (auth) => isOfficer(auth),
   profiles: (auth) => isAdmin(auth),
   categories: (auth) => isOfficer(auth),
+  events: (auth) => isOfficer(auth),
+  event_categories: (auth) => isOfficer(auth),
+  event_evidence_requirements: (auth) => isOfficer(auth),
   requirement_sets: (auth, row) =>
     isAdmin(auth) || (isOfficer(auth) && isDraft(row ?? { status: 'draft' })),
   requirement_nodes: (auth, row) =>
@@ -1074,6 +1085,37 @@ const INSERT_DEFAULTS = {
     ...row,
   }),
   requirement_node_categories: (row) => ({ ...row }),
+
+  // checkin_token is generated here the way a database default would
+  // generate it: the client never sends one. checkin_opens_at is NOT forced
+  // to null here, on purpose: the point of leaving it out of this default
+  // object entirely (below, as `null` only via the spread's absence) is that
+  // if events.js ever started sending a value, this mock would write it
+  // rather than silently discarding it, which is what makes "checkin_opens_at
+  // is never written" a check on the CLIENT rather than a check on this mock
+  // masking a client bug.
+  events: (row, auth) => ({
+    id: uuid('e9000000-0000-4000-a000-'),
+    term_id: null,
+    location: null,
+    notes: null,
+    review_policy: 'manual_review',
+    checkin_token: randomBytes(9).toString('base64url'),
+    checkin_opens_at: null,
+    checkin_closes_at: null,
+    token_rotated_at: null,
+    is_published: true,
+    created_by: auth?.userId ?? null,
+    created_at: new Date().toISOString(),
+    ...row,
+  }),
+  event_categories: (row) => ({ fixed_credit: 1, ...row, credit_mode: row.credit_mode ?? 'fixed' }),
+  event_evidence_requirements: (row) => ({
+    id: uuid('v9000000-0000-4000-a000-'),
+    prompt: null,
+    is_required: true,
+    ...row,
+  }),
 
   // display_name is `coalesce(preferred_name, first_name) || ' ' || last_name`,
   // generated and stored, so a client that sent one would have it ignored.
@@ -1260,7 +1302,61 @@ function runInsert(table, payload, auth) {
         }
       }
 
-      const created = INSERT_DEFAULTS[table](row);
+      if (table === 'event_categories') {
+        const pkClash = db.event_categories.some(
+          (link) => link.event_id === row.event_id && link.category_id === row.category_id,
+        );
+        if (pkClash) {
+          return {
+            error: {
+              status: 409,
+              body: { code: '23505', message: 'duplicate key value violates unique constraint "event_categories_pkey"' },
+            },
+          };
+        }
+        // one_submitted_value_per_event. Checked against both what is already
+        // written AND the rest of this same insert call: creating an event is
+        // one insert carrying every category row at once, so a second
+        // from_submission row can arrive in the same batch as the first, with
+        // nothing in `db` yet to compare against.
+        if (row.credit_mode === 'from_submission') {
+          const already = [...db.event_categories, ...written].some(
+            (link) => link.event_id === row.event_id && link.credit_mode === 'from_submission',
+          );
+          if (already) {
+            return {
+              error: {
+                status: 409,
+                body: {
+                  code: '23505',
+                  message:
+                    'duplicate key value violates unique constraint "one_submitted_value_per_event"',
+                },
+              },
+            };
+          }
+        }
+      }
+
+      if (table === 'event_evidence_requirements') {
+        const clash = db.event_evidence_requirements.some(
+          (existingRow) => existingRow.event_id === row.event_id && existingRow.kind === row.kind,
+        );
+        if (clash) {
+          return {
+            error: {
+              status: 409,
+              body: {
+                code: '23505',
+                message:
+                  'duplicate key value violates unique constraint "event_evidence_requirements_event_id_kind_key"',
+              },
+            },
+          };
+        }
+      }
+
+      const created = INSERT_DEFAULTS[table](row, auth);
       db[table].push(created);
       written.push(created);
       continue;
@@ -1404,6 +1500,34 @@ function runDelete(table, params, auth) {
   if (!targets.length) {
     record({ fn: `delete.${table}`, actor: auth.userId, outcome: 'refused by policy', matched: 0 });
     return { rows: [] };
+  }
+
+  // Real Postgres behaviour for `categories`: RLS passes, then the FK check
+  // fails, distinct from the role-based refusal above (RLS filters the row
+  // out entirely, 200 + empty array). Every reference to a category is `on
+  // delete restrict` (invariant 4, docs/03-admin-ui.md), so a category that
+  // event_categories or requirement_node_categories still points at, in any
+  // year or any requirement set, is refused rather than removed.
+  if (table === 'categories') {
+    const referenced = targets.some(
+      (row) =>
+        db.event_categories.some((ec) => ec.category_id === row.id) ||
+        db.requirement_node_categories.some((link) => link.category_id === row.id),
+    );
+    if (referenced) {
+      record({ fn: `delete.${table}`, actor: auth.userId, outcome: 'refused by fk', matched: 0 });
+      return {
+        error: {
+          status: 409,
+          body: {
+            code: '23503',
+            message: 'update or delete on table "categories" violates foreign key constraint',
+            details: null,
+            hint: null,
+          },
+        },
+      };
+    }
   }
 
   const removed = targets.map((row) => ({ ...row }));

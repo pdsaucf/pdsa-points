@@ -839,9 +839,9 @@ await check('retiring is archiving: the row stays, and the rule now says it is r
   assert.equal(held[0]?.title, 'Measures a retired category');
 });
 
-await check('nothing on this screen ever deletes a category', () => {
-  assert.doesNotMatch(sources['src/categories.js'], /remove\(\s*['"]categories['"]/);
+await check('the requirements editor never deletes a category; only categories.js does, and only when nothing references it (see verify-categories.mjs)', () => {
   assert.doesNotMatch(sources['src/requirements.js'], /remove\(\s*['"]categories['"]/);
+  assert.match(sources['src/categories.js'], /remove\(\s*['"]categories['"]/);
 });
 
 await check('a viewer reads the rules and changes none of them', async () => {
