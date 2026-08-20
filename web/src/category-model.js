@@ -76,7 +76,7 @@ export function countByCategory(rows) {
  * retire dialog both read from one map instead of two requests.
  *
  * @param {Array} rows requirement_node_categories rows, embedding
- *   requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))
+ *   requirement_nodes(id,label,requirement_sets!requirement_nodes_requirement_set_id_fkey(name,version,status,academic_year_id))
  * @param {Array} years the calendar, for turning academic_year_id into a label
  * @returns {Map<string, Array<{label: string, where: string}>>}
  */

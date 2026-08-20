@@ -791,7 +791,7 @@ await check('retiring a category that a rule measures explains itself first', as
   // The query the dialog is built from.
   const uses = await select('requirement_node_categories', {
     select:
-      'category_id,requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))',
+      'category_id,requirement_nodes(id,label,requirement_sets!requirement_nodes_requirement_set_id_fkey(name,version,status,academic_year_id))',
     filters: { category_id: `eq.${IDS.CATEGORY_JOURNAL_CLUB}` },
   });
   assert.ok(uses.length >= 1, 'the fixture no longer has a rule measuring Journal Club');

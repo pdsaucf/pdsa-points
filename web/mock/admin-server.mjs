@@ -389,6 +389,7 @@ const RELATIONS = {
       kind: 'one',
       from: 'requirement_set_id',
       to: 'id',
+      hint: 'requirement_nodes_requirement_set_id_fkey',
     },
   },
   requirement_node_categories: {
@@ -403,9 +404,10 @@ function parseSelect(spec) {
 
   const leaf = (raw) => ({ name: raw.trim(), children: null, inner: false });
   const branch = (raw, children) => {
-    const name = raw.trim();
-    const inner = name.endsWith('!inner');
-    return { name: inner ? name.slice(0, -6) : name, children, inner };
+    const [name, ...modifiers] = raw.trim().split('!');
+    const inner = modifiers.includes('inner');
+    const hint = modifiers.find((modifier) => modifier !== 'inner') ?? null;
+    return { name, children, inner, hint };
   };
 
   function list() {
@@ -937,6 +939,11 @@ function shape(table, row, nodes, auth, filters) {
       // afternoon once, and it is not costing another.
       throw new Error(
         `the mock has no relation from ${table} to ${node.name}. Add it to RELATIONS.`,
+      );
+    }
+    if (relation.hint && relation.hint !== node.hint) {
+      throw new Error(
+        `the relation from ${table} to ${node.name} is ambiguous; use !${relation.hint}`,
       );
     }
 

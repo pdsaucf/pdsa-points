@@ -48,6 +48,7 @@ globalThis.localStorage = {
 
 const auth = await import('../src/auth.js');
 const { select, patch, remove } = await import('../src/rest.js');
+const { REQUIREMENT_USE_SELECT } = await import('../src/categories.js');
 const { RpcError } = await import('../src/errors.js');
 const { countByCategory, groupRequirementUses, canDelete } = await import(
   '../src/category-model.js'
@@ -81,8 +82,7 @@ const yearUsageOf = (yearId) =>
 const allYearUsage = () => select('event_categories', { select: 'category_id' });
 const requirementUsage = () =>
   select('requirement_node_categories', {
-    select:
-      'category_id,requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))',
+    select: REQUIREMENT_USE_SELECT,
   });
 
 const server = await startMock(PORT);

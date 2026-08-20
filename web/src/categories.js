@@ -48,8 +48,8 @@ import { uniqueSlug, countByCategory, groupRequirementUses, canDelete } from './
 import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
 
 const CATEGORY_SELECT = 'id,slug,name,sort_order,archived_at';
-const REQUIREMENT_USE_SELECT =
-  'category_id,requirement_nodes(id,label,requirement_sets(name,version,status,academic_year_id))';
+export const REQUIREMENT_USE_SELECT =
+  'category_id,requirement_nodes(id,label,requirement_sets!requirement_nodes_requirement_set_id_fkey(name,version,status,academic_year_id))';
 
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
@@ -84,6 +84,8 @@ export function createCategories(ctx) {
     // now", and this one deliberately is not.
     allEventCounts: new Map(),
     requirementUses: new Map(),
+    allEventCountsLoaded: false,
+    requirementUsesLoaded: false,
     busy: false,
     loaded: false,
   };
@@ -93,28 +95,57 @@ export function createCategories(ctx) {
 
   async function load() {
     setHidden(el.loading, false);
-    try {
-      // Four bulk reads, never one request per row: the categories themselves,
-      // this year's event usage (for the subline), every year's event usage
-      // (for delete-eligibility, which must not be fooled by a category that
-      // is merely unused THIS year), and every requirement's category links.
-      const [categories, yearEventRows, allEventRows, requirementRows] = await Promise.all([
-        select('categories', { select: CATEGORY_SELECT, order: 'sort_order.asc' }),
-        select('event_categories', {
-          select: 'category_id,events!inner(id,academic_year_id)',
-          filters: { 'events.academic_year_id': `eq.${ctx.year.id}` },
-        }),
-        select('event_categories', { select: 'category_id' }),
-        select('requirement_node_categories', { select: REQUIREMENT_USE_SELECT }),
-      ]);
+    state.displayEventCounts = new Map();
+    state.allEventCounts = new Map();
+    state.requirementUses = new Map();
+    state.allEventCountsLoaded = false;
+    state.requirementUsesLoaded = false;
 
-      state.categories = categories;
-      state.displayEventCounts = countByCategory(yearEventRows);
-      state.allEventCounts = countByCategory(allEventRows);
-      state.requirementUses = groupRequirementUses(requirementRows, ctx.years);
+    // Start all four reads together, but do not make the authoritative
+    // category list depend on its usage annotations. The two tables have two
+    // foreign keys between them, so a missing PostgREST relationship hint in
+    // the requirement-usage query once made this whole screen look empty even
+    // while Requirements and Progress showed every category correctly.
+    const categoriesRequest = select('categories', {
+      select: CATEGORY_SELECT,
+      order: 'sort_order.asc',
+    });
+    const usageRequests = Promise.allSettled([
+      select('event_categories', {
+        select: 'category_id,events!inner(id,academic_year_id)',
+        filters: { 'events.academic_year_id': `eq.${ctx.year.id}` },
+      }),
+      select('event_categories', { select: 'category_id' }),
+      select('requirement_node_categories', { select: REQUIREMENT_USE_SELECT }),
+    ]);
+
+    try {
+      state.categories = await categoriesRequest;
       state.loaded = true;
       render();
+
+      const [yearEvents, allEvents, requirements] = await usageRequests;
+      if (yearEvents.status === 'fulfilled') {
+        state.displayEventCounts = countByCategory(yearEvents.value);
+      }
+      if (allEvents.status === 'fulfilled') {
+        state.allEventCounts = countByCategory(allEvents.value);
+        state.allEventCountsLoaded = true;
+      }
+      if (requirements.status === 'fulfilled') {
+        state.requirementUses = groupRequirementUses(requirements.value, ctx.years);
+        state.requirementUsesLoaded = true;
+      }
+      render();
+
+      const failed = [yearEvents, allEvents, requirements].find(
+        (result) => result.status === 'rejected',
+      );
+      if (failed) ctx.fail(failed.reason, load);
     } catch (err) {
+      // usageRequests is all-settled, so awaiting it here cannot replace the
+      // category error or leave a rejection unobserved.
+      await usageRequests;
       setHidden(el.loading, true);
       ctx.fail(err, load);
     }
@@ -185,7 +216,7 @@ export function createCategories(ctx) {
         {
           type: 'button',
           class: 'button button-small',
-          disabled: state.busy,
+          disabled: state.busy || !state.requirementUsesLoaded,
           'aria-label': `Retire ${category.name}`,
           onClick: () => retire(category),
         },
@@ -197,6 +228,8 @@ export function createCategories(ctx) {
     // is not h(): it stringifies what it is given, so appending a null
     // branch inline puts the word "null" on screen beside Retire.
     if (
+      state.allEventCountsLoaded &&
+      state.requirementUsesLoaded &&
       canDelete(category, {
         allEventCount: state.allEventCounts.get(category.id) ?? 0,
         requirementUses: state.requirementUses.get(category.id) ?? [],
