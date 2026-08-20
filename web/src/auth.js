@@ -10,11 +10,12 @@
 // site on GitHub Pages out of a public repository, so any comparison written
 // here ships as readable source, and the anon key it would be guarding is
 // published in config.js on purpose. More to the point, a passcode checked in
-// the browser protects nothing: every officer table is behind RLS keyed on the
-// JWT, so a client-side gate would only work if `anon` were granted the officer
+// the browser protects nothing: every admin table is behind RLS keyed on an
+// authenticated JWT, so a client-side gate would only work if `anon` were granted the admin
 // surface, which would put 355 members' records, writable, behind a JavaScript
-// `if`. Sending the passcode to GoTrue keeps the check on the server and keeps
-// every policy in migration 11 doing its job unchanged.
+// `if`. Sending the passcode to GoTrue keeps the check on the server. Migration
+// 24 accepts that authenticated session only when its Auth user has the fixed
+// officer address; another Auth user is not an administrator.
 //
 // WHAT THIS COSTS, SAID PLAINLY. One account means one `reviewed_by` on every
 // approval, so the audit trail records that an officer did it and not which

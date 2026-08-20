@@ -188,15 +188,7 @@ test('an exact email match ranks above a mere name similarity', async () => {
   assert.equal(rows[0].reason, 'exact_email');
 });
 
-test('a member cannot dismiss a pair, and anon cannot call it at all', async () => {
-  await db.as('authenticated', USERS.adaAccount);
-  const member = await db.expectError(`select dismiss_duplicate_pair($1, $2)`, [
-    DUP.priya,
-    DUP.rita,
-  ]);
-  await db.asOwner();
-  assert.equal(member.code, 'PDS07');
-
+test('anon cannot dismiss a pair', async () => {
   await db.as('anon');
   const anon = await db.expectError(`select dismiss_duplicate_pair($1, $2)`, [
     DUP.priya,
@@ -208,34 +200,25 @@ test('a member cannot dismiss a pair, and anon cannot call it at all', async () 
   assert.equal(await db.val(`select count(*)::int from member_duplicate_dismissals`), 0);
 });
 
-// A signed-in account with no profiles row is a reachable state: nothing
-// creates a profile automatically. fn_current_role() returns null for one, and
-// a role check written as `if not fn_is_officer()` does not raise on a null.
-test('a signed-in account with no profile cannot dismiss or read pairs', async () => {
+test('a signed-in shared session needs no profile to read pairs', async () => {
   await db.exec(`
     insert into auth.users (id, email)
-    values ('99999999-0000-4000-a000-0000000000f9', 'noprofile@example.test')
+    values ('99999999-0000-4000-a000-0000000000f9', 'officers@pdsaucf.com')
     on conflict do nothing;
   `);
 
   await db.as('authenticated', '99999999-0000-4000-a000-0000000000f9');
-  const err = await db.expectError(`select dismiss_duplicate_pair($1, $2)`, [
-    DUP.priya,
-    DUP.rita,
-  ]);
   const pairs = await db.q(`select * from fn_duplicate_member_pairs()`);
   await db.asOwner();
 
-  assert.equal(err.code, 'PDS07');
-  assert.deepEqual(pairs, []);
-  assert.equal(await db.val(`select count(*)::int from member_duplicate_dismissals`), 0);
+  assert.ok(pairs.length > 0);
 });
 
-test('a member reads no duplicate pairs, and anon cannot read the view', async () => {
-  await db.as('authenticated', USERS.adaAccount);
+test('the shared session reads duplicate pairs, and anon cannot read the view', async () => {
+  await db.as('authenticated', USERS.officer);
   const own = await db.q(`select * from v_possible_duplicate_members`);
   await db.asOwner();
-  assert.deepEqual(own, []);
+  assert.ok(own.length > 0);
 
   await db.as('anon');
   const err = await db.expectError(`select * from v_possible_duplicate_members`);

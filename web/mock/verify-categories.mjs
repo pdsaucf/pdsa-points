@@ -17,16 +17,12 @@
 //      below.
 //   2. That a category a requirement measures, even with zero events, is also
 //      refused.
-//   3. That the genuinely unused case actually deletes, and that PostgREST's
-//      two different refusal shapes (RLS: 200 + empty array; a real
-//      foreign-key violation: a thrown error) are told apart rather than one
-//      being read as the other.
+//   3. That the genuinely unused case actually deletes, while a real
+//      foreign-key violation is reported rather than read as success.
 //   4. That the screen's usage data comes from a small, fixed number of
 //      requests, not one per category: see admin-fixtures.mjs, which has
 //      more than a handful of categories by the time history events are
 //      seeded in.
-//   5. That a viewer, who never sees a Retire or Delete button, is refused by
-//      the database too if something tried anyway.
 //
 // Run: node web/mock/verify-categories.mjs   (or npm run verify:categories, from web/)
 
@@ -96,7 +92,7 @@ process.stdout.write('\nthe year-scoping trap\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('a category used only in a past year shows zero for the current year', async () => {
   const rows = await yearUsageOf(IDS.YEAR_CURRENT);
@@ -188,25 +184,13 @@ await check('a category referenced nowhere is delete-eligible, and the delete ac
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\nthe two refusal shapes\n');
+process.stdout.write('\na genuine refusal\n');
 // ---------------------------------------------------------------------------
 
 await reset();
 
-await check('a role WRITE_POLICY refuses comes back an empty array, not a rejection', async () => {
-  await signInAs('advisor@ucf.edu'); // viewer: not in OFFICER_ROLES
-  const rows = await remove('categories', { id: `eq.${IDS.CATEGORY_UNUSED}` });
-  assert.deepEqual(rows, [], 'a viewer deleted a category');
-
-  const still = await select('categories', {
-    select: 'id',
-    filters: { id: `eq.${IDS.CATEGORY_UNUSED}` },
-  });
-  assert.equal(still.length, 1, 'the category was removed by a role the policy should have refused');
-});
-
 await check('a genuine foreign-key refusal rejects instead, and is not read as success', async () => {
-  await signInAs('sara@pdsaucf.com'); // officer: passes WRITE_POLICY
+  await signInAs('officers@pdsaucf.com');
   await assert.rejects(
     () => remove('categories', { id: `eq.${IDS.CATEGORY_GBMS}` }),
     (err) => err instanceof RpcError && err.code === '23503' && err.status === 409,
@@ -218,7 +202,7 @@ process.stdout.write('\nbulk loading\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('usage counts come from a bounded number of requests, not one per category', async () => {
   const categoryCount = (
@@ -250,27 +234,6 @@ await check('usage counts come from a bounded number of requests, not one per ca
     1,
     'requirement_node_categories was read a different number of times than the one bulk query load() makes',
   );
-});
-
-// ---------------------------------------------------------------------------
-process.stdout.write('\na viewer\n');
-// ---------------------------------------------------------------------------
-
-await check('a viewer reads categories and changes none of them, retire or delete', async () => {
-  await signInAs('advisor@ucf.edu');
-
-  const rows = await select('categories', { select: 'id' });
-  assert.ok(rows.length > 0, 'a viewer could not read the categories they are shown');
-
-  const retired = await patch(
-    'categories',
-    { id: `eq.${IDS.CATEGORY_GBMS}` },
-    { archived_at: new Date().toISOString() },
-  );
-  assert.deepEqual(retired, [], 'a viewer retired a category');
-
-  const deleted = await remove('categories', { id: `eq.${IDS.CATEGORY_GBMS}` });
-  assert.deepEqual(deleted, [], 'a viewer deleted a category');
 });
 
 // ---------------------------------------------------------------------------

@@ -44,7 +44,6 @@ erDiagram
     requirement_nodes ||--o{ requirement_node_categories : "measures"
     categories       ||--o{ requirement_node_categories : "measured by"
 
-    profiles         }o--|| members : "optional link"
 ```
 
 ---
@@ -113,23 +112,11 @@ create table member_enrollments (
 `member_enrollments` is what makes year rollover a non-event: last year's members stay
 in `members` with their history intact, and this year's roster is a new set of rows.
 
-```sql
-create type app_role as enum ('admin','officer','viewer','member');
-
-create table profiles (
-  user_id    uuid primary key references auth.users on delete cascade,
-  member_id  uuid references members,          -- optional: officer who is also a member
-  full_name  text,
-  role       app_role not null default 'viewer',
-  created_at timestamptz not null default now()
-);
-```
-
-- `admin`: everything, including managing officers and editing published rulesets.
-- `officer`: review queue, events, roster, manual attendance entry.
-- `viewer`: read-only board (useful for an advisor or an incoming officer).
-- `member`: a role that still exists in the enum and that nothing issues any more.
-  The portal is not an account: see [04-member-ui.md](04-member-ui.md).
+The only signed-in identity is the fixed shared GoTrue user behind the admin
+passcode. Its JWT must resolve to `officers@pdsaucf.com`; another Auth user is
+not an administrator. There is no application profile, role enum, viewer mode,
+member account, or claim flow. The member portal is anonymous and name-based:
+see [04-member-ui.md](04-member-ui.md).
 
 ## 3. Categories
 
@@ -462,26 +449,17 @@ constraint 4.
 
 ## 8. Security model
 
-| Table | anon | member | officer | admin |
-|---|---|---|---|---|
-| `members` | ✗ (RPC only) | own row; edits preferred name + email only | all | all |
-| `events` | ✗ (RPC only) | read (title, date, categories) | write | write |
-| `categories`, `requirement_*` | ✗ | read | write | write + publish |
-| `attendance_records` | ✗ (RPC insert) | read own; insert own only via RPC | all | all |
-| `attendance_evidence` | ✗ | read own | all | all |
-| `member_claims` | ✗ | own row; files one only via RPC | review via RPC | review via RPC |
-| `profiles` | ✗ | own row | read; `member_id` only via RPC | write |
-| `purge_runs`, `audit_log` | ✗ | ✗ | read | read |
+| Surface | `anon` | `authenticated` shared admin session |
+|---|---|---|
+| Admin tables and views | no table grants | full admin access |
+| Admin RPCs | no execution grant | callable |
+| Public check-in RPCs | callable, shaped responses only | callable |
+| Public member portal RPCs | callable, shaped responses only | callable |
 
-Member policies are keyed on `profiles.member_id`, which is null until an account claim
-is approved, so an unclaimed account sees nothing. There is no leaderboard and no
-member-visible roster: the progress board stays officer-only.
-
-`profiles` is the one row in that table where "officer" and "admin" differ in a way the
-UI feels. `profiles_write_admin` means an officer cannot write `profiles.member_id`, so
-approving a claim, which is an officer's job, goes through `review_member_claim()`.
-That RPC writes that one column, on one row, as the result of one recorded decision, and
-widens nothing else: an officer still cannot change anybody's role.
+The fixed shared GoTrue user is the only signed-in identity. The database
+accepts its `authenticated` JWT only when `auth.users.email` is
+`officers@pdsaucf.com`; any other Auth user is denied. There are no application
+profiles, per-account roles, member accounts, or claim approvals.
 
 The anonymous check-in page touches **no table**. It calls four `SECURITY DEFINER`
 RPCs:
@@ -643,24 +621,16 @@ rather than a sequence of table writes a UI could half-finish:
 | `dismiss_duplicate_pair(a, b)` | remembers that a pair is not one person, in either order, so the banner never asks twice |
 | `upsert_member_and_enroll(first, last, email, nid, year, matched_id)` | finds or creates one member and enrolls them for the year, in one transaction. Both roster Add paths go through it |
 | `upsert_members_and_enroll(rows[], year)` | the same, over an array of up to 500 rows for one year. Each row is its own subtransaction, so a refused row is reported rather than discarding the batch |
-| `review_member_claim(claim_id, decision, note)` | approve links the account to the member; reject records the reason and frees both sides. The only path by which an officer can write `profiles.member_id`. Revalidates the member at approval: follows a merge to the survivor, refuses an archived row |
-| `list_pending_claims()` | the pending claim queue with the address the account signed in with, which lives in `auth.users` and is not reachable through PostgREST |
-
-The member portal ([04-member-ui.md](04-member-ui.md)) reaches four more, and needs
-them for the same reason the check-in page needs its own four: every one of these does
-something the caller's own policies forbid, and none of them lets the caller choose a
-`status` or a `role`.
+The anonymous member portal ([04-member-ui.md](04-member-ui.md)) reaches five more.
+They return only the public progress data required by that interface:
 
 | RPC | Does | Guards |
 |---|---|---|
-| `start_portal_session()` | creates the caller's `profiles` row when absent and links it when the account's email matches a roster row. Returns which screen the portal is on | any signed-in account; role is written as `member`, never left to the `viewer` column default; never changes an existing role, moves an existing `member_id`, or links a member another profile holds |
-| `search_roster_for_claim(q)` | id + display name only, ≤ 10 rows, so somebody can pick themselves out of a roster they cannot read | signed-in and **not yet linked**, `length(q) >= 3`, rate-limited per account; excludes archived, merged, already-linked and already-claimed rows |
-| `file_member_claim(member_id, note)` | files one pending claim carrying the member's own words | signed-in and not yet linked; the two partial unique indexes decide the outcome, and their two cases come back as two codes (PDS13, PDS14) rather than one message |
-| `request_missing_credit(event_id, note, value)` | files one `pending` attendance record, `source = 'member_request'`, flagged `member_requested`, note in `member_note` | caller must be linked and enrolled in that event's year; event must be published; validates `value` exactly as `submit_checkin()` does; the unique index refuses a second live record |
-
-`request_missing_credit()` approves nothing. It lands in the same queue as a scanned
-check-in and an officer runs `review_records()` over it, which is invariant 6 and the
-reason it is an RPC rather than an insert policy.
+| `portal_find_members(q)` | matching member ids and display names | at least three search characters; current-year enrolled members only |
+| `portal_scorecard(member_id)` | point total, honorary state, and category progress | current-year enrolled member only |
+| `portal_attendance(member_id)` | that member's approved attendance history | current-year enrolled member only; no review metadata |
+| `portal_leaderboard()` | ranked current-year names and totals | approved attendance only |
+| `portal_requirements()` | published requirement summary | published current-year rules only |
 
 `upsert_members_and_enroll()` is what the CSV import calls. The single-row function
 was one HTTPS request per line, and the real roster is 355 lines. It does not

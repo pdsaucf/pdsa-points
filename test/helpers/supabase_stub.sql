@@ -6,7 +6,7 @@
 -- and nothing more. Every stub below mirrors the real thing closely enough
 -- that the migrations apply unmodified.
 --
---   auth.users     the table that profiles, events.created_by, purge_runs and
+--   auth.users     the table that events.created_by, purge_runs and
 --                  friends have foreign keys into
 --   auth.uid()     Supabase reads the signed-in user out of the request JWT.
 --                  Here it reads the same GUC name Supabase uses, which the

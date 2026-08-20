@@ -224,20 +224,13 @@ select id, '${YEAR_2026}' from members;
 insert into member_enrollments (member_id, academic_year_id)
 values ('${MEMBERS.imogen}', '${YEAR_2025}');
 
--- ---- accounts -------------------------------------------------------------
+-- ---- authenticated test users --------------------------------------------
 insert into auth.users (id, email) values
   ('${USERS.admin}',      'admin@example.test'),
-  ('${USERS.officer}',    'officer@example.test'),
+  ('${USERS.officer}',    'officers@pdsaucf.com'),
   ('${USERS.viewer}',     'viewer@example.test'),
   ('${USERS.adaAccount}', 'ada@example.test'),
   ('${USERS.unclaimed}',  'nobody@example.test');
-
-insert into profiles (user_id, member_id, full_name, role) values
-  ('${USERS.admin}',      null,              'Admin Example',   'admin'),
-  ('${USERS.officer}',    null,              'Officer Example', 'officer'),
-  ('${USERS.viewer}',     null,              'Viewer Example',  'viewer'),
-  ('${USERS.adaAccount}', '${MEMBERS.ada}',  'Ada Testwood',    'member'),
-  ('${USERS.unclaimed}',  null,              'Unclaimed User',  'member');
 
 -- ---- events ---------------------------------------------------------------
 -- Fall 2026 runs 2026-08-17 to 2026-12-11, Spring 2027 from 2027-01-11.

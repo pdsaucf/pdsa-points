@@ -20,16 +20,8 @@
 // orphaned-upload reclaim, or finishing an old run) goes through the same
 // path rather than three slightly different ones.
 //
-// ROLES. Officers and admins can purge; a viewer reads the usage bar and
-// nothing else on this screen, because fn_purge_preview() and purge_runs
-// are officer gated (the operationally sensitive detail a viewer has no
-// button for anyway), while fn_storage_usage() is staff gated so the plain
-// usage figure is not hidden from them. The retention window is narrower
-// still: settings_write in migration 11 is fn_is_admin() while purging is
-// fn_assert_officer(), so an officer can clear photos but only an admin can
-// change how long they are kept. ctx.canPublish already carries exactly that
-// admin-only distinction for the requirements screen; it is reused here
-// rather than adding a second flag for the same rule.
+// A valid shared admin session can inspect usage, change retention, and perform
+// a purge. Anonymous callers have no grants on these tables or functions.
 
 import { select, patch, callRpc, deleteEvidenceObjects, evidenceObjectExists } from './rest.js';
 import { formatBytes } from './format.js';
@@ -40,7 +32,6 @@ import { $, h, announce, setHidden, plural, shortDate } from './ui.js';
 // sane menu rather than a free-typed number of months.
 const RETENTION_MONTHS = [1, 3, 6, 9, 12, 18, 24, 36];
 
-const ADMIN_ONLY_RETENTION = 'Only an admin can change this.';
 const NEVER_ON_A_TIMER = 'Photos are never deleted automatically. Someone has to clear them.';
 
 // deleteAndFinish()'s bookkeepingFailed case: Storage may well have deleted
@@ -103,7 +94,6 @@ export function createStorage(ctx) {
     preview: [], // fn_purge_preview() rows, officer only
     runs: [], // purge_runs history, officer only
     outstandingRuns: [], // v_purge_runs_outstanding, officer only
-    reviewers: new Map(), // profiles.user_id -> full_name
     busy: false,
     loaded: false,
   };
@@ -128,29 +118,20 @@ export function createStorage(ctx) {
       state.usage = usageRows?.[0] ?? null;
       state.retentionMonths = Number(settingRows?.[0]?.value ?? 12);
 
-      if (ctx.canReview) {
-        const [preview, runs, outstanding, profiles] = await Promise.all([
-          callRpc('fn_purge_preview', { p_retention_months: state.retentionMonths }),
-          select('purge_runs', {
-            select:
-              'id,kind,performed_by,performed_at,retention_months,evidence_count,bytes_freed',
-            order: 'performed_at.desc',
-            limit: 25,
-          }),
-          select('v_purge_runs_outstanding', {
-            select: 'purge_run_id,outstanding_count,total_count',
-          }),
-          select('profiles', { select: 'user_id,full_name' }),
-        ]);
-        state.preview = preview ?? [];
-        state.runs = runs ?? [];
-        state.outstandingRuns = outstanding ?? [];
-        state.reviewers = new Map((profiles ?? []).map((row) => [row.user_id, row.full_name]));
-      } else {
-        state.preview = [];
-        state.runs = [];
-        state.outstandingRuns = [];
-      }
+      const [preview, runs, outstanding] = await Promise.all([
+        callRpc('fn_purge_preview', { p_retention_months: state.retentionMonths }),
+        select('purge_runs', {
+          select: 'id,kind,performed_by,performed_at,retention_months,evidence_count,bytes_freed',
+          order: 'performed_at.desc',
+          limit: 25,
+        }),
+        select('v_purge_runs_outstanding', {
+          select: 'purge_run_id,outstanding_count,total_count',
+        }),
+      ]);
+      state.preview = preview ?? [];
+      state.runs = runs ?? [];
+      state.outstandingRuns = outstanding ?? [];
 
       state.loaded = true;
       setHidden(el.loading, true);
@@ -196,7 +177,7 @@ export function createStorage(ctx) {
     el.usageLine.textContent = `${formatBytes(bytes)} of ${formatBytes(quota)}`;
 
     const orphaned = Number(usage.orphaned_count ?? 0);
-    setHidden(el.orphaned, orphaned === 0 || !ctx.canReview);
+    setHidden(el.orphaned, orphaned === 0);
     if (orphaned) {
       el.orphanedText.textContent = `${plural(orphaned, 'upload')} never submitted, size unknown.`;
       el.reclaim.disabled = state.busy;
@@ -204,11 +185,6 @@ export function createStorage(ctx) {
   }
 
   function renderReady() {
-    if (!ctx.canReview) {
-      setHidden(el.ready, true);
-      setHidden(el.readyNote, false);
-      return;
-    }
     setHidden(el.readyNote, true);
 
     const rows = state.preview;
@@ -229,39 +205,32 @@ export function createStorage(ctx) {
   }
 
   function renderRetention() {
-    const admin = Boolean(ctx.canPublish);
-    setHidden(el.retentionSelect, !admin);
-    setHidden(el.retentionText, admin);
+    setHidden(el.retentionSelect, false);
+    setHidden(el.retentionText, true);
 
-    if (admin) {
-      if (!el.retentionSelect.children.length) {
-        el.retentionSelect.replaceChildren(
-          ...RETENTION_MONTHS.map((n) => h('option', { value: String(n) }, monthsLabel(n))),
-        );
-      }
-      // An unusual value set some other way is still offered rather than
-      // silently rounded to the nearest option in the menu.
-      if (
-        !RETENTION_MONTHS.includes(state.retentionMonths) &&
-        !el.retentionSelect.querySelector(`option[value="${state.retentionMonths}"]`)
-      ) {
-        el.retentionSelect.append(
-          h('option', { value: String(state.retentionMonths) }, monthsLabel(state.retentionMonths)),
-        );
-      }
-      el.retentionSelect.value = String(state.retentionMonths);
-      el.retentionSelect.disabled = state.busy;
-    } else {
-      el.retentionText.textContent = monthsLabel(state.retentionMonths);
+    if (!el.retentionSelect.children.length) {
+      el.retentionSelect.replaceChildren(
+        ...RETENTION_MONTHS.map((n) => h('option', { value: String(n) }, monthsLabel(n))),
+      );
     }
+    // An unusual value set some other way is still offered rather than
+    // silently rounded to the nearest option in the menu.
+    if (
+      !RETENTION_MONTHS.includes(state.retentionMonths) &&
+      !el.retentionSelect.querySelector(`option[value="${state.retentionMonths}"]`)
+    ) {
+      el.retentionSelect.append(
+        h('option', { value: String(state.retentionMonths) }, monthsLabel(state.retentionMonths)),
+      );
+    }
+    el.retentionSelect.value = String(state.retentionMonths);
+    el.retentionSelect.disabled = state.busy;
 
-    el.retentionNote.textContent = admin
-      ? NEVER_ON_A_TIMER
-      : `${NEVER_ON_A_TIMER} ${ADMIN_ONLY_RETENTION}`;
+    el.retentionNote.textContent = NEVER_ON_A_TIMER;
   }
 
   function renderOutstanding() {
-    if (!ctx.canReview || !state.outstandingRuns.length) {
+    if (!state.outstandingRuns.length) {
       setHidden(el.outstanding, true);
       return;
     }
@@ -275,12 +244,6 @@ export function createStorage(ctx) {
   }
 
   function renderHistory() {
-    if (!ctx.canReview) {
-      setHidden(el.historyTable, true);
-      setHidden(el.historyEmpty, true);
-      setHidden(el.historyNote, false);
-      return;
-    }
     setHidden(el.historyNote, true);
 
     if (!state.runs.length) {
@@ -294,7 +257,7 @@ export function createStorage(ctx) {
   }
 
   function historyRow(run) {
-    const who = state.reviewers.get(run.performed_by) || 'Unknown';
+    const who = run.performed_by ? 'Admin' : 'Unknown';
     const when = shortDate(String(run.performed_at ?? '').slice(0, 10));
     const isReclaim = run.kind === 'orphaned_uploads';
     return h(
@@ -603,9 +566,7 @@ export function createStorage(ctx) {
       // The window just changed, so what is "ready to clear" has to be read
       // again at the new window rather than left showing the old one's
       // numbers until the next full reload.
-      if (ctx.canReview) {
-        state.preview = (await callRpc('fn_purge_preview', { p_retention_months: months })) ?? [];
-      }
+      state.preview = (await callRpc('fn_purge_preview', { p_retention_months: months })) ?? [];
     } catch (err) {
       ctx.fail(err, null);
     } finally {

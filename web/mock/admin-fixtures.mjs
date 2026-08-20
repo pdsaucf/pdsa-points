@@ -17,31 +17,11 @@ const YEAR_PAST = 'a0000000-0000-4000-a000-000000000001';
 const USERS = {
   officer: 'u0000000-0000-4000-a000-00000000001f',
   admin: 'u0000000-0000-4000-a000-00000000002f',
-  viewer: 'u0000000-0000-4000-a000-00000000003f',
-  member: 'u0000000-0000-4000-a000-00000000004f',
-  claimant: 'u0000000-0000-4000-a000-00000000005f',
-  claimant2: 'u0000000-0000-4000-a000-00000000006f',
 };
 
-// This is the mock's auth.users as much as it is its sign-in form. The address
-// each account signed in WITH is the thing list_pending_claims() exists to
-// return, and it is not the address on anybody's roster row: the two claimants
-// below are exactly the case the claim flow is for, somebody whose sign-in
-// address the club has never seen. An account with no entry here is one whose
-// email the queue shows as missing, which is a real state and is why the card
-// has copy for it.
+// The one fixed auth user behind the shared passcode.
 export const ACCOUNTS = {
-  // The shared account the passcode box actually signs in to, matching
-  // OFFICER_ACCOUNT_EMAIL in web/config.js. Every other account below exists
-  // so the role tests have something to be refused as; this is the only one
-  // the product itself ever names.
   'officers@pdsaucf.com': { user_id: USERS.admin, role: 'admin', full_name: null },
-  'sara@pdsaucf.com': { user_id: USERS.officer, role: 'officer', full_name: 'Sara Whitfield' },
-  'ben@pdsaucf.com': { user_id: USERS.admin, role: 'admin', full_name: 'Ben Le' },
-  'advisor@ucf.edu': { user_id: USERS.viewer, role: 'viewer', full_name: 'Dr Okafor' },
-  'priya@knights.ucf.edu': { user_id: USERS.member, role: 'member', full_name: 'Priya Raman' },
-  'a.catto.2027@knights.ucf.edu': { user_id: USERS.claimant, role: 'member', full_name: 'Abigail Catto' },
-  'ewallace99@gmail.com': { user_id: USERS.claimant2, role: 'member', full_name: null },
 };
 
 // Somebody with no account at all, for the "no profile row" branch of the guard.
@@ -1335,49 +1315,6 @@ export function buildDatabase() {
   addNode(NODES.pastSocials, SET_PAST, NODES.pastRoot, 'threshold', 'Socials', 20, { min_value: 5 });
   measures(NODES.pastSocials, CAT.socials);
 
-  // ---- accounts and claims ------------------------------------------------
-
-  const profiles = [
-    { user_id: USERS.officer, member_id: null, full_name: 'Sara Whitfield', role: 'officer', created_at: '2026-07-01T00:00:00.000Z' },
-    { user_id: USERS.admin, member_id: null, full_name: 'Ben Le', role: 'admin', created_at: '2026-07-01T00:00:00.000Z' },
-    { user_id: USERS.viewer, member_id: null, full_name: 'Dr Okafor', role: 'viewer', created_at: '2026-07-01T00:00:00.000Z' },
-    // A member account that has not been linked to a roster row yet, which is
-    // the state every claim starts from.
-    { user_id: USERS.member, member_id: null, full_name: 'Priya Raman', role: 'member', created_at: '2026-08-02T00:00:00.000Z' },
-    { user_id: USERS.claimant, member_id: null, full_name: 'Abigail Catto', role: 'member', created_at: '2026-08-05T00:00:00.000Z' },
-    { user_id: USERS.claimant2, member_id: null, full_name: null, role: 'member', created_at: '2026-08-06T00:00:00.000Z' },
-  ];
-
-  const claims = [
-    {
-      id: 'k0000000-0000-4000-a000-000000000001',
-      user_id: USERS.claimant,
-      member_id: byName('Abigail Catto').id,
-      status: 'pending',
-      note: 'I am on the roster from last year, my knights address is new.',
-      requested_at: '2026-08-11T09:00:00.000Z',
-      reviewed_by: null,
-      reviewed_at: null,
-      // The officer's column, added by migration 18. member_claims.note above
-      // is the member's own words and is shown back to them, so a decline
-      // reason cannot go there.
-      review_note: null,
-    },
-    {
-      // No name on the profile: the officer has only the roster row to go on,
-      // which is exactly the case the copy has to handle honestly.
-      id: 'k0000000-0000-4000-a000-000000000002',
-      user_id: USERS.claimant2,
-      member_id: byName('Ethan Wallace').id,
-      status: 'pending',
-      note: null,
-      requested_at: '2026-08-11T10:30:00.000Z',
-      reviewed_by: null,
-      reviewed_at: null,
-      review_note: null,
-    },
-  ];
-
   return {
     academic_years: [
       { id: YEAR_CURRENT, label: '2026-2027', starts_on: '2026-08-01', ends_on: '2027-05-31', is_current: true },
@@ -1429,8 +1366,8 @@ export function buildDatabase() {
     requirement_node_categories: nodeCategories,
     members,
     member_enrollments: enrollments,
-    profiles,
-    member_claims: claims,
+    profiles: [],
+    member_claims: [],
     attendance_records: attendance,
     attendance_evidence: evidence,
     // Written by merge_members(), read by nothing on screen yet. It is the

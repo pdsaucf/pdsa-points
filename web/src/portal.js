@@ -3,13 +3,9 @@
 // A member types their name and reads their points. That is the whole product
 // on this page, and it is a much smaller page than it was.
 //
-// WHAT WAS HERE BEFORE, AND WHY IT IS GONE. The portal used to be an account: a
-// magic link, a session, start_portal_session() to work out whether that account
-// was linked to a roster row, a roster search to claim one, and an officer to
-// confirm the claim. All of it existed to answer one question, "which roster row
-// is this person", from an email address. The club does not have addresses for
-// its members and is not collecting any, so the question is now asked directly:
-// what is your name.
+// The earlier signed-in member account and claim flow has been removed. The club
+// does not have addresses for its members and is not collecting any, so the
+// identifying question is asked directly: what is your name.
 //
 // NOTHING ON THIS PAGE IS AUTHENTICATED, and that is deliberate rather than
 // convenient. Every call goes through api.js, which sends the anon key and never

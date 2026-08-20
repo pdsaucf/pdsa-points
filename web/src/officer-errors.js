@@ -26,15 +26,6 @@ const SESSION_EXPIRED = {
   recover: 'signin',
 };
 
-const NOT_AN_OFFICER = {
-  title: 'This account cannot review check-ins',
-  body: 'Ask an admin for officer access.',
-  recover: 'none',
-};
-
-/** Shown on a card whose buttons are not offered, so it says why they are not. */
-export const READ_ONLY = 'Read only: this account cannot approve or decline.';
-
 const BY_CODE = {
   // Raised by review_records() when an approve would touch a record with no
   // member attached. The queue is built so this is unreachable (an unmatched
@@ -48,7 +39,7 @@ const BY_CODE = {
     recover: 'refresh',
   }),
 
-  PDS07: () => NOT_AN_OFFICER,
+  PDS07: () => SESSION_EXPIRED,
 
   PDS05: () => ({
     title: 'Already has a record for this event',
@@ -71,7 +62,7 @@ const BY_CODE = {
 
 const HTTP_FALLBACK = {
   401: SESSION_EXPIRED,
-  403: NOT_AN_OFFICER,
+  403: SESSION_EXPIRED,
   404: {
     title: 'Cannot reach the database',
     body: 'An admin needs to check the connection details for this site.',

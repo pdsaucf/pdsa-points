@@ -20,9 +20,8 @@ product working.
 `points.pdsaucf.com` is a static site on GitHub Pages, served out of a **public**
 repository, and `web/config.js` publishes the Supabase URL and anon key deliberately
 (see the README's security paragraph). Every officer screen reads and writes ordinary
-tables, and what stops the world reading them is RLS keyed on the `authenticated` JWT:
-`fn_current_role()` reads `profiles.role` for `auth.uid()`, and `anon` holds no grant on
-any table at all.
+tables, and what stops the world reading them is RLS assigned to the `authenticated`
+database role. `anon` holds no grant on any table at all.
 
 So a passcode compared in JavaScript fails twice over:
 
@@ -37,8 +36,8 @@ What is built instead: the box posts the passcode to GoTrue's password grant
 (`POST /auth/v1/token?grant_type=password`) against one shared account. GoTrue compares
 it to a bcrypt hash in `auth.users` and returns a real JWT. The officer sees one box and
 types one thing. No email is sent, no link is opened, no address is typed, and no
-identity provider is involved. Every policy in migration 11 keeps working untouched,
-because as far as the database is concerned nothing about authentication changed.
+identity provider is involved. Migration 24 makes that valid shared session the
+complete admin authorization decision; it does not require a second profile or role row.
 
 The passcode itself is never in this repository. It lives as a hash in `auth.users` and
 is set with `scripts/set_officer_passcode.sql`.
@@ -58,10 +57,9 @@ implementation avoids them.
   somebody already signed in.
 - **A passcode spreads.** It gets texted, it goes in a group chat, and it outlives the
   officer who was given it. That is the trade being made for one box and no email.
-- **Roles still exist and still work.** `admin`, `officer` and `viewer` are unchanged in
-  the database. The shared account is one `admin` profile. If per-officer accounts are
-  ever wanted again, nothing in the schema has to move: it is more rows in `profiles` and
-  a way to sign in to them.
+- **There is no application account layer.** The valid shared session is the admin.
+  `profiles`, per-account roles and member claims were removed after the member portal
+  became public by name.
 
 ## The screen
 
@@ -107,15 +105,8 @@ single-flight refresh, and `signOut()`.
    `OFFICER_ACCOUNT_EMAIL` (`web/config.js`), any password, **Auto Confirm User ticked**.
    An unconfirmed account cannot use the password grant, and nothing will ever mail that
    address to confirm it.
-2. Give it a role:
-   ```sql
-   insert into profiles (user_id, role, full_name)
-   select id, 'admin', null from auth.users where email = 'officers@pdsaucf.com';
-   ```
-   Without this the passcode signs in and then reads nothing, which is the guard working
-   rather than a fault.
-3. Set the passcode with `scripts/set_officer_passcode.sql`, pasting it at the prompt.
-4. Turn off open signups in Supabase (Authentication > Sign In / Providers, disable email
+2. Set the passcode with `scripts/set_officer_passcode.sql`, pasting it at the prompt.
+3. Turn off open signups in Supabase (Authentication > Sign In / Providers, disable email
    signup). The password grant never creates an account, so this is not what protects the
    product, but leaving `/auth/v1/signup` open lets anybody mint a roleless `auth.users`
    row with the public anon key, and there is no reason to allow it.

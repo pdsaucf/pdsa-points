@@ -63,7 +63,7 @@ feature, so each one can be read on its own.
 | `..._drop_starter_tables.sql` | **Destructive.** Drops the placeholder `members` / `events` / `attendance` tables the project was created with. Read it before applying. |
 | `..._extensions_and_roles.sql` | `pgcrypto`, `citext`, `pg_trgm`, and the `anon` / `authenticated` / `service_role` roles |
 | `..._calendar.sql` | `academic_years`, `terms` |
-| `..._people.sql` | `members`, `profiles`, `member_enrollments`, `member_claims`, `member_merges` |
+| `..._people.sql` | `members`, `member_enrollments`, `member_merges`, plus account tables later removed by `..._shared_admin_session.sql` |
 | `..._categories.sql` | `categories` |
 | `..._events.sql` | `events`, `event_categories`, `event_evidence_requirements` |
 | `..._attendance.sql` | `attendance_records`, `attendance_evidence` |
@@ -76,14 +76,15 @@ feature, so each one can be read on its own.
 | `..._seed_2026_2027.sql` | the year, its terms, the categories, and the published rule tree |
 | `..._duplicate_people.sql` | `v_possible_duplicate_members` and `dismiss_duplicate_pair()` |
 | `..._member_upsert.sql` | `upsert_member_and_enroll()`, the one write behind roster Add and import |
-| `..._role_assertions.sql` | `fn_assert_officer()` and `fn_assert_admin()` refuse a caller whose role cannot be determined |
+| `..._role_assertions.sql` | historical role checks, retained in migration history |
 | `..._member_import_batch.sql` | `upsert_members_and_enroll()`, which imports a roster in one request instead of 355 |
-| `..._member_portal.sql` | `attendance_records.member_note`, `member_claims.review_note`, and the six RPCs the member portal signs in through: session bootstrap, the claim flow and its officer approval, and the missing-credit request. Also locks both member rows at the top of `merge_members()`, which approving a claim now depends on |
+| `..._member_portal.sql` | the earlier account-based member portal, superseded by the public portal and removed by `..._shared_admin_session.sql` |
 | `..._retroactive_matching.sql` | `fn_retroactive_match_candidates()` and `link_retroactive_matches()`, so a member's check-ins from before they joined are offered back to them instead of resolved one at a time |
 | `..._storage_ops.sql` | the purge flow, the storage screen's figures, and the keep-alive ping |
 | `..._name_is_the_identity.sql` | `upsert_member_and_enroll()` resolves a row by name when nothing else identifies it. A member has no email address any more, and the email tier was what made a re-run of an interrupted import land on the rows the first attempt wrote |
 | `..._public_member_portal.sql` | four of the five functions the member portal is made of, callable by `anon`: `portal_find_members()`, `portal_scorecard()`, `portal_leaderboard()`, `portal_requirements()` |
 | `..._one_unit_called_points.sql` | drops `categories.unit`, `categories.unit_label`, the `unit_type` enum and `counts_toward_point_total`. The unit never changed any arithmetic and the flag was false for Volunteering hours alone, so there is one unit and it is points |
+| `..._shared_admin_session.sql` | makes the valid shared session the complete admin authorization decision; drops `profiles`, `member_claims`, `app_role`, and the retired signed-in member RPCs |
 | `..._member_event_history.sql` | `portal_attendance()`, the fifth: a member's own event-by-event attendance for the current year, reversing migration 21's decision to withhold it |
 
 The first migration is destructive and deliberately separate so it is
@@ -206,18 +207,16 @@ gate that did not produce a JWT would only work if `anon` were granted the
 officer tables. See [docs/06-officer-passcode.md](docs/06-officer-passcode.md),
 including what a shared account costs the audit trail.
 
-Everyone signed in shares the `authenticated` database role; admin, officer,
-viewer and member are values of `profiles.role`, read through `SECURITY
-DEFINER` helpers so that policies on `profiles` do not recurse. An account with no
-`profiles` row at all has no role, and no role is refused: `fn_assert_officer()`
-and `fn_assert_admin()` treat an indeterminate role as a no rather than as a
-missing no. `test/privileges.test.mjs` holds both that and the grants, so a
-migration that forgets to revoke `EXECUTE` from `PUBLIC` fails there.
+The shared GoTrue user is the only signed-in identity the product offers. A
+valid `authenticated` JWT from that fixed passcode login is the complete admin
+authorization decision. There is no `profiles` table, per-account role, member
+account, or claim flow. Anonymous visitors still hold no table privileges and
+reach only the shaped check-in and public member-portal RPCs.
 
 RPC errors carry distinct SQLSTATE codes so a client can tell them apart
 **without matching on message text**: `PDS01` bad token, `PDS02` check-in has not
 opened yet, `PDS03` bad argument, `PDS04` evidence problem, `PDS05` already
-checked in, `PDS06` cannot approve an unmatched record, `PDS07` wrong role,
+checked in, `PDS06` cannot approve an unmatched record, `PDS07` expired or invalid admin session,
 `PDS08` unknown requirement set, `PDS09` rate limited, `PDS10` check-in has
 closed, `PDS11` the requirement tree is not a tree, `PDS12` a requirement set
 failed validation, `PDS13` and `PDS14` the claim codes, raised by the migration

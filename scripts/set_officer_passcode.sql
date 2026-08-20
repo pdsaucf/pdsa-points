@@ -25,10 +25,8 @@
 -- script: Authentication > Users > Add user, with the address from
 -- config.js, any password, and "Auto Confirm User" ticked. An unconfirmed
 -- account cannot use the password grant, and nothing will ever send mail to
--- that address to confirm it. Then give it a role:
---
---   insert into profiles (user_id, role, full_name)
---   select id, 'admin', null from auth.users where email = 'officers@pdsaucf.com';
+-- that address to confirm it. The database authorizes only this fixed Auth
+-- address; there is no separate profile or role.
 --
 -- Without that row the passcode signs in successfully and then reads nothing,
 -- which is the guard doing its job rather than a bug.

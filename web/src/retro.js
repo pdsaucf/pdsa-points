@@ -43,7 +43,7 @@ export function linkCandidates(memberId, recordIds) {
  * describeRetroOutcome(). A followed_merge on any row, from the read or from
  * the write, shows one line and a way to reach the survivor.
  *
- * @param {{canReview: boolean, openMember: (id: string) => void, fail: Function}} ctx
+ * @param {{openMember: (id: string) => void, fail: Function}} ctx
  */
 export function createCandidatePicker(ctx) {
   const state = {
@@ -79,7 +79,7 @@ export function createCandidatePicker(ctx) {
   }
 
   function syncButton() {
-    linkButton.disabled = state.busy || !ctx.canReview || state.selected.size === 0;
+    linkButton.disabled = state.busy || state.selected.size === 0;
   }
 
   function candidateRow(candidate) {
@@ -137,7 +137,7 @@ export function createCandidatePicker(ctx) {
         h('input', {
           type: 'checkbox',
           checked: state.selected.has(id),
-          disabled: state.busy || !ctx.canReview,
+          disabled: state.busy,
           onChange: (event) => toggle(id, event.target.checked),
         }),
         body,

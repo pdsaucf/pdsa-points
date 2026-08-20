@@ -18,11 +18,8 @@
 //      second call fails for some of the objects, the screen has to say so
 //      rather than report the clean "N cleared" it would say for a run that
 //      fully succeeded, and has to keep offering a way to finish later.
-//   4. THAT THE ROLES ARE THE REAL ONES. A viewer reads the usage bar
-//      (fn_storage_usage is staff gated) and is offered no button beyond it.
-//      The retention window is narrower than purging itself: settings_write
-//      is fn_is_admin(), so an officer can clear photos but only an admin
-//      can change how long they are kept.
+//   4. THAT THE SHARED ADMIN SESSION can read usage, choose retention, and
+//      finish the purge operation.
 //
 // HOW THE SCREEN IS DRIVEN. mock/dom.mjs parses the real admin/index.html and
 // admin.js's own start() runs against it, so what is asserted below is the
@@ -222,7 +219,7 @@ process.stdout.write('\nan officer clears photos\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 await mountAdmin();
 
 await check('the usage bar is the server figure, rendered, not a client sum', async () => {
@@ -272,16 +269,10 @@ await check('"ready to clear" is the live preview, not a hardcoded count', async
   assert.equal(Number(careerNight.photo_count), 2, 'an already-purged photo at this event was counted again');
 });
 
-await check('the history is attributed: who, and (for a real purge) how much', () => {
+await check('the shared admin history identifies the session and amount', () => {
   const rowsText = dom.$('storage-history-rows').rowsText;
   assert.equal(rowsText.length, 3);
-  // performed_by, formatted as "by" on the row: the admin's run and the
-  // officer's runs are told apart.
-  assert.ok(rowsText.some((row) => row.includes('Ben Le')), 'the admin-run history row lost its name');
-  assert.ok(
-    rowsText.filter((row) => row.includes('Sara Whitfield')).length === 2,
-    'the two officer-run history rows are not both attributed',
-  );
+  assert.equal(rowsText.filter((row) => row.includes('Admin')).length, 3);
   // The orphaned-uploads kind never claims a byte figure it cannot know.
   assert.ok(rowsText.some((row) => row.includes('size unknown')), 'an orphaned-uploads run claimed a byte count');
 });
@@ -394,7 +385,7 @@ process.stdout.write('\na run only partly confirms, and says so\n');
 // what is under test here is deleteAndFinish() itself, not the dialog.
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 await mountAdmin();
 
 let outstandingPaths;
@@ -491,14 +482,14 @@ await check('retrying finds the same object already gone, and closes the run out
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\nonly an admin moves the retention window\n');
+process.stdout.write('\nthe shared admin moves the retention window\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('ben@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 await mountAdmin();
 
-await check('an admin sees the retention control as a menu, editable', () => {
+await check('the shared admin sees the retention control as a menu, editable', () => {
   assert.equal(dom.$('storage-retention-select').hidden, false);
   assert.equal(dom.$('storage-retention-text').hidden, true);
   assert.equal(dom.$('storage-retention-select').value, '12');
@@ -546,50 +537,6 @@ await check('a wider window purges fewer events, because the preview took the ar
     filters: { key: 'eq.evidence_retention_months' },
   });
   assert.equal(Number(rows[0].value), 240, 'the select changed on screen but the setting was not written');
-});
-
-await check('an officer cannot move the window: the write is refused, not merely un-offered', async () => {
-  await signInAs('sara@pdsaucf.com');
-  const written = await patch(
-    'app_settings',
-    { key: 'eq.evidence_retention_months' },
-    { value: 3 },
-  );
-  assert.equal(written.length, 0, 'an officer was able to write a setting only an admin may change');
-  await signInAs('ben@pdsaucf.com');
-});
-
-// ---------------------------------------------------------------------------
-process.stdout.write('\na viewer is offered no buttons\n');
-// ---------------------------------------------------------------------------
-
-await reset();
-await signInAs('advisor@ucf.edu');
-await mountAdmin();
-
-await check('the usage bar is still theirs to read: fn_storage_usage is staff, not officer, gated', () => {
-  assert.notEqual(dom.$('storage-usage-count').textContent, '');
-  assert.notEqual(dom.$('storage-usage-line').textContent, '');
-});
-
-await check('every operational control is withheld, not merely disabled', () => {
-  assert.equal(dom.$('storage-ready').hidden, true, 'a viewer was offered Review and clear');
-  assert.equal(dom.$('storage-ready-note').hidden, false);
-  assert.equal(dom.$('storage-ready-note').textContent.trim(), 'An officer can review what is ready to clear.');
-
-  assert.equal(dom.$('storage-history-table').hidden, true, 'a viewer was shown the clearing history');
-  assert.equal(dom.$('storage-history-note').hidden, false);
-  assert.equal(dom.$('storage-history-note').textContent.trim(), 'An officer can see the clearing history.');
-
-  assert.equal(dom.$('storage-outstanding').hidden, true, 'a viewer was offered Finish deleting');
-  assert.equal(dom.$('storage-orphaned').hidden, true, 'a viewer was offered Reclaim');
-});
-
-await check('the retention window reads as text, admin-only, for a viewer too', () => {
-  assert.equal(dom.$('storage-retention-select').hidden, true);
-  assert.equal(dom.$('storage-retention-text').hidden, false);
-  assert.equal(dom.$('storage-retention-text').textContent, '12 months');
-  assert.match(dom.$('storage-retention-note').textContent, /Only an admin can change this\./);
 });
 
 // ---------------------------------------------------------------------------

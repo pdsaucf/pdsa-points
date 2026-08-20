@@ -24,7 +24,6 @@
 // 6 holds, because the officer pressing the button IS the person approving it.
 
 import { select, insert, patch, callRpc } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
 import { buildTree, flatten } from './requirement-model.js';
 import { firstJoinedOn } from './joined.js';
 import { createCandidatePicker } from './retro.js';
@@ -138,7 +137,7 @@ export function createMember(ctx) {
     const yearId = ctx.year.id;
 
     try {
-      const [members, enrollments, categories, statuses, totals, records, reviewers] =
+      const [members, enrollments, categories, statuses, totals, records] =
         await Promise.all([
           select('members', {
             select: 'id,first_name,last_name,preferred_name,display_name,created_at,archived_at,merged_into_id',
@@ -172,7 +171,6 @@ export function createMember(ctx) {
               'events.academic_year_id': `eq.${yearId}`,
             },
           }),
-          select('profiles', { select: 'user_id,full_name' }),
         ]);
 
       // A newer load() started and finished (or started and is still going)
@@ -193,7 +191,7 @@ export function createMember(ctx) {
       state.joined = firstJoinedOn(enrollments, state.member);
       state.status = statuses[0] ?? null;
       state.totals = new Map(totals.map((row) => [row.category_id, Number(row.total ?? 0)]));
-      state.reviewers = new Map(reviewers.map((row) => [row.user_id, row.full_name]));
+      state.reviewers = new Map();
 
       // Newest first: the record somebody is asking about is nearly always the
       // one from last week.
@@ -298,8 +296,8 @@ export function createMember(ctx) {
 
     el.points.textContent = number(state.status?.point_total ?? 0);
     setHidden(el.honorary, !state.status?.is_honorary);
-    setHidden(el.edit, !ctx.canReview);
-    setHidden(el.addRecord, !ctx.canReview);
+    setHidden(el.edit, false);
+    setHidden(el.addRecord, false);
     // Hidden until loadRetro() (called right after this) says otherwise, so a
     // section left over from whoever was open before is never shown against
     // this member even for the moment it takes to fetch.
@@ -589,10 +587,6 @@ export function createMember(ctx) {
     el.editForm.addEventListener('submit', saveEdit);
     for (const dialog of [el.recordDialog, el.editDialog]) {
       dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
-    }
-    if (!ctx.canReview) {
-      el.addRecord.title = READ_ONLY;
-      el.edit.title = READ_ONLY;
     }
   }
 

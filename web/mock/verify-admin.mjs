@@ -5,9 +5,7 @@
 // below exists for:
 //
 //   1. That the queue is actually behind a login, rather than behind a UI that
-//      hides itself. An anon-key request has to be refused by the server, and a
-//      member account has to come back empty rather than come back with
-//      everybody's check-ins.
+//      hides itself. An anon-key request has to be refused by the server.
 //   2. That approving something with nobody attached is refused (PDS06). That
 //      constraint is the entire reason the unmatched-name flow exists, and a
 //      client that quietly stopped honouring it would look fine until somebody
@@ -501,11 +499,11 @@ await check('an address nobody provisioned cannot sign in with the passcode eith
   assert.equal(res.status, 400, 'an unknown address was signed in');
 });
 
-await check('signing in as an officer produces a session that knows its own user id', async () => {
-  const session = await signInAs('sara@pdsaucf.com');
-  assert.equal(session.user.id, IDS.USERS.officer);
-  assert.equal(session.user.email, 'sara@pdsaucf.com');
-  assert.equal(auth.currentSession().user.id, IDS.USERS.officer);
+await check('the shared sign-in produces a session that knows its own user id', async () => {
+  const session = await signInAs('officers@pdsaucf.com');
+  assert.equal(session.user.id, IDS.USERS.admin);
+  assert.equal(session.user.email, 'officers@pdsaucf.com');
+  assert.equal(auth.currentSession().user.id, IDS.USERS.admin);
 });
 
 await check('an expiring token is refreshed once, not once per waiting request', async () => {
@@ -524,7 +522,7 @@ await check('an expiring token is refreshed once, not once per waiting request',
 });
 
 await check('signing out clears the session on this machine', async () => {
-  await signInAs('sara@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
   await auth.signOut();
   assert.equal(auth.currentSession(), null);
   await assert.rejects(() => auth.accessToken(), (err) => err instanceof auth.SessionExpiredError);
@@ -551,56 +549,12 @@ await check('nobody signed in cannot read a single row', async () => {
   assert.equal(res.status, 401);
 });
 
-await check('a member account is refused the queue entirely', async () => {
-  await signInAs('priya@knights.ucf.edu');
-
-  const profiles = await select('profiles', {
-    select: 'user_id,role,member_id',
-    filters: { user_id: `eq.${IDS.USERS.member}` },
-  });
-  assert.equal(profiles[0].role, 'member', 'the guard reads the role from here');
-
-  // Even if the guard were bypassed, there is nothing behind it.
-  const rows = await loadQueue();
-  assert.deepEqual(rows, [], 'a member could read other people\'s check-ins');
-
-  await assert.rejects(
-    () => callRpc('review_records', { p_ids: [IDS.RECORD_MISSING_EVIDENCE], p_decision: 'approve' }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-});
-
-await check('a viewer reads the queue and is refused every decision', async () => {
-  await signInAs('advisor@ucf.edu');
-  const rows = await loadQueue();
-  // 51 base fixture rows, plus the 15 retroactive-matching fixtures that also
-  // sit pending and member_id null for YEAR_CURRENT (admin-fixtures.mjs's
-  // RETRO block; a sixteenth, RECORD_RETRO_WRONG_YEAR, is filed against
-  // LAST_YEAR and so does not count here).
-  assert.equal(rows.length, 66, `a viewer saw ${rows.length} pending records`);
-
-  await assert.rejects(
-    () => callRpc('review_records', { p_ids: [IDS.RECORD_MISSING_EVIDENCE], p_decision: 'approve' }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-  await assert.rejects(
-    () => callRpc('resolve_unmatched', { p_record_id: IDS.RECORD_UNMATCHED_CLOSE, p_member_id: IDS.MEMBER_ABIGAIL }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-});
-
-await check('PDS07 tells an officer what to do about it, without jargon', () => {
-  const copy = describeOfficer(new RpcError('PDS07', 'This action requires an officer account.', 400));
-  assert.match(`${copy.title} ${copy.body}`, /officer|admin/i);
-  assert.doesNotMatch(`${copy.title} ${copy.body}`, /policy|RLS|permission denied/i);
-});
-
 // ---------------------------------------------------------------------------
 process.stdout.write('\nthe queue an officer actually sees\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('the queue is this year only, split into flagged and routine', async () => {
   const rows = await loadQueue();
@@ -782,7 +736,7 @@ await check('both resolutions are on the audit trail, and say which was which', 
     [false, true],
   );
   for (const row of resolves) {
-    assert.equal(row.actor_user_id, IDS.USERS.officer, 'the audit row does not say who did it');
+    assert.equal(row.actor_user_id, IDS.USERS.admin, 'the audit row does not say who did it');
     assert.ok(row.detail.claimed_name, 'the audit row lost the name that was typed in');
   }
 });
@@ -792,7 +746,7 @@ process.stdout.write('\nclearing the routine zone\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('43 routine records are approved by ONE call carrying 43 ids', async () => {
   const routine = (await loadQueue()).filter((row) => !row.flags.length);
@@ -836,7 +790,7 @@ process.stdout.write('\nturning one down\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('a rejection stores the reason on the record itself', async () => {
   const reason = 'Photo was taken outside, and this event was indoors.';
@@ -851,7 +805,7 @@ await check('a rejection stores the reason on the record itself', async () => {
   const row = attendance.find((r) => r.id === IDS.RECORD_MISSING_EVIDENCE);
   assert.equal(row.status, 'rejected');
   assert.equal(row.review_note, reason, 'the reason was not stored');
-  assert.equal(row.reviewed_by, IDS.USERS.officer, 'nobody is on the hook for the decision');
+  assert.equal(row.reviewed_by, IDS.USERS.admin, 'nobody is on the hook for the decision');
 });
 
 await check('the reason is on the audit trail as well as on the record', async () => {

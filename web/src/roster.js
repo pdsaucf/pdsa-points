@@ -56,7 +56,6 @@
 // fuzzy tier, which the script has no way to offer since it has nobody to ask.
 
 import { select, remove, callRpc } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
 import { normaliseName, rankMembers, similarity } from './match.js';
 import { csvFilename, downloadCsv, readRoster } from './csv.js';
 import { firstJoinedIndex } from './joined.js';
@@ -403,9 +402,7 @@ export function createRoster(ctx) {
    * The pairs the database thinks are one person.
    *
    * Each pair comes back once, never in both orders, so nothing here has to
-   * dedupe it. A viewer can read the view and cannot act on it, which is why
-   * the buttons are drawn from ctx.canReview rather than from whether the read
-   * succeeded.
+   * dedupe it.
    */
   async function loadDuplicates() {
     try {
@@ -452,9 +449,9 @@ export function createRoster(ctx) {
 
   function render() {
     setHidden(el.loading, true);
-    setHidden(el.add, !ctx.canReview);
-    setHidden(el.pasteButton, !ctx.canReview);
-    setHidden(el.importButton, !ctx.canReview);
+    setHidden(el.add, false);
+    setHidden(el.pasteButton, false);
+    setHidden(el.importButton, false);
 
     const rows = visibleMembers();
     el.count.textContent = plural(rows.length, 'member');
@@ -512,19 +509,17 @@ export function createRoster(ctx) {
               },
               'Open',
             ),
-            ctx.canReview
-              ? h(
-                  'button',
-                  {
-                    type: 'button',
-                    class: 'button button-small',
-                    disabled: state.busy,
-                    'aria-label': `Remove ${member.display_name} from this year`,
-                    onClick: () => askRemove(member),
-                  },
-                  'Remove',
-                )
-              : null,
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'button button-small',
+                disabled: state.busy,
+                'aria-label': `Remove ${member.display_name} from this year`,
+                onClick: () => askRemove(member),
+              },
+              'Remove',
+            ),
           ),
         );
       }),
@@ -631,7 +626,6 @@ export function createRoster(ctx) {
           name: `keep-${key}`,
           value: id,
           checked,
-          disabled: !ctx.canReview,
           // Without this the control announces its value, which is an id. The
           // choice being made is which person survives the merge, so it says
           // so.
@@ -666,8 +660,7 @@ export function createRoster(ctx) {
       h('div', { class: 'dupe-sides' }, side('a'), side('b')),
     );
 
-    if (ctx.canReview) {
-      card.append(
+    card.append(
         h(
           'div',
           { class: 'dupe-actions' },
@@ -693,10 +686,7 @@ export function createRoster(ctx) {
             'Merge',
           ),
         ),
-      );
-    } else {
-      card.append(h('p', { class: 'muted small' }, READ_ONLY));
-    }
+    );
 
     return card;
   }

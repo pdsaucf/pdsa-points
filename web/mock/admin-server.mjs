@@ -8,8 +8,7 @@
 //   * a request carrying the anon key, or no key, is refused rather than
 //     quietly served, so "the queue is behind a login" is a thing this suite
 //     can actually prove
-//   * profiles.role decides what comes back, so a member account gets nothing
-//     from attendance_records rather than everything
+//   * a request without the shared authenticated session gets no admin data
 //   * review_records() raises PDS06 for an approve on a record with no member,
 //     which is the constraint the whole unmatched-name flow exists to satisfy
 //   * a PATCH that the policy refuses is a 200 with an empty array, not an
@@ -167,8 +166,6 @@ export function adminState() {
     })),
     members: db.members.map((m) => ({ id: m.id, display_name: m.display_name, email: m.email })),
     enrollments: db.member_enrollments,
-    claims: db.member_claims,
-    profiles: db.profiles,
     categories: db.categories,
     requirementSets: db.requirement_sets,
     requirementNodes: db.requirement_nodes,
@@ -216,7 +213,7 @@ const STAFF_ROLES = ['officer', 'admin', 'viewer'];
 const OFFICER_ROLES = ['officer', 'admin'];
 
 /**
- * @returns {{kind:'anon'}|{kind:'invalid'}|{kind:'user', userId, email, role, profile}}
+ * @returns {{kind:'anon'}|{kind:'invalid'}|{kind:'user', userId, email, role}}
  */
 export function resolveAuth(req, anonKey) {
   const header = req.headers.authorization ?? '';
@@ -230,13 +227,11 @@ export function resolveAuth(req, anonKey) {
     return { kind: 'invalid' };
   }
 
-  const profile = db.profiles.find((p) => p.user_id === session.userId) ?? null;
   return {
     kind: 'user',
     userId: session.userId,
     email: session.email,
-    role: profile?.role ?? 'authenticated',
-    profile,
+    role: 'admin',
   };
 }
 
@@ -1023,14 +1018,8 @@ const setOfNode = (nodeId) => {
 const isDraft = (set) => Boolean(set) && set.status === 'draft';
 
 /**
- * Who may write what, per row. The insert and update halves of the policies in
- * migration 11.
- *
- * Per row rather than per table, because the requirements policies are: an
- * admin may write anything, an officer may write a DRAFT and nothing else.
- * That distinction is the whole published/draft lifecycle, and a stand-in that
- * only looked at the caller's role would let an officer edit a published set
- * here and be refused in production.
+ * The shared admin may write the admin surface. Requirement tree rows remain
+ * draft-only, matching migration 24's lifecycle policies.
  */
 const WRITE_POLICY = {
   member_enrollments: (auth) => isOfficer(auth),
@@ -1042,15 +1031,11 @@ const WRITE_POLICY = {
   events: (auth) => isOfficer(auth),
   event_categories: (auth) => isOfficer(auth),
   event_evidence_requirements: (auth) => isOfficer(auth),
-  requirement_sets: (auth, row) =>
-    isAdmin(auth) || (isOfficer(auth) && isDraft(row ?? { status: 'draft' })),
+  requirement_sets: (auth, row) => isOfficer(auth) && isDraft(row ?? { status: 'draft' }),
   requirement_nodes: (auth, row) =>
-    isAdmin(auth) || (isOfficer(auth) && isDraft(setOf(row?.requirement_set_id))),
+    isOfficer(auth) && isDraft(setOf(row?.requirement_set_id)),
   requirement_node_categories: (auth, row) =>
-    isAdmin(auth) || (isOfficer(auth) && isDraft(setOfNode(row?.node_id))),
-  // settings_write (migration 11) is fn_is_admin(), narrower than purging
-  // itself (fn_assert_officer()): an officer can clear photos but only an
-  // admin can change how long they are kept.
+    isOfficer(auth) && isDraft(setOfNode(row?.node_id)),
   app_settings: (auth) => isAdmin(auth),
 };
 
@@ -1417,7 +1402,7 @@ function runPatch(table, params, payload, auth) {
   // A WITH CHECK violation is different from a USING one: it raises. An officer
   // moving a set out of draft is refused loudly, which is what stops a published
   // set being edited by anybody but an admin.
-  if (table === 'requirement_sets' && payload?.status && payload.status !== 'draft' && !isAdmin(auth)) {
+  if (table === 'requirement_sets' && payload?.status && payload.status !== 'draft') {
     return {
       error: {
         status: 403,

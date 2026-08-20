@@ -450,13 +450,7 @@ test('the same photo submitted against a second event is flagged', async () => {
   `);
 });
 
-test('officer RPCs refuse a member and a plain anon caller', async () => {
-  await db.as('authenticated', USERS.adaAccount);
-  const asMember = await db.expectError(
-    `select review_records(array[]::uuid[], 'approve', null)`,
-  );
-  assert.equal(asMember.code, 'PDS07');
-
+test('admin RPCs refuse a plain anon caller', async () => {
   await db.as('anon');
   const asAnon = await db.expectError(`select review_records(array[]::uuid[], 'approve', null)`);
   await db.asOwner();

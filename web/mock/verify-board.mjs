@@ -22,7 +22,6 @@
 //   5. That a pair renders once rather than twice, that merging moves the
 //      records, and that dismissing is remembered whichever way round the pair
 //      is passed.
-//   6. That none of it is reachable by a member account.
 //
 // HOW THE SCREENS ARE DRIVEN. mock/dom.mjs parses the real admin/index.html and
 // admin.js's own start() runs against it, so what is asserted below is the
@@ -420,7 +419,7 @@ await check('every pasted line is accounted for exactly once', () => {
 process.stdout.write('\nthe board an officer opens\n');
 // ---------------------------------------------------------------------------
 
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 start();
 
 await until(() => !dom.$('view-app').hidden, 'the shell never signed in');
@@ -607,14 +606,19 @@ await check('changing the rule moves the board, with no deploy', async () => {
   const before = bodyRows().filter((row) => cellsOf(row)[column - 1].dataset.met === 'true').length;
   assert.ok(before > 0 && before < bodyRows().length, `the baseline cannot move: ${before}`);
 
-  // Only an admin may edit a published set, which is the whole draft lifecycle.
-  await signInAs('ben@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
+  const draft = await callRpc('clone_requirement_set', { p_set_id: IDS.SET_CURRENT });
+  const [draftGbms] = await select('requirement_nodes', {
+    select: 'id',
+    filters: { requirement_set_id: `eq.${draft}`, label: 'eq.GBMs' },
+  });
   const edited = await patch(
     'requirement_nodes',
-    { id: `eq.${IDS.NODES.gbms}` },
+    { id: `eq.${draftGbms.id}` },
     { min_value: 3 },
   );
   assert.equal(edited.length, 1, 'the rule could not be changed');
+  await callRpc('publish_requirement_set', { p_set_id: draft });
 
   await reloadBoard();
   const after = bodyRows().filter((row) => cellsOf(row)[column - 1].dataset.met === 'true').length;
@@ -622,8 +626,13 @@ await check('changing the rule moves the board, with no deploy', async () => {
   assert.equal(targets[column], 'of 3', 'the column heading kept the old number');
   assert.ok(after > before, `the board did not move: ${before} then ${after}`);
 
-  await patch('requirement_nodes', { id: `eq.${IDS.NODES.gbms}` }, { min_value: 9 });
-  await signInAs('sara@pdsaucf.com');
+  const restoredDraft = await callRpc('clone_requirement_set', { p_set_id: draft });
+  const [restoredGbms] = await select('requirement_nodes', {
+    select: 'id',
+    filters: { requirement_set_id: `eq.${restoredDraft}`, label: 'eq.GBMs' },
+  });
+  await patch('requirement_nodes', { id: `eq.${restoredGbms.id}` }, { min_value: 9 });
+  await callRpc('publish_requirement_set', { p_set_id: restoredDraft });
   await reloadBoard();
   assert.equal(
     bodyRows().filter((row) => cellsOf(row)[column - 1].dataset.met === 'true').length,
@@ -841,7 +850,7 @@ await check('an officer adds a record by hand, and it goes through the same appr
     (row) => row.member_id === AARON && row.event_id === IDS.EVENT_SOAP,
   );
   assert.equal(filed.status, 'approved');
-  assert.equal(filed.reviewed_by, IDS.USERS.officer, 'nobody is on the hook for the record');
+  assert.equal(filed.reviewed_by, IDS.USERS.admin, 'nobody is on the hook for the record');
 
   // It is on the log as an officer's entry, not as a scan.
   const row = dom
@@ -1489,7 +1498,7 @@ await check('merging moves the records onto the survivor and tombstones the othe
 
   const merges = (await adminAudit()).merges;
   assert.equal(merges.length, 1, 'the merge is not on the record');
-  assert.equal(merges[0].performed_by, IDS.USERS.officer, 'nobody is on the hook for the merge');
+  assert.equal(merges[0].performed_by, IDS.USERS.admin, 'nobody is on the hook for the merge');
   assert.ok(merges[0].dropped_records > 0, 'the fixture no longer exercises a collision');
 });
 
@@ -2279,67 +2288,6 @@ await check(
     );
   },
 );
-
-// ---------------------------------------------------------------------------
-process.stdout.write('\na member account reaches none of it\n');
-// ---------------------------------------------------------------------------
-
-await check('a member sees their own numbers and nobody elses', async () => {
-  await signInAs('priya@knights.ucf.edu');
-
-  const status = await select('v_member_status', {
-    select: 'member_id,point_total,is_honorary',
-    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
-  });
-  assert.ok(status.length <= 1, `a member read ${status.length} rows of the board`);
-
-  const totals = await select('v_member_category_totals', { select: 'member_id,total' });
-  assert.ok(totals.length === 0, 'a member read other peoples category totals');
-});
-
-await check('a member is offered no duplicates and can merge nobody', async () => {
-  const pairs = await select('v_possible_duplicate_members', { select: 'member_a,member_b' });
-  assert.deepEqual(pairs, [], 'a member could read the whole roster through the duplicate list');
-
-  await assert.rejects(
-    () => callRpc('merge_members', { p_from_id: ABBY, p_into_id: ABIGAIL }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-  await assert.rejects(
-    () => callRpc('dismiss_duplicate_pair', { p_member_a: ABBY, p_member_b: ABIGAIL }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-    'a member could dismiss a duplicate an officer needs to see',
-  );
-});
-
-await check('a member cannot ask about anybody elses progress', async () => {
-  await assert.rejects(
-    () =>
-      callRpc(
-        'fn_member_requirement_status',
-        { p_member_id: ABIGAIL, p_requirement_set_id: IDS.SET_CURRENT },
-        { attempts: 1 },
-      ),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-});
-
-await check('a member cannot add a record or a person', async () => {
-  const { insert } = await import('../src/rest.js');
-  await assert.rejects(
-    () =>
-      insert(
-        'attendance_records',
-        [{ event_id: IDS.EVENT_SOAP, member_id: ABIGAIL, source: 'officer_entry' }],
-        { attempts: 1 },
-      ),
-    (err) => err instanceof RpcError && err.status === 403,
-  );
-  await assert.rejects(
-    () => insert('members', [{ first_name: 'Snuck', last_name: 'In' }], { attempts: 1 }),
-    (err) => err instanceof RpcError && err.status === 403,
-  );
-});
 
 // ---------------------------------------------------------------------------
 

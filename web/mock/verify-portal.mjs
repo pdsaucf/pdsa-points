@@ -558,7 +558,7 @@ await check('two members with one name are told apart, not guessed between', asy
   // Two roster rows, one name, which is exactly what the club has when somebody
   // is added twice or when two people genuinely share a name. With no address on
   // file the join month is all there is, so it has to be on the button.
-  await signInAs('ben@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
   const twin = await callRpc('upsert_member_and_enroll', {
     p_first_name: 'Catherine',
     p_last_name: 'Diaz',
@@ -825,10 +825,11 @@ process.stdout.write('\nthe rules move, and the screen moves with them\n');
 await check('renaming a requirement renames it on the member screen, with no deploy', async () => {
   // The falsifiable half of invariant 1. A list hardcoded in JavaScript passes
   // every check above and fails this one.
-  await signInAs('ben@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
+  const draft = await callRpc('clone_requirement_set', { p_set_id: IDS.SET_CURRENT });
   const [node] = await select('requirement_nodes', {
     select: 'id,label,type',
-    filters: { id: `eq.${IDS.NODES.tabling}` },
+    filters: { requirement_set_id: `eq.${draft}`, label: 'eq.Tabling' },
     limit: 1,
   });
   assert.ok(node, 'the fixture no longer has the requirement this check renames');
@@ -836,6 +837,7 @@ await check('renaming a requirement renames it on the member screen, with no dep
   const renamed = `${node.label} (renamed)`;
   const rows = await patch('requirement_nodes', { id: `eq.${node.id}` }, { label: renamed });
   assert.equal(rows.length, 1, 'the rename was refused, so this check proves nothing');
+  await callRpc('publish_requirement_set', { p_set_id: draft });
 
   mountPortal();
   await until(
@@ -988,7 +990,7 @@ process.stdout.write('\nthe mock is not kinder than the database\n');
 await check('somebody who is not on this years roster is refused, not zeroed', async () => {
   // The refusal migration 21 makes, made here for the same reason: a screen of
   // zeroes reads as "you have attended nothing".
-  await signInAs('ben@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
   const [past] = await select('member_enrollments', {
     select: 'member_id,academic_year_id',
     filters: { academic_year_id: `eq.${IDS.YEAR_PAST}` },

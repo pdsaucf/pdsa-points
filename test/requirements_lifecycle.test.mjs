@@ -109,7 +109,7 @@ async function buildDraft(name, year = YEAR_2026) {
 }
 
 const asOfficer = (fn) => db.withRole('authenticated', USERS.officer, fn);
-const asAdmin = (fn) => db.withRole('authenticated', USERS.admin, fn);
+const asAdmin = (fn) => db.withRole('authenticated', USERS.officer, fn);
 
 const validate = (setId) =>
   asOfficer(() =>
@@ -411,37 +411,14 @@ test('publishing an unknown set says so', async () => {
 // Who may do what
 // ---------------------------------------------------------------------------
 
-test('an officer can clone but not publish, an admin can do both', async () => {
+test('the shared admin session can clone and publish', async () => {
   const officerClone = await asOfficer(() =>
     db.val(`select clone_requirement_set($1)`, [REQ_SET]),
   );
   assert.ok(officerClone);
 
-  const refused = await asOfficer(() =>
-    db.expectError(`select publish_requirement_set($1)`, [officerClone]),
-  );
-  assert.equal(refused.code, 'PDS07');
-  assert.equal(
-    await db.val(`select status from requirement_sets where id = $1`, [officerClone]),
-    'draft',
-  );
-
-  const adminClone = await asAdmin(() => db.val(`select clone_requirement_set($1)`, [REQ_SET]));
-  const result = await asAdmin(() => db.val(`select publish_requirement_set($1)`, [adminClone]));
-  assert.equal(result.requirement_set_id, adminClone);
-});
-
-test('a member cannot clone, validate or preview anything', async () => {
-  await db.as('authenticated', USERS.adaAccount);
-  for (const sql of [
-    `select clone_requirement_set('${REQ_SET}')`,
-    `select * from validate_requirement_set('${REQ_SET}')`,
-    `select * from preview_requirement_set('${REQ_SET}')`,
-  ]) {
-    const err = await db.expectError(sql);
-    assert.equal(err.code, 'PDS07', sql);
-  }
-  await db.asOwner();
+  const result = await asOfficer(() => db.val(`select publish_requirement_set($1)`, [officerClone]));
+  assert.equal(result.requirement_set_id, officerClone);
 });
 
 // ---------------------------------------------------------------------------
@@ -818,43 +795,38 @@ test('preview counts the set own year, not the current one', async () => {
 // Published sets are read-only
 // ---------------------------------------------------------------------------
 
-test('nobody edits the tree of a published set, admin included', async () => {
-  for (const [who, user] of [
-    ['officer', USERS.officer],
-    ['admin', USERS.admin],
-  ]) {
-    await db.as('authenticated', user);
+test('the shared admin cannot edit the tree of a published set', async () => {
+  await db.as('authenticated', USERS.officer);
 
-    const updated = await db.q(
-      `update requirement_nodes set min_value = 1 where requirement_set_id = $1 returning id`,
-      [REQ_SET],
-    );
-    assert.equal(updated.length, 0, `${who} must not edit a published tree`);
+  const updated = await db.q(
+    `update requirement_nodes set min_value = 1 where requirement_set_id = $1 returning id`,
+    [REQ_SET],
+  );
+  assert.equal(updated.length, 0, 'the shared admin must not edit a published tree');
 
-    const deleted = await db.q(
-      `delete from requirement_node_categories
-        where node_id in (select id from requirement_nodes where requirement_set_id = $1)
-        returning node_id`,
-      [REQ_SET],
-    );
-    assert.equal(deleted.length, 0, `${who} must not detach a published categorys rule`);
+  const deleted = await db.q(
+    `delete from requirement_node_categories
+      where node_id in (select id from requirement_nodes where requirement_set_id = $1)
+      returning node_id`,
+    [REQ_SET],
+  );
+  assert.equal(deleted.length, 0, 'the shared admin must not detach a published categorys rule');
 
-    const err = await db.expectError(
-      `insert into requirement_nodes (requirement_set_id, parent_id, type, label, min_value)
-       values ($1, $2, 'threshold', 'Snuck In', 1)`,
-      [REQ_SET, ROOT_NODE],
-    );
-    assert.equal(err.code, '42501', `${who} must not add to a published tree`);
+  const err = await db.expectError(
+    `insert into requirement_nodes (requirement_set_id, parent_id, type, label, min_value)
+     values ($1, $2, 'threshold', 'Snuck In', 1)`,
+    [REQ_SET, ROOT_NODE],
+  );
+  assert.equal(err.code, '42501', 'the shared admin must not add to a published tree');
 
-    await db.asOwner();
-  }
+  await db.asOwner();
 });
 
 test('an archived set is as closed as a published one', async () => {
   const cloneId = await asOfficer(() => db.val(`select clone_requirement_set($1)`, [REQ_SET]));
   await asAdmin(() => db.val(`select publish_requirement_set($1)`, [cloneId]));
 
-  await db.as('authenticated', USERS.admin);
+  await db.as('authenticated', USERS.officer);
   const updated = await db.q(
     `update requirement_nodes set min_value = 1 where requirement_set_id = $1 returning id`,
     [REQ_SET],

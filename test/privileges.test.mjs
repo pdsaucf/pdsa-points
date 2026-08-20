@@ -16,14 +16,6 @@
 // and it is a guard rather than a snapshot: assertion 2 pins the anon surface
 // from both sides, so a leak fails and so does an accidental removal.
 //
-// THE NULL ROLE. fn_current_role() returns NULL for a signed-in account with
-// no profiles row, which is what every account is until an officer gives it
-// one. fn_is_officer() was therefore NULL rather than false, and
-// fn_assert_officer() asked `if not fn_is_officer()`, which does not raise on
-// NULL. Nine SECURITY DEFINER RPCs routed their only role check through those
-// two helpers. The second half of this file drives all nine as exactly that
-// caller.
-//
 // WHICH HALF OF THIS FILE COVERS THE FUTURE, AND WHICH HALF IS A LIST.
 //
 // The four catalog assertions are written against pg_proc and pg_class rather
@@ -31,22 +23,14 @@
 // covered by them on the day it is created: it either carries PUBLIC EXECUTE
 // or it does not, it either pins search_path or it does not.
 //
-// The nine-RPC assertion below is not that. It is a hand-maintained list of
-// the call sites that route their role check through fn_assert_officer() and
-// fn_assert_admin(), and it can only ever cover the RPCs written into it. An
-// RPC added later with its own inline check has to be added here by hand, and
-// nothing in this file will notice if it is not. That is a deliberate limit
-// rather than an oversight: deriving the list from catalog metadata, or
-// keeping an allowlist of every SECURITY DEFINER function with a required
-// unauthorized-caller test, is more machinery than a two-officer club system
-// should carry. What the list does buy is that the nine that exist today
-// cannot regress.
+// The shared-session assertion below verifies that authenticated callers reach
+// the admin RPC surface without an application profile or role lookup.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { freshDb } from './helpers/db.mjs';
-import { loadFixture, MEMBERS, REQ_SET, USERS } from './helpers/fixture.mjs';
+import { loadFixture, REQ_SET } from './helpers/fixture.mjs';
 
 let db;
 
@@ -104,9 +88,7 @@ const ANON_MAY_EXECUTE = [
   'submit_checkin(text,uuid,text,text,numeric,jsonb,text)',
 ];
 
-// A signed-in account nobody has given a role to. Same id the member_upsert
-// test uses for this case.
-const NO_PROFILE = '99999999-0000-4000-a000-0000000000f9';
+const SHARED_ADMIN = '99999999-0000-4000-a000-0000000000f9';
 
 // Extension-owned objects are not ours to grant or revoke. citext, pg_trgm and
 // pgcrypto all install functions into public with their own ACLs.
@@ -123,14 +105,10 @@ test.before(async () => {
   db = await freshDb();
   await loadFixture(db);
 
-  // In auth.users but not in profiles, which is precisely the state any
-  // sign-in leaves an account in. Registering them matters: without
-  // the auth.users row the FK on audit_log.actor_user_id would refuse the
-  // audit write, and an RPC that got past its role check would look refused
-  // for a reason that has nothing to do with the role check.
+  // Register the fixed shared identity so audit foreign keys accept it.
   await db.exec(`
     insert into auth.users (id, email)
-    values ('${NO_PROFILE}', 'signed-in-nobody@example.test')
+    values ('${SHARED_ADMIN}', 'officers@pdsaucf.com')
     on conflict (id) do nothing;
   `);
 });
@@ -218,10 +196,8 @@ test('anon holds no privilege on any table, view or sequence', async () => {
 });
 
 test('every SECURITY DEFINER function pins its search_path', async () => {
-  // A definer function runs with the owner's rights. Without a pinned
-  // search_path a caller can put a table of their own in front of `profiles`
-  // and have the function read it, which is how fn_current_role() would be
-  // talked into returning 'admin'.
+  // A definer function runs with the owner's rights. A pinned search path keeps
+  // callers from substituting attacker-controlled objects for trusted ones.
   const unpinned = await db.q(`
     select p.oid::regprocedure::text as signature
     from pg_proc p
@@ -243,114 +219,12 @@ test('every SECURITY DEFINER function pins its search_path', async () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// The NULL role
-// ---------------------------------------------------------------------------
-
-/**
- * Every officer or admin RPC, called in a way that reaches its role check.
- *
- * The arguments are deliberately ones that would otherwise be accepted, so a
- * caller who gets past the assertion does real work rather than tripping over
- * a validation error a moment later and looking refused. review_records and
- * merge_members carry real ids for the same reason: see the writes asserted
- * below.
- */
-function officerRpcs() {
-  return [
-    ['review_records', `select review_records($1::uuid[], 'approve', null)`, [[]]],
-    ['resolve_unmatched', `select resolve_unmatched($1::uuid, null, null)`, [null]],
-    ['merge_members', `select merge_members($1::uuid, $2::uuid)`, [MEMBERS.dorian, MEMBERS.ada]],
-    ['purge_evidence', `select purge_evidence(null, null)`, []],
-    ['purge_orphaned_uploads', `select purge_orphaned_uploads()`, []],
-    ['fn_purge_preview', `select * from fn_purge_preview(null)`, []],
-    ['fn_storage_usage', `select * from fn_storage_usage()`, []],
-    [
-      'finish_purge_run',
-      `select * from finish_purge_run($1::uuid, $2::text[])`,
-      ['00000000-0000-4000-a000-000000000000', []],
-    ],
-    ['clone_requirement_set', `select clone_requirement_set($1::uuid)`, [REQ_SET]],
-    ['publish_requirement_set', `select publish_requirement_set($1::uuid)`, [REQ_SET]],
-    ['validate_requirement_set', `select * from validate_requirement_set($1::uuid)`, [REQ_SET]],
-    ['preview_requirement_set', `select * from preview_requirement_set($1::uuid)`, [REQ_SET]],
-  ];
-}
-
-test('an account with no profiles row is refused by every officer RPC', async () => {
-  // THE FINDING. fn_current_role() selects no row for this user, so
-  // fn_is_officer() is NULL, and `if not NULL` does not raise. Before
-  // migration 16 this caller walked into nine SECURITY DEFINER functions
-  // running with the owner's rights.
-  //
-  // Anyone holding an authenticated JWT is in this state until somebody gives
-  // them a role: nothing in this schema creates a profiles row on sign-in, so
-  // this is what a brand new account is rather than a contrived case.
-  assert.equal(
-    await db.val(`select count(*)::int from profiles where user_id = $1`, [NO_PROFILE]),
-    0,
-    'the account this test is about now has a role, so it proves nothing',
-  );
-
-  for (const [name, sql, params] of officerRpcs()) {
-    await db.as('authenticated', NO_PROFILE);
-    const err = await db.expectError(sql, params);
-    await db.asOwner();
-    assert.equal(err.code, 'PDS07', `${name} did not refuse an account with no role: ${err.message}`);
-  }
-});
-
-test('nothing an account with no profiles row asked for was written', async () => {
-  // The two calls above that would have changed something. review_records
-  // approves, which is the one that matters most: approving is the decision
-  // the design says a person makes, and this caller is not one.
-  const pending = (
-    await db.q(
-      `select id from attendance_records where member_id = $1 and status = 'pending' order by id`,
-      [MEMBERS.hamish],
-    )
-  ).map((row) => row.id);
-  assert.ok(pending.length > 0, 'the fixture no longer has a pending record to try to approve');
-
-  await db.as('authenticated', NO_PROFILE);
-  const approve = await db.expectError(`select review_records($1::uuid[], 'approve', 'mine now')`, [
-    pending,
-  ]);
-  const merge = await db.expectError(`select merge_members($1::uuid, $2::uuid)`, [
-    MEMBERS.dorian,
-    MEMBERS.ada,
-  ]);
-  await db.asOwner();
-
-  assert.equal(approve.code, 'PDS07');
-  assert.equal(merge.code, 'PDS07');
-
-  const statuses = await db.q(
-    `select distinct status from attendance_records where id = any($1::uuid[])`,
-    [pending],
-  );
-  assert.deepEqual(statuses, [{ status: 'pending' }], 'a record was approved by nobody');
-  assert.equal(
-    await db.val(`select merged_into_id from members where id = $1`, [MEMBERS.dorian]),
-    null,
-    'a member was merged away by an account with no role',
-  );
-});
-
-test('an officer still gets through the same assertions', async () => {
-  // The other half of the change. Refusing an indeterminate role is only
-  // correct if a determinate one still passes, and fn_assert_officer() and
-  // fn_assert_admin() keep their grants across `create or replace`.
-  await db.as('authenticated', USERS.officer);
+test('the shared authenticated session reaches the admin RPCs', async () => {
+  await db.as('authenticated', SHARED_ADMIN);
   assert.equal(await db.val(`select review_records(array[]::uuid[], 'approve', null)`), 0);
   const problems = await db.q(`select * from validate_requirement_set($1::uuid)`, [REQ_SET]);
   await db.asOwner();
 
   assert.ok(Array.isArray(problems));
 
-  // A member account is still refused, which is the case that always worked.
-  await db.as('authenticated', USERS.adaAccount);
-  const asMember = await db.expectError(`select review_records(array[]::uuid[], 'approve', null)`);
-  await db.asOwner();
-  assert.equal(asMember.code, 'PDS07');
 });

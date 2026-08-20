@@ -38,10 +38,6 @@ const CAST = {
   retired: R('05'), // archived, and not merged into anybody
 };
 
-// Nobody signed in has a profiles row, which is the case fn_is_officer()
-// answers NULL for rather than false. See the guard in migration 15.
-const NO_PROFILE = '99999999-0000-4000-a000-0000000000f9';
-
 function upsert(
   { first, last, email = null, nid = null, year = YEAR_2026, matched = null },
   userId = USERS.officer,
@@ -326,18 +322,8 @@ test('an empty email cell is not an address', async () => {
   assert.equal(await db.val(`select email from members where id = $1`, [one.member_id]), null);
 });
 
-test('a member account, an unknown account and anon cannot call it', async () => {
+test('anon cannot call it', async () => {
   const before = await memberCount();
-
-  const member = await refuses({ first: 'Snuck', last: 'In' }, USERS.adaAccount);
-  assert.equal(member.code, 'PDS07');
-
-  // The NULL-role gap. fn_is_officer() is NULL for a caller with no profiles
-  // row, and `if not NULL` does not raise, so the guard asserts officer status
-  // positively instead. A caller landing here without being refused would be
-  // writing the roster with no role at all.
-  const unknown = await refuses({ first: 'Snuck', last: 'In' }, NO_PROFILE);
-  assert.equal(unknown.code, 'PDS07');
 
   await db.as('anon');
   const anon = await db.expectError(

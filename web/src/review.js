@@ -25,7 +25,7 @@
 // and refuse the approvals that must be refused.
 
 import { select, insert, callRpc, signPhotoUrls, RpcError } from './rest.js';
-import { describeOfficer, READ_ONLY } from './officer-errors.js';
+import { describeOfficer } from './officer-errors.js';
 import { FLAG_COPY, actionsFor, approveLabel, knownFlags, primaryFlag } from './flags.js';
 import { rankMembers, splitName } from './match.js';
 import { $, h, announce, setHidden, plural, shortDate, clockTime } from './ui.js';
@@ -347,7 +347,7 @@ export function createReview(ctx) {
     el.showAll.textContent = notShown > 0 ? `Show all ${routineRows.length}` : '';
 
     el.approveAll.textContent = `Approve all ${routineRows.length}`;
-    el.approveAll.disabled = state.busy || !ctx.canReview || routineRows.length === 0;
+    el.approveAll.disabled = state.busy || routineRows.length === 0;
 
     applyCursor();
   }
@@ -541,7 +541,7 @@ export function createReview(ctx) {
                 memberId: row.member.id,
                 clash: String(clashes),
               },
-              disabled: !ctx.canReview || clashes,
+              disabled: clashes,
               'aria-label': clashes
                 ? `${row.member.display_name}, already checked in to this event`
                 : `Link member ${row.member.display_name}`,
@@ -570,7 +570,6 @@ export function createReview(ctx) {
           {
             type: 'button',
             class: 'button button-small',
-            disabled: !ctx.canReview,
             onClick: () => resolveToNewMember(record, card),
           },
           'Add new member',
@@ -584,16 +583,13 @@ export function createReview(ctx) {
   function renderActions(record, actions) {
     const row = h('div', { class: 'card-actions' });
 
-    const button = (label, className, onClick, { readOnly = false } = {}) =>
+    const button = (label, className, onClick) =>
       h(
         'button',
         {
           type: 'button',
           class: `button ${className}`,
-          // Comparing two photos changes nothing, so a viewer keeps it. Every
-          // other control here writes, and fn_assert_officer() would refuse it.
-          dataset: readOnly ? { readonly: 'true' } : {},
-          disabled: state.busy || (!ctx.canReview && !readOnly),
+          disabled: state.busy,
           onClick,
         },
         label,
@@ -602,7 +598,7 @@ export function createReview(ctx) {
     for (const action of actions) {
       if (action === 'resolve') continue; // the suggestion row above is the control
       if (action === 'compare') {
-        row.append(button('Compare photos', '', () => openComparison(record), { readOnly: true }));
+        row.append(button('Compare photos', '', () => openComparison(record)));
       } else if (action === 'enroll') {
         row.append(
           button('Enroll and approve', 'button-primary', () => enrollAndApprove(record)),
@@ -616,10 +612,6 @@ export function createReview(ctx) {
       } else if (action === 'reject') {
         row.append(button('Decline', 'button-danger', () => rejectWithReason([record])));
       }
-    }
-
-    if (!ctx.canReview) {
-      row.append(h('p', { class: 'muted small' }, READ_ONLY));
     }
 
     return row;
@@ -654,7 +646,7 @@ export function createReview(ctx) {
             dataset: { decision: 'approve' },
             title: `Approve ${nameOf(record)}`,
             'aria-label': `Approve ${nameOf(record)}`,
-            disabled: state.busy || !ctx.canReview,
+            disabled: state.busy,
             onClick: () => decide([record.id], 'approve', null),
           },
           '✓',
@@ -667,7 +659,7 @@ export function createReview(ctx) {
             dataset: { decision: 'reject' },
             title: `Decline ${nameOf(record)}`,
             'aria-label': `Decline ${nameOf(record)}`,
-            disabled: state.busy || !ctx.canReview,
+            disabled: state.busy,
             onClick: () => rejectWithReason([record]),
           },
           '✗',
@@ -685,10 +677,9 @@ export function createReview(ctx) {
   function setBusy(on) {
     state.busy = on;
     for (const node of document.querySelectorAll('.card-actions button, .tile-action')) {
-      const readOnly = node.dataset.readonly === 'true';
-      node.disabled = on || (!ctx.canReview && !readOnly);
+      node.disabled = on;
     }
-    el.approveAll.disabled = on || !ctx.canReview || routine().length === 0;
+    el.approveAll.disabled = on || routine().length === 0;
   }
 
   function drop(ids) {
@@ -1150,8 +1141,6 @@ export function createReview(ctx) {
       }
       return;
     }
-
-    if (!ctx.canReview) return;
 
     if (key === 'a') {
       event.preventDefault();

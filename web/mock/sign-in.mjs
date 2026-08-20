@@ -5,12 +5,8 @@
 // that account itself so no caller can pick a different one
 // (signInWithPasscode). That is deliberate, and it is checked in verify-admin.
 //
-// These files need more than that one account, because a good half of what they
-// prove is that officer, admin, viewer and member are told apart by the
-// database rather than by the screen. So this helper names the account and
-// posts to the same endpoint the box does, with the same shape of body. It is
-// not a back door around the sign-in: it is the same door, held open for a
-// caller that has to be somebody specific.
+// The verification files use that same fixed address and post to the same
+// endpoint the passcode box does.
 //
 // Four verify files had a copy of this, all four identical.
 

@@ -26,7 +26,6 @@
 // bouncing to the list and claiming success.
 
 import { select, insert, patch, remove } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
 import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
 import { encodeQR, qrToSvgElement, qrDrawToCanvas } from './qr.js';
@@ -198,7 +197,7 @@ export function createEvents(ctx) {
   function showList() {
     state.view = 'list';
     setHidden(el.formView, true);
-    setHidden(el.newButton, !ctx.canReview);
+    setHidden(el.newButton, false);
 
     el.count.textContent = state.events.length ? plural(state.events.length, 'event') : '';
 
@@ -237,32 +236,28 @@ export function createEvents(ctx) {
     );
 
     const actions = h('div', { class: 'rule-actions' });
-    if (ctx.canReview) {
-      actions.append(
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'button button-small',
-            'aria-label': `QR code for ${event.title}`,
-            onClick: () => openQr(event),
-          },
-          'QR',
-        ),
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'button button-small',
-            'aria-label': `Edit ${event.title}`,
-            onClick: () => openForm(event),
-          },
-          'Edit',
-        ),
-      );
-    } else {
-      actions.append(h('p', { class: 'muted small' }, READ_ONLY));
-    }
+    actions.append(
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'button button-small',
+          'aria-label': `QR code for ${event.title}`,
+          onClick: () => openQr(event),
+        },
+        'QR',
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'button button-small',
+          'aria-label': `Edit ${event.title}`,
+          onClick: () => openForm(event),
+        },
+        'Edit',
+      ),
+    );
 
     return h(
       'div',
@@ -399,7 +394,6 @@ export function createEvents(ctx) {
       {
         class: 'select',
         'aria-label': 'Category',
-        disabled: !ctx.canReview,
         onChange: (event) => {
           const value = event.target.value;
           if (value === 'new') {
@@ -421,7 +415,7 @@ export function createEvents(ctx) {
       min: '0',
       step: '0.5',
       value: String(Number(row.fixed_credit ?? 1)),
-      disabled: !ctx.canReview || row.credit_mode === 'from_submission',
+      disabled: row.credit_mode === 'from_submission',
       'aria-label': 'Credit',
       onInput: (event) => {
         // Kept as the raw string, not coerced here. An emptied box used to
@@ -447,7 +441,7 @@ export function createEvents(ctx) {
       h('input', {
         type: 'checkbox',
         checked: row.credit_mode === 'from_submission',
-        disabled: !ctx.canReview || anotherRowHasSubmission,
+        disabled: anotherRowHasSubmission,
         onChange: (event) => {
           row.credit_mode = event.target.checked ? 'from_submission' : 'fixed';
           renderCategoryRows();
@@ -456,24 +450,22 @@ export function createEvents(ctx) {
       'Member types the number',
     );
 
-    const removeButton = ctx.canReview
-      ? h(
-          'button',
-          {
-            type: 'button',
-            class: 'button button-small button-danger',
-            'aria-label': 'Remove category',
-            onClick: () => {
-              state.categoryRows = state.categoryRows.filter((other) => other.key !== row.key);
-              if (!state.categoryRows.length) {
-                state.categoryRows.push({ key: rowKey(), category_id: '', credit_mode: 'fixed', fixed_credit: 1 });
-              }
-              renderCategoryRows();
-            },
-          },
-          'Remove',
-        )
-      : null;
+    const removeButton = h(
+      'button',
+      {
+        type: 'button',
+        class: 'button button-small button-danger',
+        'aria-label': 'Remove category',
+        onClick: () => {
+          state.categoryRows = state.categoryRows.filter((other) => other.key !== row.key);
+          if (!state.categoryRows.length) {
+            state.categoryRows.push({ key: rowKey(), category_id: '', credit_mode: 'fixed', fixed_credit: 1 });
+          }
+          renderCategoryRows();
+        },
+      },
+      'Remove',
+    );
 
     return h(
       'div',
@@ -556,13 +548,10 @@ export function createEvents(ctx) {
 
   function renderEvidenceFields() {
     el.evidenceRequired.checked = Boolean(state.evidence);
-    el.evidenceRequired.disabled = !ctx.canReview;
     setHidden(el.evidenceFields, !state.evidence);
     el.evidenceKind.value = state.evidence?.kind ?? EVIDENCE_KINDS[0].value;
-    el.evidenceKind.disabled = !ctx.canReview;
     el.evidencePrompt.value = state.evidence?.prompt ?? '';
     el.evidencePrompt.placeholder = defaultPromptFor(el.evidenceKind.value);
-    el.evidencePrompt.disabled = !ctx.canReview;
   }
 
   function onEvidenceRequiredChange() {

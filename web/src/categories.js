@@ -43,7 +43,6 @@
 //                       only remaining use was making somebody's total wrong.
 
 import { select, insert, patch, remove } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
 import { reorderWithin, nextOrder } from './requirement-model.js';
 import { uniqueSlug, countByCategory, groupRequirementUses, canDelete } from './category-model.js';
 import { $, h, announce, moveButton, setHidden, plural } from './ui.js';
@@ -134,7 +133,7 @@ export function createCategories(ctx) {
 
   function render() {
     setHidden(el.loading, true);
-    setHidden(el.form, !ctx.canReview);
+    setHidden(el.form, false);
 
     const live = active();
     el.list.replaceChildren(
@@ -159,7 +158,6 @@ export function createCategories(ctx) {
         value: category.name,
         maxlength: '60',
         autocomplete: 'off',
-        disabled: !ctx.canReview,
         'aria-label': 'Category name',
         onChange: (event) => rename(category, event.target.value),
       }),
@@ -169,58 +167,54 @@ export function createCategories(ctx) {
     row.append(main);
 
     const actions = h('div', { class: 'rule-actions' });
-    if (ctx.canReview) {
+    actions.append(
+      moveButton({
+        direction: 'up',
+        title: `Move ${category.name} up`,
+        disabled: state.busy || index === 0,
+        onClick: () => move(category, -1),
+      }),
+      moveButton({
+        direction: 'down',
+        title: `Move ${category.name} down`,
+        disabled: state.busy || index === count - 1,
+        onClick: () => move(category, 1),
+      }),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'button button-small',
+          disabled: state.busy,
+          'aria-label': `Retire ${category.name}`,
+          onClick: () => retire(category),
+        },
+        'Retire',
+      ),
+    );
+
+    // Delete is appended separately, and only when it exists. Node.append()
+    // is not h(): it stringifies what it is given, so appending a null
+    // branch inline puts the word "null" on screen beside Retire.
+    if (
+      canDelete(category, {
+        allEventCount: state.allEventCounts.get(category.id) ?? 0,
+        requirementUses: state.requirementUses.get(category.id) ?? [],
+      })
+    ) {
       actions.append(
-        moveButton({
-          direction: 'up',
-          title: `Move ${category.name} up`,
-          disabled: state.busy || index === 0,
-          onClick: () => move(category, -1),
-        }),
-        moveButton({
-          direction: 'down',
-          title: `Move ${category.name} down`,
-          disabled: state.busy || index === count - 1,
-          onClick: () => move(category, 1),
-        }),
         h(
           'button',
           {
             type: 'button',
-            class: 'button button-small',
+            class: 'button button-small button-danger',
             disabled: state.busy,
-            'aria-label': `Retire ${category.name}`,
-            onClick: () => retire(category),
+            'aria-label': `Delete ${category.name}`,
+            onClick: () => del(category),
           },
-          'Retire',
+          'Delete',
         ),
       );
-
-      // Delete is appended separately, and only when it exists. Node.append()
-      // is not h(): it stringifies what it is given, so appending a null
-      // branch inline puts the word "null" on screen beside Retire.
-      if (
-        canDelete(category, {
-          allEventCount: state.allEventCounts.get(category.id) ?? 0,
-          requirementUses: state.requirementUses.get(category.id) ?? [],
-        })
-      ) {
-        actions.append(
-          h(
-            'button',
-            {
-              type: 'button',
-              class: 'button button-small button-danger',
-              disabled: state.busy,
-              'aria-label': `Delete ${category.name}`,
-              onClick: () => del(category),
-            },
-            'Delete',
-          ),
-        );
-      }
-    } else {
-      actions.append(h('p', { class: 'muted small' }, READ_ONLY));
     }
     row.append(actions);
     return row;
@@ -234,19 +228,17 @@ export function createCategories(ctx) {
       h(
         'div',
         { class: 'rule-actions' },
-        ctx.canReview
-          ? h(
-              'button',
-              {
-                type: 'button',
-                class: 'button button-small',
-                disabled: state.busy,
-                'aria-label': `Restore ${category.name}`,
-                onClick: () => write(category, { archived_at: null }, `${category.name} restored.`),
-              },
-              'Restore',
-            )
-          : null,
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'button button-small',
+            disabled: state.busy,
+            'aria-label': `Restore ${category.name}`,
+            onClick: () => write(category, { archived_at: null }, `${category.name} restored.`),
+          },
+          'Restore',
+        ),
       ),
     );
   }

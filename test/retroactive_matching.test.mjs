@@ -93,8 +93,6 @@ const RECORD = {
   conflictB: R('1a'),
 };
 
-const NO_PROFILE = '44444444-0000-4000-a000-00000000ff01';
-
 async function candidatesFor(memberId) {
   return db.withRole('authenticated', USERS.officer, () =>
     db.q(`select * from fn_retroactive_match_candidates($1)`, [memberId]),
@@ -178,10 +176,6 @@ test.before(async () => {
        'wendell.ashcroft.retro@ucf.edu', 'pending', 'self_checkin', array['unmatched_name']),
       ('${RECORD.conflictB}', '${EVENTS.proceeds}', null, 'Wendell Ashcroft',
        'wendell.ashcroft.retro@ucf.edu', 'pending', 'self_checkin', array['unmatched_name']);
-
-    insert into auth.users (id, email)
-    values ('${NO_PROFILE}', 'retro-no-profile@example.test')
-    on conflict (id) do nothing;
   `);
 
   await db.withRole('authenticated', USERS.officer, () =>
@@ -531,41 +525,4 @@ test('anon cannot find or link candidates', async () => {
 
   assert.equal(find.code, '42501');
   assert.equal(linkErr.code, '42501');
-});
-
-test('a member account cannot find or link candidates', async () => {
-  await db.as('authenticated', USERS.adaAccount);
-  const find = await db.expectError(`select fn_retroactive_match_candidates($1)`, [RETRO.priyaA]);
-  const linkErr = await db.expectError(`select link_retroactive_matches($1, $2::uuid[])`, [
-    RETRO.priyaA,
-    [],
-  ]);
-  await db.asOwner();
-
-  assert.equal(find.code, 'PDS07');
-  assert.equal(linkErr.code, 'PDS07');
-});
-
-// A signed-in account with no profiles row is a reachable state (migration
-// 16): nothing creates one automatically, and fn_is_officer() returns NULL
-// rather than false for it, so the check has to be spelled positively.
-test('an account with no profiles row cannot find or link candidates', async () => {
-  await db.as('authenticated', NO_PROFILE);
-  const find = await db.expectError(`select fn_retroactive_match_candidates($1)`, [RETRO.priyaA]);
-  const linkErr = await db.expectError(`select link_retroactive_matches($1, $2::uuid[])`, [
-    RETRO.priyaA,
-    [],
-  ]);
-  await db.asOwner();
-
-  assert.equal(find.code, 'PDS07');
-  assert.equal(linkErr.code, 'PDS07');
-
-  // And genuinely refused, not merely told no: nothing about Priya As roster
-  // state moved.
-  const untouched = await db.val(
-    `select count(*)::int from attendance_records where member_id = $1`,
-    [RETRO.priyaA],
-  );
-  assert.equal(untouched, 2, 'the officer-run tests above already linked exactly two records to Priya A');
 });

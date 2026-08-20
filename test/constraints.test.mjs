@@ -193,30 +193,6 @@ test('a threshold node must carry a value and a group must not', async () => {
   assert.equal(badGroup.code, '23514');
 });
 
-test('two people cannot hold a live claim on the same roster row', async () => {
-  await db.exec(`
-    insert into auth.users (id, email) values
-      ('99999999-0000-4000-a000-0000000000f1', 'claimant1@example.test'),
-      ('99999999-0000-4000-a000-0000000000f2', 'claimant2@example.test');
-    insert into member_claims (user_id, member_id)
-    values ('99999999-0000-4000-a000-0000000000f1', '${MEMBERS.barnaby}');
-  `);
-
-  const err = await db.expectError(
-    `insert into member_claims (user_id, member_id)
-     values ('99999999-0000-4000-a000-0000000000f2', $1)`,
-    [MEMBERS.barnaby],
-  );
-  assert.equal(err.code, '23505');
-  assert.match(err.message, /one_live_claim_per_member/);
-
-  await db.exec(`
-    delete from member_claims where member_id = '${MEMBERS.barnaby}';
-    delete from auth.users where id in ('99999999-0000-4000-a000-0000000000f1',
-                                        '99999999-0000-4000-a000-0000000000f2');
-  `);
-});
-
 test('the seeded configuration is intact and warning-free', async () => {
   const cats = Number(await db.val(`select count(*) from categories where archived_at is null`));
   assert.equal(cats, 13);

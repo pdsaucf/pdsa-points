@@ -97,7 +97,7 @@ process.stdout.write('\ncreating an event\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('creating an event writes all three tables, and the event comes back with a checkin_token', async () => {
   const [event] = await insert('events', [
@@ -262,34 +262,8 @@ await check('buildCheckinUrl resolves against the admin page location and carrie
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\nwho is allowed to write an event\n');
+process.stdout.write('\nthe event surface stays private\n');
 // ---------------------------------------------------------------------------
-
-await check('a PATCH the mock refuses is reported, not treated as success', async () => {
-  const [event] = await insert('events', [
-    { academic_year_id: IDS.YEAR_CURRENT, title: 'Verify Refused Patch', occurred_on: '2026-09-05' },
-  ]);
-
-  await signInAs('advisor@ucf.edu'); // a viewer: reads, cannot write
-  const rows = await patch('events', { id: `eq.${event.id}` }, { title: 'Renamed by a viewer' });
-  assert.deepEqual(rows, [], 'a viewer was able to patch an event');
-
-  await signInAs('sara@pdsaucf.com');
-  const [reread] = await select('events', { select: 'title', filters: { id: `eq.${event.id}` } });
-  assert.equal(reread.title, 'Verify Refused Patch', 'the refused patch actually changed the title');
-});
-
-await check('a member account reads events (title, date, categories are club-facing) but cannot write them', async () => {
-  await signInAs('priya@knights.ucf.edu');
-  const rows = await select('events', { select: 'id,title', filters: { id: `eq.${IDS.EVENT_SOAP}` } });
-  assert.equal(rows.length, 1, 'a member could not read a published event');
-
-  await assert.rejects(
-    () => insert('events', [{ academic_year_id: IDS.YEAR_CURRENT, title: 'Should not exist', occurred_on: '2026-09-06' }]),
-    (err) => err instanceof RpcError && err.status === 403,
-    'a member account was able to create an event',
-  );
-});
 
 await check('an anon-key request for events is refused', async () => {
   const res = await fetch(`http://localhost:${PORT}/rest/v1/events?select=id`, {
@@ -298,7 +272,7 @@ await check('an anon-key request for events is refused', async () => {
   assert.equal(res.status, 401);
 });
 
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 // ---------------------------------------------------------------------------
 process.stdout.write('\nQR correctness\n');

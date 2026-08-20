@@ -296,7 +296,7 @@ process.stdout.write('\nthe rules an officer opens\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('the published set reads as the sentence in the wireframe', async () => {
   const { set, root, byId } = await loadSet(IDS.SET_CURRENT);
@@ -661,31 +661,11 @@ await check('a requirement measuring nothing at all is flagged before it is publ
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\npublishing is an admins decision\n');
+process.stdout.write('\npublishing from the shared admin session\n');
 // ---------------------------------------------------------------------------
 
-await check('an officer is refused, with copy that names the account that can', async () => {
-  await assert.rejects(
-    () => callRpc('publish_requirement_set', { p_set_id: draftId }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
-
-  const copy = describeOfficer(
-    new RpcError('PDS07', 'Publishing a requirement set requires an admin account.', 400),
-  );
-  assert.match(`${copy.title} ${copy.body}`, /admin/i);
-  assert.doesNotMatch(`${copy.title} ${copy.body}`, /policy|permission denied/i);
-});
-
-await check('the screen says so before the officer presses anything', () => {
-  // The button is offered disabled with the reason beside it, rather than
-  // enabled and answered with a refusal.
-  assert.match(sources['src/requirements.js'], /Only an admin can publish\./);
-  assert.match(sources['src/requirements.js'], /el\.publish\.disabled = !ctx\.canPublish/);
-});
-
 await check('an admin publishes, and the version that was live is kept', async () => {
-  await signInAs('ben@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
   const result = await callRpc('publish_requirement_set', { p_set_id: draftId });
   assert.equal(result.version, 2);
   assert.ok(result.published_at, 'nothing recorded when it went live');
@@ -703,7 +683,7 @@ await check('an admin publishes, and the version that was live is kept', async (
 });
 
 await check('and the version just published is read only from that moment', async () => {
-  await signInAs('sara@pdsaucf.com');
+  await signInAs('officers@pdsaucf.com');
   const { root } = await loadSet(draftId);
   const rows = await patch('requirement_nodes', { id: `eq.${root.id}` }, { label: 'Changed' });
   assert.deepEqual(rows, [], 'a published set stayed editable after publishing');
@@ -727,7 +707,7 @@ process.stdout.write('\ncopying last year\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('a copy of another year lands on the year on screen', async () => {
   // What the screen does: clone, read the copy back, and move it onto the year
@@ -767,7 +747,7 @@ process.stdout.write('\ncategories\n');
 // ---------------------------------------------------------------------------
 
 await reset();
-await signInAs('sara@pdsaucf.com');
+await signInAs('officers@pdsaucf.com');
 
 await check('a new category is created with a key nobody has to see', async () => {
   const rows = await insert('categories', [
@@ -842,19 +822,6 @@ await check('retiring is archiving: the row stays, and the rule now says it is r
 await check('the requirements editor never deletes a category; only categories.js does, and only when nothing references it (see verify-categories.mjs)', () => {
   assert.doesNotMatch(sources['src/requirements.js'], /remove\(\s*['"]categories['"]/);
   assert.match(sources['src/categories.js'], /remove\(\s*['"]categories['"]/);
-});
-
-await check('a viewer reads the rules and changes none of them', async () => {
-  await signInAs('advisor@ucf.edu');
-  const { root } = await loadSet(IDS.SET_CURRENT);
-  assert.ok(root, 'a viewer could not read the rules they are shown');
-
-  const rows = await patch('categories', { id: `eq.${IDS.CATEGORY_GBMS}` }, { name: 'Nope' });
-  assert.deepEqual(rows, [], 'a viewer renamed a category');
-  await assert.rejects(
-    () => callRpc('publish_requirement_set', { p_set_id: IDS.SET_CURRENT }, { attempts: 1 }),
-    (err) => err instanceof RpcError && err.code === 'PDS07',
-  );
 });
 
 // ---------------------------------------------------------------------------

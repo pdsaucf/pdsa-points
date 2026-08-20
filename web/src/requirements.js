@@ -32,13 +32,10 @@
 // with a note rather than an empty editor.
 //
 // A PUBLISHED SET IS NOT EDITED. Every control is read-only against one, and
-// "Edit as draft" clones it into a new version. RLS would in fact let an admin
-// write a published set directly (req_sets_write in migration 11 admits
-// fn_is_admin() unconditionally), so this is a line the client holds, and it is
-// the line that keeps last year's members judged by last year's numbers.
+// "Edit as draft" clones it into a new version. The database enforces the same
+// boundary so last year's members stay judged by last year's numbers.
 
 import { select, insert, patch, remove, callRpc } from './rest.js';
-import { READ_ONLY } from './officer-errors.js';
 import {
   buildTree,
   flatten,
@@ -79,8 +76,6 @@ const SETTLE_MS = 450;
 // set stopped being a draft underneath the officer, which is a page that is out
 // of date rather than a mistake they made.
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
-
-const ONLY_ADMIN_PUBLISHES = 'Only an admin can publish.';
 
 // The last option in every category picker, which is not a category.
 const NEW_CATEGORY = 'new';
@@ -150,7 +145,7 @@ export function createRequirements(ctx) {
     loaded: false,
   };
 
-  const canEdit = () => ctx.canReview && isEditable(state.set);
+  const canEdit = () => isEditable(state.set);
 
   // -------------------------------------------------------------------------
   // Reading
@@ -188,7 +183,7 @@ export function createRequirements(ctx) {
         setHidden(el.loading, true);
         renderHeader();
         setHidden(el.empty, false);
-        el.startDraft.disabled = !ctx.canReview;
+        el.startDraft.disabled = false;
         return;
       }
 
@@ -265,8 +260,8 @@ export function createRequirements(ctx) {
     }
 
     const others = otherYearSets();
-    setHidden(el.copyFrom, others.length === 0 || !ctx.canReview);
-    setHidden(el.copyRun, others.length === 0 || !ctx.canReview);
+    setHidden(el.copyFrom, others.length === 0);
+    setHidden(el.copyRun, others.length === 0);
     if (others.length) {
       el.copyFrom.replaceChildren(
         ...others.map((entry) => h('option', { value: entry.set.id }, entry.year.label)),
@@ -274,26 +269,18 @@ export function createRequirements(ctx) {
     }
 
     const published = state.set?.status === 'published';
-    setHidden(el.editAsDraft, !published || !ctx.canReview);
+    setHidden(el.editAsDraft, !published);
 
     const draft = isEditable(state.set);
-    setHidden(el.publish, !draft || !ctx.canReview);
-
-    // An officer is told why, rather than left pressing a button that answers
-    // with a refusal from the database.
-    const note = !ctx.canReview
-      ? READ_ONLY
-      : draft && !ctx.canPublish
-        ? ONLY_ADMIN_PUBLISHES
-        : '';
-    el.publishNote.textContent = note;
-    setHidden(el.publishNote, !note);
+    setHidden(el.publish, !draft);
+    el.publishNote.textContent = '';
+    setHidden(el.publishNote, true);
 
     setHidden(el.footer, !canEdit());
 
     // The same button as the one in the header, so that a long list does not
     // send an officer back to the top to publish what they just finished.
-    setHidden(el.publishBottom, !draft || !ctx.canReview);
+    setHidden(el.publishBottom, !draft);
     paintBusy();
   }
 
@@ -783,7 +770,7 @@ export function createRequirements(ctx) {
     el.newCategory.disabled = !editable || busy;
     el.discardDraft.disabled = !editable || busy;
     el.editAsDraft.disabled = busy;
-    el.publish.disabled = !ctx.canPublish || busy;
+    el.publish.disabled = busy;
     el.publishBottom.disabled = el.publish.disabled;
   }
 

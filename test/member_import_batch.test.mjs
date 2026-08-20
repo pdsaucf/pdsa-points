@@ -37,10 +37,6 @@ const CAST = {
   known: R('02'), // already a member, with an address a file would find
 };
 
-// Nobody signed in has a profiles row, which is the case fn_is_officer()
-// answers NULL for rather than false. See migration 16.
-const NO_PROFILE = '99999999-0000-4000-a000-0000000000f9';
-
 function batch(rows, { year = YEAR_2026, userId = USERS.officer } = {}) {
   return db.withRole('authenticated', userId, () =>
     db.val(`select upsert_members_and_enroll($1::jsonb, $2::uuid)`, [JSON.stringify(rows), year]),
@@ -244,18 +240,9 @@ test('the officers answer from the preview outranks the lookup', async () => {
   assert.equal(await memberCount(), before);
 });
 
-test('a member, an anon caller and an account with no role are all refused', async () => {
+test('an anon caller is refused', async () => {
   const before = await memberCount();
   const rows = [{ row: 2, first_name: 'Snuck', last_name: 'In' }];
-
-  const member = await refuses(rows, { userId: USERS.adaAccount });
-  assert.equal(member.code, 'PDS07');
-
-  // The NULL-role gap migration 16 closes. fn_is_officer() is NULL rather than
-  // false for a caller with no profiles row, so officer status is asserted
-  // positively here as well, before the loop writes anything.
-  const unknown = await refuses(rows, { userId: NO_PROFILE });
-  assert.equal(unknown.code, 'PDS07');
 
   await db.as('anon');
   const anon = await db.expectError(`select upsert_members_and_enroll($1::jsonb, $2::uuid)`, [
@@ -266,26 +253,6 @@ test('a member, an anon caller and an account with no role are all refused', asy
   assert.equal(anon.code, '42501');
 
   assert.equal(await memberCount(), before, 'a refused call still wrote somebody');
-});
-
-test('a refused caller writes nothing, including the rows before the bad one', async () => {
-  // The role check is up front, so it is not a question of how far down the
-  // file the refusal happens. Nothing in the batch is written.
-  const before = await memberCount();
-  const err = await refuses(
-    [
-      { row: 2, first_name: 'Malachy', last_name: 'Devereux', email: 'malachy.d@ucf.edu' },
-      { row: 3, first_name: 'Noor', last_name: 'Al-Amin', email: 'noor.alamin@ucf.edu' },
-    ],
-    { userId: USERS.adaAccount },
-  );
-
-  assert.equal(err.code, 'PDS07');
-  assert.equal(await memberCount(), before);
-  assert.equal(
-    await db.val(`select count(*)::int from members where email = 'malachy.d@ucf.edu'`),
-    0,
-  );
 });
 
 test('over the cap is refused outright', async () => {

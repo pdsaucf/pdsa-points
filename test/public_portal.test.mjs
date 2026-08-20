@@ -627,8 +627,6 @@ test('anon holds EXECUTE on the five portal functions and nothing near them', as
   for (const name of [
     'fn_portal_year()',
     'fn_member_requirement_status(uuid, uuid)',
-    'start_portal_session()',
-    'request_missing_credit(uuid, text, numeric)',
     'upsert_member_and_enroll(text, text, citext, citext, uuid, uuid)',
     'review_records(uuid[], text, text)',
   ]) {
@@ -645,7 +643,6 @@ test('anon still reads no table and no view', async () => {
     'requirement_nodes',
     'v_member_status',
     'v_member_category_totals',
-    'profiles',
   ]) {
     await db.as('anon', null);
     const err = await db.expectError(`select * from ${relation} limit 1`);

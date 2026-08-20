@@ -211,8 +211,8 @@ The emblem at the top of this page is a link to `/admin/`. Officers are told to 
 logo, which is less to explain than a path to type, and most of them are opening the site
 on a phone. Nothing on screen labels it: a member has no use for it, and the page has no
 room for a control that is not theirs. This hides the door, it does not lock it. The
-passcode and the role guard behind `/admin/` are the gate, and they are unchanged by
-anyone finding the link (docs/06-officer-passcode.md).
+passcode and its shared authenticated session are the gate, and they are unchanged
+by anyone finding the link (docs/06-officer-passcode.md).
 
 `mock/verify-portal.mjs` holds the door to three things: it opens `/admin/`, it is named
 for a screen reader, and it draws no text on screen.
@@ -235,14 +235,11 @@ member to file a record: invariant 6 says every attendance record is approved by
 and the way a member raises a missing credit now is to tell an officer, who has the member
 screen and the review queue for exactly that.
 
-## What is left of the old design
+## Retired account design
 
-The claim machinery in migration 18 (`start_portal_session()`, `search_roster_for_claim()`,
-`file_member_claim()`, `review_member_claim()`, `list_pending_claims()`,
-`request_missing_credit()`) is still in the database and is called by nothing. It was left
-in place rather than dropped: dropping it is a migration that can be written any time, and
-`member_claims` still holds the claims that were filed. The officer-facing Account claims
-tab and the member-facing claim screens are gone from the client.
+Migration 24 removes the unused claim RPCs, `member_claims`, `profiles`, and the
+application role enum. The public portal is anonymous and read-only, while `/admin/`
+uses the one fixed shared GoTrue session.
 
 `members.email` is likewise still a column, holding whatever was imported into it. Nothing
 reads it and nothing writes it.

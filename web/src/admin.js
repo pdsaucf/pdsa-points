@@ -1,22 +1,9 @@
-// The admin shell: signing in, working out what this account is allowed to do,
-// and handing the screen to the review queue.
+// The admin shell: signing in and handing the screen to the admin tools.
 //
 // THE GUARD IS THE POINT OF THIS FILE. An unauthenticated visitor to /admin/
 // gets the sign-in form, never a half-drawn queue that fills with 401s. A
-// signed-in member gets a plain sentence saying this is not their screen, not
-// an empty queue that looks broken. Both of those are RLS decisions really: the
-// database would refuse them anyway. What this adds is that the refusal is
-// legible before it happens rather than as a wall of failed requests.
-//
-// Roles come from profiles.role, read through PostgREST under the caller's own
-// policy (profiles_read_own). Three of the four values reach this screen:
-//
-//   admin    everything, including publishing the requirements
-//   officer  the whole review queue
-//   viewer   reads the queue, decides nothing. fn_is_staff() lets them see it,
-//            and fn_assert_officer() would refuse every action, so the buttons
-//            are not offered rather than offered and then refused
-//   member   refused outright, with a pointer at the portal that is theirs
+// A valid session is the complete authorization decision. The page uses one
+// fixed GoTrue user behind one shared passcode, with no profiles or role layer.
 
 import { IS_CONFIGURED } from '../config.js';
 import { signInWithPasscode, currentSession, forgetSession, signOut } from './auth.js';
@@ -32,9 +19,6 @@ import { createMember } from './member.js';
 import { createStorage } from './storage.js';
 import { $, h, announce, setHidden } from './ui.js';
 
-const REVIEWING_ROLES = ['officer', 'admin'];
-const READING_ROLES = ['officer', 'admin', 'viewer'];
-
 // The seven panels, in tab order. Each one is mounted once and reloaded when
 // the year changes, so switching tabs costs nothing. Events is first: it is
 // where an officer's day starts (make the event, print the code), and the
@@ -49,7 +33,6 @@ const PANELS = [...TABS, 'member'];
 const el = {};
 const app = {
   session: null,
-  profile: null,
   years: [],
   year: null,
   events: null,
@@ -214,44 +197,6 @@ async function guard() {
   }
   app.session = session;
 
-  let profiles;
-  try {
-    profiles = await select('profiles', {
-      select: 'user_id,full_name,role,member_id',
-      filters: { user_id: `eq.${session.user.id}` },
-      limit: 1,
-    });
-  } catch (err) {
-    const copy = describeOfficer(err);
-    // Either way this lands on the passcode box, which is the only thing the
-    // officer can do about it. The session is cleared only when the failure
-    // says the session is the problem: a dropped connection is not a reason to
-    // make somebody type the passcode again once the wifi comes back.
-    if (copy.recover === 'signin') forgetSession();
-    showSignIn(copy.title);
-    return;
-  }
-
-  const profile = profiles[0] ?? null;
-
-  // Signed in with no profile row at all. That is an account nobody has set
-  // up, which is different from an account that is set up as something else.
-  if (!profile) {
-    showDenied('This account has no role yet. An admin needs to set one.');
-    return;
-  }
-
-  app.profile = profile;
-
-  if (!READING_ROLES.includes(profile.role)) {
-    showDenied(
-      profile.role === 'member'
-        ? 'This is a member account.'
-        : 'An admin can give this account officer access.',
-    );
-    return;
-  }
-
   try {
     app.years = await select('academic_years', {
       select: 'id,label,is_current,starts_on',
@@ -286,13 +231,7 @@ function context() {
     get years() {
       return app.years;
     },
-    userId: app.profile.user_id,
-    role: app.profile.role,
-    canReview: REVIEWING_ROLES.includes(app.profile.role),
-    // Publishing a requirement set is the one action an officer is refused.
-    // req_sets_write in migration 11 admits an officer for drafts only, so the
-    // screen says so rather than offering a button the database will turn down.
-    canPublish: app.profile.role === 'admin',
+    userId: app.session.user.id,
     fail,
     note,
     clearMessage,
@@ -353,12 +292,7 @@ function closeMember() {
 function startApp() {
   showView('app');
 
-  el.who.textContent = [
-    app.profile.full_name || app.session.user.email || 'Signed in',
-    app.profile.role,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  el.who.textContent = app.session.user.email || 'Signed in';
 
   el.yearSelect.replaceChildren(
     ...app.years.map((year) => h('option', { value: year.id }, year.label)),
