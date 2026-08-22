@@ -99,28 +99,28 @@ holds when the caller is a stranger with a phone.
 │                                  │
 │  45 points          [ Not you? ] │
 │                                  │
-│ ┌──────────────────────────────┐ │
-│ │ What is an Honorary Member?  │ │
-│ │ Honorary Members are those   │ │
-│ │ who go above and beyond as   │ │
-│ │ active and engaged members   │ │
-│ │ of PDSA.                     │ │
-│ │                              │ │
-│ │ Requirements                 │ │
-│ │ GBMs                     9   │ │
-│ │ Volunteering            25   │ │
-│ │ Socials                  6   │ │
-│ │ Speaking                 1   │ │
-│ │   Journal Club,              │ │
-│ │   Media Speaking             │ │
-│ │                              │ │
-│ │ Why become an Honorary       │ │
-│ │ Member? ...                  │ │
-│ │ Do I have to become an       │ │
-│ │ Honorary Member? ...         │ │
-│ │ What does being an Honorary  │ │
-│ │ Member represent? ...        │ │
-│ └──────────────────────────────┘ │
+│  What is an Honorary Member?     │
+│  Honorary Members are those who  │
+│  go above and beyond as active   │
+│  and engaged members of PDSA.    │
+│                                  │
+│  ┌────────────────────────────┐ │
+│  │ Requirements               │ │
+│  │ GBMs                    9  │ │
+│  │ Volunteering           25  │ │
+│  │ Socials                 6  │ │
+│  │ Speaking                1  │ │
+│  │   Journal Club,            │ │
+│  │   Media Speaking           │ │
+│  └────────────────────────────┘ │
+│  ─────────────────────────────  │
+│  About Honorary Membership       │
+│  Why become an Honorary Member?  │
+│  ...                             │
+│  Do I have to become an Honorary │
+│  Member? ...                     │
+│  What does being an Honorary     │
+│  Member represent? ...           │
 └──────────────────────────────────┘
 ```
 
@@ -129,12 +129,19 @@ September appears in September with no code change. Nothing about this year's ca
 is baked into the page, and `mock/verify-portal.mjs` renames a requirement mid-run and
 requires the screen to follow it.
 
-The three questions below the requirements are fixed copy, not published rules: why the
-distinction is worth having, that it is optional, and what it represents. They answer
-questions members already ask officers, so the page answers them once instead.
+The requirements sit in their own panel, the same shape as any other panel on this
+screen, because they are the one part of this section that is genuinely structured data.
+The introduction above it and the three questions below it are prose, so neither gets a
+border: a rule and a heading ("About Honorary Membership") separate the two instead of
+another box. One long bordered card reads as a single wall of text; a plain introduction,
+a compact panel, and an open FAQ read as three things, which is what they are.
 
-The box at the bottom is what the page says before anybody has typed anything, which is
-the common case for somebody who followed a link from a group chat.
+The three questions are fixed copy, not published rules: why the distinction is worth
+having, that it is optional, and what it represents. They answer questions members
+already ask officers, so the page answers them once instead.
+
+This is what the page says before anybody has typed anything, which is the common case
+for somebody who followed a link from a group chat.
 
 ## Your events
 

@@ -117,6 +117,16 @@ body {
   }
 }
 
+/* A member still opens this on a phone first, so the column stays put below
+   here. Above it, the same single column gets a little more room to read in,
+   rather than the requirements panel and the About prose sitting inside a
+   phone-width strip on a laptop screen. */
+@media (min-width: 40rem) {
+  .app {
+    max-width: 36rem;
+  }
+}
+
 .brand-row {
   display: flex;
   margin: 0 0 0.75rem;
@@ -496,22 +506,22 @@ body {
 /* --------------------------------------------------------------------------- */
 /* What an Honorary Member is                                                   */
 /* --------------------------------------------------------------------------- */
-/* The box at the bottom of the points tab. It is the one piece of prose on this
-   screen, so it gets a surface of its own and the accent edge, and the list
-   under it is the published rules rather than anything written here. */
+/* Three tiers, not one box: a plain introduction, the requirements in a panel
+   like any other on this page, then an open "About" section below a rule.
+   Nothing in here is a card just to be a card, so the eye has one thing to
+   land on at each level instead of one long bordered document. */
 
 .honorary {
-  margin-top: 1.25rem;
-  padding: 1rem;
-  background: var(--accent-soft);
-  border: 1px solid var(--accent);
-  border-radius: 12px;
+  margin-top: 1.75rem;
 }
 
-.honorary-title {
-  margin: 0 0 0.375rem;
-  font-size: 1.0625rem;
+/* Shared by both headings in this section. Bigger than a panel title, because
+   these two are the section's own table of contents, not a label on a box. */
+.section-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .honorary-body {
@@ -519,25 +529,14 @@ body {
   color: var(--ink);
 }
 
-.honorary-subhead {
-  margin: 1rem 0 0.375rem;
-  font-size: 0.9375rem;
-  font-weight: 700;
+.honorary-requirements {
+  margin-top: 1rem;
 }
 
 .honorary-list {
-  margin: 0.75rem 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.honorary-answer {
-  margin: 0;
-  color: var(--ink);
-}
-
-.honorary-answer + .honorary-answer {
-  margin-top: 0.5rem;
 }
 
 .honorary-row {
@@ -546,7 +545,11 @@ body {
   align-items: baseline;
   gap: 0.25rem 0.5rem;
   padding: 0.375rem 0;
-  border-top: 1px solid var(--accent);
+  border-top: 1px solid var(--line);
+}
+
+.honorary-row:first-child {
+  border-top: 0;
 }
 
 .honorary-row[data-depth='2'] {
@@ -567,6 +570,42 @@ body {
   flex: 1 1 100%;
   color: var(--ink-muted);
   font-size: 0.875rem;
+}
+
+/* A rule, not another box: enough of a break that "About" reads as a new
+   section, without stacking a second border under the requirements panel. */
+.honorary-about {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.honorary-about > .section-title {
+  margin-bottom: 1rem;
+}
+
+.faq-question {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.honorary-answer {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.honorary-answer + .honorary-answer {
+  margin-top: 0.5rem;
+}
+
+/* Noticeably more room between questions than between two paragraphs of the
+   same answer, so the eye can tell "new question" from "still reading". */
+.faq-item + .faq-item {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
 }
 
 /* --------------------------------------------------------------------------- */
