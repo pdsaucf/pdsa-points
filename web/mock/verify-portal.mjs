@@ -243,8 +243,8 @@ const portalCopy = [
   ...Object.entries(sources).flatMap(([label, source]) =>
     uiStrings(source).map((text) => [label, text]),
   ),
-  // Comments are not copy, and neither is a link target: the officer door
-  // points at ../admin/, which no member ever reads off the screen.
+  // Comments are not copy, and neither is a link target: nobody reads an
+  // href or src off the screen.
   [
     'me/index.html',
     portalHtml.replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s(?:href|src)="[^"]*"/g, ' '),
@@ -1046,31 +1046,14 @@ await check('the public functions carry no address and no student id', async () 
   }
 });
 
-process.stdout.write('\nthe officer door\n');
+process.stdout.write('\nthe emblem\n');
 
-await check('the emblem is the way to the officer screens, and says so to a screen reader', () => {
-  const door = portalHtml.match(/<a\b[^>]*class="brand-door"[^>]*>[\s\S]*?<\/a>/);
-  assert.ok(door, 'there is no officer door on the member portal');
-  assert.match(door[0], /href="\.\.\/admin\/"/, 'the door does not open the officer screens');
-  assert.match(door[0], /aria-label="[^"]+"/, 'the door is unnamed for a screen reader');
-  assert.match(door[0], /pdsa-emblem-96\.png/, 'the door is not the emblem');
-  // The link names itself, so the emblem inside it must not name itself twice.
-  assert.match(door[0], /alt=""/, 'the emblem inside the door repeats the links name');
-});
-
-await check('the door is a tap target, not a 40 pixel image', () => {
-  const declared = declarations(rule(portalCss, '.brand-door'));
-  const padding = declared.get('padding') ?? '';
-  assert.match(padding, /var\(--tap\)/, `.brand-door pads to ${padding || 'nothing'}`);
-});
-
-await check('the door carries no label on screen, and does not read as a sign-in', () => {
-  const door = portalHtml.match(/<a\b[^>]*class="brand-door"[^>]*>([\s\S]*?)<\/a>/);
-  const visible = door[1].replace(/<[^>]+>/g, ' ').trim();
-  assert.equal(visible, '', `the door is labelled on screen: ${JSON.stringify(visible)}`);
-  // Invariant 8: nothing on this page is an account, so no wording here may
-  // suggest a member has one to sign in to.
-  assert.doesNotMatch(door[0], /sign\s*in/i, 'the door reads as a members sign-in');
+await check('the emblem is a plain image, not a link to the officer screens', () => {
+  const row = portalHtml.match(/<p class="brand-row">[\s\S]*?<\/p>/);
+  assert.ok(row, 'there is no brand row on the member portal');
+  assert.doesNotMatch(row[0], /<a\b/, 'the emblem is wrapped in a link');
+  assert.match(row[0], /pdsa-emblem-96\.png/, 'the brand row is not the emblem');
+  assert.match(row[0], /alt=""/, 'the emblem names itself when the page title already does');
 });
 
 server.close();

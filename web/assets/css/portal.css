@@ -128,17 +128,6 @@ body {
   height: 40px;
 }
 
-/*
-  The officer door. It looks like the emblem and nothing else, but it is a link
-  on a phone, so the padding buys a full tap target and the negative margin
-  keeps the emblem where it was drawn before.
-*/
-.brand-door {
-  display: block;
-  margin: calc((var(--tap) - 40px) / -2);
-  padding: calc((var(--tap) - 40px) / 2);
-}
-
 .topbar {
   display: flex;
   align-items: center;

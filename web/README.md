@@ -120,16 +120,14 @@ step needed is:
 `/c/` is a real directory containing `index.html`, so the route works on GitHub
 Pages with no rewrite rules, no 404 trick and no hash router.
 
-## The root, and the way in to the officer screens
+## The root
 
 `points.pdsaucf.com/` is what a member types or gets sent, so the root forwards to
 `/me/`. A QR code carries its token on `/c/` already, but a link that lost its path
 still has `?e=` on it, and that one is forwarded to `/c/` with the query intact.
 
-There is no visible link to `/admin/` anywhere a member looks. The emblem at the top of
-`/me/` is the link: officers are told to tap the logo rather than to type a path. It is
-not a secret and it is not a security measure, since the sign-in behind it is the gate.
-It is only kept unlabelled because a member has no use for it.
+There is no link to `/admin/` anywhere a member looks. Officers reach it by its own
+address; the sign-in behind it is the gate either way.
 
 ## The URL, and the QR code
 
