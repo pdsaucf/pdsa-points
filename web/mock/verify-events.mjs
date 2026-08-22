@@ -801,13 +801,17 @@ await check('ordinary list repainting does not steal focus', () => {
   assert.equal(document.activeElement, search);
 });
 
-await check('card QR and Edit keep their existing flows', async () => {
+await check('card QR has a working Back control and Edit keeps its existing flow', async () => {
   let row = eventRowFor('Soap Carving');
   assert.ok(row, 'Soap Carving is not on the list');
   dom.click(dom.buttonNamed(row, 'QR'));
   assert.equal(dom.$('qr-dialog').open, true, 'QR did not open its dialog');
   assert.equal(dom.$('qr-title').textContent, 'Soap Carving');
-  dom.$('qr-dialog').close();
+  const qrBack = dom.buttonNamed(dom.$('qr-dialog'), 'Back');
+  assert.ok(qrBack, 'QR dialog has no Back control');
+  assert.ok(qrBack.hasAttribute('data-close'), 'Back does not use the dialog close behavior');
+  dom.click(qrBack);
+  assert.equal(dom.$('qr-dialog').open, false, 'Back did not close the QR dialog');
 
   row = eventRowFor('Soap Carving');
   dom.click(dom.buttonNamed(row, 'Edit'));
@@ -843,6 +847,17 @@ await check('event cards stack actions with full tap targets on narrow screens',
   assert.match(
     adminCss,
     /\.event-row > \.chip-row \.category-chip > span\s*\{[^}]*min-width: 0[^}]*overflow-wrap: anywhere/,
+  );
+});
+
+await check('QR actions center, wrap, and stay within the dialog on narrow screens', () => {
+  assert.match(
+    adminCss,
+    /\.qr-dialog-actions\s*\{[^}]*flex-wrap:\s*wrap;[^}]*justify-content:\s*center;/,
+  );
+  assert.match(
+    adminCss,
+    /\.qr-dialog-actions \.button\s*\{[^}]*max-width:\s*100%;[^}]*white-space:\s*normal;/,
   );
 });
 

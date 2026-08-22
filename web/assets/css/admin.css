@@ -2606,3 +2606,14 @@ kbd {
   color: var(--ink-muted);
   user-select: all;
 }
+
+.qr-dialog-actions {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.qr-dialog-actions .button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+}
