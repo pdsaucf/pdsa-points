@@ -97,10 +97,7 @@
             Members
           </button>
           <button id="tab-requirements" type="button" class="tab" aria-selected="false" aria-controls="panel-requirements">
-            Requirements
-          </button>
-          <button id="tab-categories" type="button" class="tab" aria-selected="false" aria-controls="panel-categories">
-            Event categories
+            Honorary requirements
           </button>
           <button id="tab-storage" type="button" class="tab" aria-selected="false" aria-controls="panel-storage">
             Storage
@@ -490,7 +487,6 @@
         </div>
 
         <div id="requirements-body" hidden>
-          <p id="root-sentence" class="rule-sentence"></p>
           <div id="rule-tree" class="rule-tree"></div>
           <!--
             The list is flat. There is no "Add group": nesting was the only part
@@ -499,7 +495,6 @@
           -->
           <div id="rule-footer" class="rule-footer">
             <button id="add-requirement" type="button" class="button">Add requirement</button>
-            <button id="new-category" type="button" class="button">New event category</button>
             <div class="rule-footer-end">
               <button id="discard-draft" type="button" class="button button-danger">
                 Discard draft
@@ -521,10 +516,10 @@
           <p class="muted">Nobody can qualify until a set is published.</p>
           <button id="start-draft" type="button" class="button button-primary">Start a draft</button>
         </section>
-      </main>
 
       <!--
-        Categories are what requirements measure. They archive, so every
+        Categories sit in the same workspace as the requirements they feed.
+        They archive, so every
         reference from a rule or an event stays resolvable (invariant 4).
         Delete is offered too, but only when nothing references the category
         at all, in which case nothing is left to dangle: see the header of
@@ -536,7 +531,8 @@
         checkbox was false for Volunteering hours alone. There is one unit and
         it is points.
       -->
-      <main id="panel-categories" class="panel-view" hidden>
+      <section id="category-manager" class="requirements-categories">
+        <h2 class="section-title">Event categories</h2>
         <form id="category-form" class="toolbar" novalidate>
           <div class="toolbar-field">
             <label class="label" for="category-name">New event category</label>
@@ -564,6 +560,7 @@
           <h2 class="zone-title">Retired</h2>
           <div id="category-retired" class="category-list"></div>
         </section>
+      </section>
       </main>
 
       <!--

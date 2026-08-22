@@ -8,10 +8,9 @@
 // every string below. The vocabulary itself lives in requirement-model.js so it
 // can be checked in one place.
 //
-// THE LIST IS FLAT, AND THIS SCREEN NEVER MAKES A GROUP. The root still carries
-// "must meet all" or "must meet at least 8 of", because that is the rule for
-// the set as a whole. Below it, every row is one requirement measuring one or
-// more categories, and nothing nests. A requirement already spans categories
+// THE LIST IS FLAT, AND THIS SCREEN NEVER MAKES A GROUP. Every row is one
+// requirement measuring one or more categories, every requirement must pass,
+// and nothing nests. A requirement already spans categories
 // ("Speaking" is Journal Club plus Media Speaking), so the compound rule that
 // nesting existed for is one ordinary row, and the second level bought nothing
 // but a tree an officer had to hold in their head. Sets written before this can
@@ -96,11 +95,9 @@ export function createRequirements(ctx) {
     problemsTitle: $('set-problems-title'),
     problemsList: $('set-problems-list'),
     body: $('requirements-body'),
-    sentence: $('root-sentence'),
     tree: $('rule-tree'),
     footer: $('rule-footer'),
     addRequirement: $('add-requirement'),
-    newCategory: $('new-category'),
     discardDraft: $('discard-draft'),
     publishBottom: $('publish-bottom'),
     previewLine: $('preview-line'),
@@ -328,18 +325,12 @@ export function createRequirements(ctx) {
   function renderTree() {
     state.rows.clear();
 
-    el.sentence.replaceChildren(
-      'A member must meet ',
-      ...(state.root ? groupControl(state.root) : ['every requirement']),
-      ' of the following:',
-    );
-
     if (!state.root) {
       el.tree.replaceChildren(h('p', { class: 'muted' }, 'Nothing to check yet.'));
       return;
     }
 
-    const rows = flatten(state.root).slice(1); // the root is the sentence above
+    const rows = flatten(state.root).slice(1); // the root is structural, not a rule row
     if (!rows.length) {
       el.tree.replaceChildren(
         h(
@@ -377,7 +368,7 @@ export function createRequirements(ctx) {
 
     const line = h('div', { class: 'rule-line' });
     line.append(labelField(item));
-    if (item.type === 'group') line.append('must meet ', ...groupControl(item), ' of:');
+    if (item.type === 'group') line.append(groupSummary(item));
     else line.append(...thresholdControl(item));
 
     const count = h('span', { class: 'rule-count' });
@@ -404,69 +395,12 @@ export function createRequirements(ctx) {
     });
   }
 
-  /**
-   * "( all / at least [N] )". This is the control that turns "every category"
-   * into "any 8 of 10" without anybody touching SQL.
-   *
-   * The words around it belong to the caller, because the sentence differs:
-   * the root reads "A member must meet all of the following", and a leftover
-   * group reads "Editorial Points must meet all of".
-   */
-  function groupControl(item) {
-    const all = item.min_children_passing === null || item.min_children_passing === undefined;
-    const name = `mode-${item.id}`;
-
-    const number = h('input', {
-      class: 'rule-number rule-number-small',
-      type: 'number',
-      min: '1',
-      step: '1',
-      value: all ? '' : String(item.min_children_passing),
-      disabled: !canEdit() || all,
-      'aria-label': 'How many must pass',
-      onInput: (event) => {
-        const value = Number(event.target.value);
-        if (!Number.isFinite(value) || value < 1) return;
-        queueEdit(item, { min_children_passing: Math.round(value) });
-      },
-    });
-
-    const radio = (checked, label, onPick) =>
-      h(
-        'label',
-        { class: 'rule-choice' },
-        h('input', {
-          type: 'radio',
-          name,
-          checked,
-          disabled: !canEdit(),
-          onChange: onPick,
-        }),
-        label,
-      );
-
-    return [
-      h(
-        'span',
-        { class: 'rule-mode' },
-        // The two handlers reach straight into the number box rather than
-        // redrawing the row, because redrawing takes the focus out of whatever
-        // the officer is in the middle of.
-        radio(all, 'all', () => {
-          number.disabled = true;
-          number.value = '';
-          queueEdit(item, { min_children_passing: null }, { now: true });
-        }),
-        radio(!all, 'at least', () => {
-          const wanted = item.min_children_passing ?? Math.max(1, item.children.length);
-          number.disabled = false;
-          number.value = String(wanted);
-          number.focus();
-          queueEdit(item, { min_children_passing: wanted }, { now: true });
-        }),
-        number,
-      ),
-    ];
+  // Groups can only survive in historical sets written before the editor was
+  // flattened. They remain readable and can be ungrouped, but their pass mode
+  // is no longer editable in the Honorary requirements workspace.
+  function groupSummary(item) {
+    const wanted = item.min_children_passing;
+    return wanted === null || wanted === undefined ? 'includes:' : `includes ${wanted} of:`;
   }
 
   /**
@@ -767,7 +701,6 @@ export function createRequirements(ctx) {
     const busy = state.inFlight > 0;
     const editable = canEdit();
     el.addRequirement.disabled = !editable || busy;
-    el.newCategory.disabled = !editable || busy;
     el.discardDraft.disabled = !editable || busy;
     el.editAsDraft.disabled = busy;
     el.publish.disabled = busy;
@@ -918,7 +851,7 @@ export function createRequirements(ctx) {
    * category is attached to it straight away, because an officer who typed
    * "Journal Club" into a rule meant that rule to measure it.
    */
-  async function newCategory(item = null) {
+  async function newCategory(item) {
     const made = await askForCategory();
     if (!made) return;
 
@@ -945,16 +878,11 @@ export function createRequirements(ctx) {
 
     state.categories.push(category);
     state.categoryById.set(category.id, category);
-    // The categories screen is showing the same rows, so it re-reads them.
+    // The category manager is showing the same rows, so it re-reads them.
     ctx.onCategoriesChanged?.();
     setSaving(false, `${category.name} added.`);
 
-    if (item) {
-      await addCategory(item, category);
-      return;
-    }
-    renderTree();
-    announce(`${category.name} added.`);
+    await addCategory(item, category);
   }
 
   function askForCategory() {
@@ -1277,7 +1205,6 @@ export function createRequirements(ctx) {
     el.publishBottom.addEventListener('click', publish);
 
     el.addRequirement.addEventListener('click', addRequirement);
-    el.newCategory.addEventListener('click', () => newCategory(null));
     el.discardDraft.addEventListener('click', discardDraft);
 
     for (const dialog of [el.publishDialog, el.discardDialog, el.categoryDialog]) {

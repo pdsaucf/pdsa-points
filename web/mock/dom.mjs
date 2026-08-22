@@ -465,6 +465,7 @@ export function installDom(html) {
       return null;
     },
     createElement: (tag) => new ShimNode(tag),
+    createElementNS: (_namespace, tag) => new ShimNode(tag),
     createTextNode: (value) => new ShimText(value),
     querySelector: (selector) => root.querySelector(selector),
     querySelectorAll: (selector) => root.querySelectorAll(selector),

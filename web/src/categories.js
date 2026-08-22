@@ -27,7 +27,7 @@
 // to be warned about. The slug is generated once, at creation, and is never
 // shown: it is an identifier, and an officer has no use for it.
 //
-// A CATEGORY IS A NAME AND AN ORDER, AND THAT IS THE WHOLE SCREEN. It used to
+// A CATEGORY IS A NAME AND AN ORDER, AND THAT IS THE WHOLE MANAGER. It used to
 // carry two more controls, and migration 22 removed both because neither did
 // anything:
 //
@@ -304,6 +304,7 @@ export function createCategories(ctx) {
         announce(said);
       }
       render();
+      ctx.onCategoryManagerChanged?.();
     } catch (err) {
       ctx.fail(err, null);
     } finally {
@@ -333,6 +334,7 @@ export function createCategories(ctx) {
       }
       state.categories.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
       render();
+      ctx.onCategoryManagerChanged?.();
     } catch (err) {
       ctx.fail(err, null);
     } finally {
@@ -371,6 +373,7 @@ export function createCategories(ctx) {
       ctx.note(said);
       announce(said);
       render();
+      ctx.onCategoryManagerChanged?.();
     } catch (err) {
       ctx.fail(err, null);
     } finally {
@@ -449,6 +452,7 @@ export function createCategories(ctx) {
       ctx.note(said);
       announce(said);
       render();
+      ctx.onCategoryManagerChanged?.();
     } catch (err) {
       // A race: something attached this category to an event or a
       // requirement between page load and this button press, so the database

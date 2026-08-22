@@ -12,8 +12,8 @@
 //   3. That a requirement measuring TWO categories survives a round trip. The
 //      compound editorial rule is the one shape a simpler editor would quietly
 //      flatten to one category, and nothing on screen would look wrong.
-//   4. That the preview actually moves when a threshold or a group's "at least
-//      N" moves. A preview wired to nothing looks identical to a working one.
+//   4. That the preview actually moves when a requirement changes. A preview
+//      wired to nothing looks identical to a working one.
 //   5. That a validation problem lands against the requirement it belongs to
 //      rather than in a heap at the top.
 //   6. That the database's own vocabulary never reaches the screen. "node" and
@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { IDS } from './admin-fixtures.mjs';
+import { installDom } from './dom.mjs';
 
 const PORT = 8797;
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -69,6 +70,15 @@ const reset = async () => {
 };
 
 const signInAs = (email) => signInAsAccount(email, PORT);
+
+async function until(predicate, message, timeout = 4000) {
+  const stop = Date.now() + timeout;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() > stop) throw new Error(`timed out waiting: ${message}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 // The same two queries the screen makes.
 const NODE_SELECT =
@@ -119,6 +129,27 @@ await check('no em dash in anything this screen is made of', () => {
   ]) {
     assert.ok(!source.includes(emDash), `${label} contains an em dash`);
   }
+});
+
+await check('requirements and event categories share one Honorary requirements tab', () => {
+  assert.match(adminHtml, /id="tab-requirements"[^>]*>[\s\S]*?Honorary requirements/);
+  assert.doesNotMatch(adminHtml, /id="tab-categories"|id="panel-categories"/);
+
+  const panel = adminHtml.match(/<main id="panel-requirements"[\s\S]*?<\/main>/)?.[0] ?? '';
+  assert.match(panel, /id="rule-tree"/);
+  assert.match(panel, /id="category-manager"/);
+  assert.match(panel, /id="category-form"/);
+});
+
+await check('the redundant root pass-mode control is gone', () => {
+  assert.doesNotMatch(adminHtml, /id="root-sentence"/);
+  assert.doesNotMatch(sources['src/requirements.js'], /groupControl|How many must pass|mode-/);
+  assert.doesNotMatch(adminCss, /\.rule-sentence|\.rule-mode|\.rule-choice|\.rule-number-small/);
+});
+
+await check('removing the standalone category button left no stale DOM access', () => {
+  assert.doesNotMatch(adminHtml, /id="new-category"/);
+  assert.doesNotMatch(sources['src/requirements.js'], /el\.newCategory\b/);
 });
 
 /**
@@ -459,25 +490,6 @@ await check('lowering a threshold lets more members through', async () => {
   // draft was cloned from rather than from this one's leftovers.
   await patch('requirement_nodes', { id: `eq.${gbms.id}` }, { min_value: 9 });
   assert.equal((await previewOf(draftId)).get(draft.root.id).passing, before);
-});
-
-await check('a group\'s "at least N" is a data change, not a deploy', async () => {
-  const draft = await loadSet(draftId);
-  const strict = (await previewOf(draftId)).get(draft.root.id).passing;
-
-  // "any 4 of the 5", which is the "any 8 of 10" ask from the data model doc.
-  const rows = await patch(
-    'requirement_nodes',
-    { id: `eq.${draft.root.id}` },
-    { min_children_passing: 4 },
-  );
-  assert.equal(rows.length, 1);
-  const loose = (await previewOf(draftId)).get(draft.root.id).passing;
-  assert.ok(loose > strict, `"at least 4" changed nothing: ${strict} then ${loose}`);
-
-  await patch('requirement_nodes', { id: `eq.${draft.root.id}` }, { min_children_passing: null });
-  const back = (await previewOf(draftId)).get(draft.root.id).passing;
-  assert.equal(back, strict, 'putting it back to "all" did not put the count back');
 });
 
 let addedId = null;
@@ -822,6 +834,78 @@ await check('retiring is archiving: the row stays, and the rule now says it is r
 await check('the requirements editor never deletes a category; only categories.js does, and only when nothing references it (see verify-categories.mjs)', () => {
   assert.doesNotMatch(sources['src/requirements.js'], /remove\(\s*['"]categories['"]/);
   assert.match(sources['src/categories.js'], /remove\(\s*['"]categories['"]/);
+});
+
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe combined workspace in the shipped page\n');
+// ---------------------------------------------------------------------------
+
+await reset();
+await signInAs('officers@pdsaucf.com');
+
+const dom = installDom(adminHtml);
+globalThis.CSS = { escape: (value) => String(value) };
+globalThis.window = {
+  location: {
+    origin: `http://localhost:${PORT}`,
+    pathname: '/admin/',
+    href: `http://localhost:${PORT}/admin/`,
+    replace() {},
+  },
+  history: { replaceState() {} },
+};
+
+const { start } = await import('../src/admin.js');
+start();
+
+await check('published requirements render above the category manager', async () => {
+  await until(() => !dom.$('view-app').hidden, 'the admin shell never opened');
+  dom.click(dom.$('tab-requirements'));
+  await until(() => !dom.$('requirements-body').hidden, 'the requirement rows stayed hidden');
+
+  const tree = dom.$('rule-tree');
+  const rows = tree.querySelectorAll('.rule-row');
+  assert.ok(rows.length > 0, 'the combined workspace rendered no requirements');
+  const panelChildren = dom.$('panel-requirements').childNodes;
+  assert.ok(
+    panelChildren.indexOf(dom.$('requirements-body')) <
+      panelChildren.indexOf(dom.$('category-manager')),
+    'event categories were not placed after the requirements',
+  );
+});
+
+await check('Writing visibly accepts PDSA Post or Media Writing', () => {
+  const writing = dom
+    .$('rule-tree')
+    .querySelectorAll('.rule-row')
+    .find((row) => row.querySelector('.rule-label')?.value === 'Writing');
+  assert.ok(writing, 'Writing was not rendered');
+  assert.match(writing.textContent, /PDSA Post/);
+  assert.match(writing.textContent, /Media Writing/);
+});
+
+await check('editing as a draft keeps Writing and both category choices editable', async () => {
+  dom.click(dom.$('edit-as-draft'));
+  await until(() => dom.$('set-status').textContent.trim() === 'Draft', 'the draft never opened');
+  await until(
+    () =>
+      dom
+        .$('rule-tree')
+        .querySelectorAll('.rule-row')
+        .find((row) => row.querySelector('.rule-label')?.value === 'Writing')
+        ?.querySelector('.rule-label')?.disabled === false,
+    'the draft requirement rows stayed read only',
+  );
+
+  const writing = dom
+    .$('rule-tree')
+    .querySelectorAll('.rule-row')
+    .find((row) => row.querySelector('.rule-label')?.value === 'Writing');
+  assert.ok(writing, 'Writing disappeared from the draft');
+  assert.equal(writing.querySelector('.rule-label').disabled, false);
+  assert.ok(writing.querySelector('.chip-add'), 'Writing cannot accept another category');
+  assert.match(writing.textContent, /PDSA Post/);
+  assert.match(writing.textContent, /Media Writing/);
 });
 
 // ---------------------------------------------------------------------------

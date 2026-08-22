@@ -27,11 +27,14 @@
 // Run: node web/mock/verify-categories.mjs   (or npm run verify:categories, from web/)
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { IDS } from './admin-fixtures.mjs';
 
 const PORT = 8801;
+const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 globalThis.__PDSA_CONFIG__ = {
   SUPABASE_URL: `http://localhost:${PORT}`,
@@ -86,6 +89,17 @@ const requirementUsage = () =>
   });
 
 const server = await startMock(PORT);
+
+await check('manager edits refresh every admin screen that consumes categories', async () => {
+  const categoriesSource = await readFile(`${WEB_ROOT}src/categories.js`, 'utf8');
+  const adminSource = await readFile(`${WEB_ROOT}src/admin.js`, 'utf8');
+
+  assert.match(categoriesSource, /ctx\.onCategoryManagerChanged\?\.\(\)/);
+  const callback = adminSource.match(/onCategoryManagerChanged:[\s\S]*?\n    },/)?.[0] ?? '';
+  assert.match(callback, /app\.requirements\?\.reload\(\)/);
+  assert.match(callback, /app\.events\?\.reload\(\)/);
+  assert.match(callback, /app\.progress\?\.reload\(\)/);
+});
 
 // ---------------------------------------------------------------------------
 process.stdout.write('\nthe year-scoping trap\n');

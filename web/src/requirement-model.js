@@ -26,8 +26,8 @@
 // data rather than string literals spread through the renderer.
 //
 // THE RULE LIST IS FLAT. The tree in the database still holds a root group,
-// which is what "must meet all" and "must meet at least 8" are stored in, but
-// the editor no longer creates groups inside it and nothing nests. Nesting was
+// but the editor no longer exposes a pass-mode choice or creates groups inside
+// it: every top-level requirement must pass. Nesting was
 // the only part of this screen nobody could read out loud, and the one rule it
 // existed for ("Editorial Points, being Speaking and Writing") is two ordinary
 // requirements. Sets written before that can still hold a group, so buildTree()

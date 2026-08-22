@@ -19,11 +19,11 @@ import { createMember } from './member.js';
 import { createStorage } from './storage.js';
 import { $, h, announce, setHidden } from './ui.js';
 
-// The seven panels, in tab order. Each one is mounted once and reloaded when
+// The six panels, in tab order. Each one is mounted once and reloaded when
 // the year changes, so switching tabs costs nothing. Events is first: it is
 // where an officer's day starts (make the event, print the code), and the
 // app lands on it (see start()).
-const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage'];
+const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'storage'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -249,10 +249,17 @@ function context() {
     onRosterChanged: () => {
       app.progress?.reload();
     },
-    // The requirements screen can make a category, so the screen that manages
-    // them re-reads rather than showing a list that is one row short.
+    // Requirements and Events can make a category inline. The manager in the
+    // Honorary requirements workspace re-reads the shared category table.
     onCategoriesChanged: () => {
       app.categories?.reload();
+    },
+    // Renaming, reordering or retiring a category changes every screen that
+    // consumes the shared category table.
+    onCategoryManagerChanged: () => {
+      app.requirements?.reload();
+      app.events?.reload();
+      app.progress?.reload();
     },
     // A new or edited event can change which events the review queue's
     // filter offers, and an event's categories changing can change the
@@ -344,7 +351,6 @@ function cacheElements() {
       progress: $('tab-progress'),
       roster: $('tab-roster'),
       requirements: $('tab-requirements'),
-      categories: $('tab-categories'),
       storage: $('tab-storage'),
     },
     panels: {
@@ -353,7 +359,6 @@ function cacheElements() {
       progress: $('panel-progress'),
       roster: $('panel-roster'),
       requirements: $('panel-requirements'),
-      categories: $('panel-categories'),
       storage: $('panel-storage'),
       member: $('panel-member'),
     },

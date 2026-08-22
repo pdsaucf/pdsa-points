@@ -10,7 +10,7 @@ spreadsheet. Target feel: **spreadsheet-simple, six screens, no jargon**. The wo
 points.pdsaucf.com/admin
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ PDSA Points   [2025-2026 ▾]        Dashboard  Review 12  Events          │
-│                                    Requirements  Members  Progress   BL ▾│
+│                          Honorary requirements  Members  Progress   BL ▾│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,14 +157,12 @@ what replaces hand-copying 69 names into two tabs.
 
 ---
 
-## 4 · Requirements (the engine, in plain English)
+## 4 · Honorary requirements
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Requirements · 2025-2026           Status: Published   [ Edit as draft ] │
+│ Honorary requirements · 2025-2026  Status: Published   [ Edit as draft ] │
 │                                                   [ Copy from 2024-2025 ]│
-│ To be an Honorary Member, a member must meet  ( ◉ all  ○ at least [ ] )  │
-│ of the following:                                                        │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
 │ │ ⠿ GBMs                     at least [  9 ] from ⟨GBMs⟩         63 ✓ ⋯│ │
 │ │ ⠿ Volunteering             at least [ 25 ] from ⟨Volunteering⟩  66 ✓ ⋯│ │
@@ -174,17 +172,22 @@ what replaces hand-copying 69 names into two tabs.
 │ │ ⠿ Speaking     at least [ 1 ] from ⟨Journal Club⟩ ⟨Media Speaking⟩ ⋯│ │
 │ │ ⠿ Writing      at least [ 1 ] from ⟨PDSA Post⟩ ⟨Media Writing⟩     ⋯│ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
-│ [ Add requirement ] [ New event category ]  [ Discard draft ] [ Publish ]│
+│ [ Add requirement ]                         [ Discard draft ] [ Publish ]│
 │                                                                          │
 │ Preview with today's data:  45 of 355 members would qualify  ( was 45 )  │
+│                                                                          │
+│ Event categories                                                         │
+│ New event category [ Journal Club                         ] [ Add ]       │
+│ [ GBMs                                      ↑  ↓  Retire ]               │
+│ [ Volunteering                              ↑  ↓  Retire ]               │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 Everything an officer needs is on one screen, and it reads as sentences. Nobody is
 told they are editing a node graph.
 
-**A category is a name.** The categories screen is a list of names in an order, with
-Retire on each. It carried a "Measured in" picker (Events, Hours, Points) and a "Counts
+**A category is a name.** The lower half of this workspace is a list of names in an
+order, with Retire on each. It carried a "Measured in" picker (Events, Hours, Points) and a "Counts
 toward points" checkbox until migration 22; the picker only ever changed the word beside
 a number, and the checkbox was false for Volunteering hours alone. There is one unit and
 it is points, so a requirement reads "at least 9 from GBMs" and the chips say what is
@@ -194,11 +197,11 @@ being counted.
 already spans categories, so "Editorial Points, being Speaking and Writing" is two
 ordinary rows measuring two categories each, and the level of nesting that shape
 seemed to need bought nothing except a tree an officer had to hold in their head.
-The root still carries "must meet all" or "must meet at least 8 of", because that is
-the rule for the set as a whole. Sets written before this can still hold a group:
-those rows carry **Ungroup**, which lifts what is inside them to the top level and
-then deletes the empty group. Groups are never deleted with requirements still in
-them, because `parent_id` cascades.
+Every top-level requirement must pass. The structural root is not shown as a second
+rule above the list. Sets written before this can still hold a group: those rows carry
+**Ungroup**, which lifts what is inside them to the top level and then deletes the empty
+group. Groups are never deleted with requirements still in them, because `parent_id`
+cascades.
 
 Four details that matter:
 
@@ -206,7 +209,7 @@ Four details that matter:
   threshold surfaces. Adding a fourth source is one chip.
 - **A category is made from inside a rule.** The picker on every requirement ends in
   "New event category", and the one it creates is attached to that requirement. It is
-  the same row the categories screen manages, not a second kind of thing.
+  the same row the lower half of this workspace manages, not a second kind of thing.
 - **The live preview** ("45 of 355 would qualify, was 45") is the safety rail. Nobody
   changes a threshold blind, because the consequence is on screen before publishing.
 - **Publish is explicit, and Discard draft is the way back.** Edits save as they are
