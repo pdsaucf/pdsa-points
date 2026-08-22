@@ -78,33 +78,6 @@
   --tap: 48px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14120e;
-    --surface: #1e1b16;
-    --ink: #f2efe8;
-    --ink-muted: #a8a091;
-    --line: #332e26;
-    --line-strong: #4a4338;
-
-    /* The accent and its ink swap roles in dark, as they already did. */
-    --accent: #b79bdf;
-    --accent-ink: #1b1226;
-    --accent-soft: #2a2135;
-
-    --gold: #e6c845;
-    --gold-ink: #241f14;
-    --gold-soft: #2e2716;
-
-    --danger: #ffb3ab;
-    --danger-soft: #33191a;
-    --ok: #9fe0b8;
-    --ok-soft: #16271b;
-
-    --focus: #7cc0f5;
-  }
-}
-
 *,
 *::before,
 *::after {

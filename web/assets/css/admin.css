@@ -84,37 +84,6 @@
   --shadow: 0 1px 2px rgba(42, 39, 33, 0.07), 0 4px 12px rgba(42, 39, 33, 0.06);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14120e;
-    --surface: #1e1b16;
-    --surface-sunken: #17140f;
-    --ink: #f2efe8;
-    --ink-muted: #a8a091;
-    --line: #332e26;
-    --line-strong: #4a4338;
-
-    /* The accent and its ink swap roles in dark, as they already did. */
-    --accent: #b79bdf;
-    --accent-ink: #1b1226;
-    --accent-soft: #2a2135;
-
-    --gold: #e6c845;
-    --gold-ink: #241f14;
-    --gold-soft: #2e2716;
-
-    --danger: #ffb3ab;
-    --danger-soft: #33191a;
-    --ok: #9fe0b8;
-    --ok-soft: #16271b;
-    --warn: #efb37c;
-    --warn-soft: #2e2317;
-
-    --focus: #7cc0f5;
-    --shadow: none;
-  }
-}
-
 *,
 *::before,
 *::after {
