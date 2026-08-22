@@ -102,19 +102,24 @@ holds when the caller is a stranger with a phone.
 │ ┌──────────────────────────────┐ │
 │ │ What is an Honorary Member?  │ │
 │ │ Honorary Members are those   │ │
-│ │ who go above and beyond to   │ │
-│ │ be an active and valuable    │ │
-│ │ member to PDSA. To reach     │ │
-│ │ Honorary Member status,      │ │
-│ │ certain requirements must be │ │
-│ │ met.                         │ │
+│ │ who go above and beyond as   │ │
+│ │ active and engaged members   │ │
+│ │ of PDSA.                     │ │
 │ │                              │ │
+│ │ Requirements                 │ │
 │ │ GBMs                     9   │ │
 │ │ Volunteering            25   │ │
 │ │ Socials                  6   │ │
 │ │ Speaking                 1   │ │
 │ │   Journal Club,              │ │
 │ │   Media Speaking             │ │
+│ │                              │ │
+│ │ Why become an Honorary       │ │
+│ │ Member? ...                  │ │
+│ │ Do I have to become an       │ │
+│ │ Honorary Member? ...         │ │
+│ │ What does being an Honorary  │ │
+│ │ Member represent? ...        │ │
 │ └──────────────────────────────┘ │
 └──────────────────────────────────┘
 ```
@@ -123,6 +128,10 @@ Both lists are generated from the published requirement set, so a category added
 September appears in September with no code change. Nothing about this year's categories
 is baked into the page, and `mock/verify-portal.mjs` renames a requirement mid-run and
 requires the screen to follow it.
+
+The three questions below the requirements are fixed copy, not published rules: why the
+distinction is worth having, that it is optional, and what it represents. They answer
+questions members already ask officers, so the page answers them once instead.
 
 The box at the bottom is what the page says before anybody has typed anything, which is
 the common case for somebody who followed a link from a group chat.

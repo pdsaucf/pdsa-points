@@ -519,10 +519,25 @@ body {
   color: var(--ink);
 }
 
+.honorary-subhead {
+  margin: 1rem 0 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
 .honorary-list {
   margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
+}
+
+.honorary-answer {
+  margin: 0;
+  color: var(--ink);
+}
+
+.honorary-answer + .honorary-answer {
+  margin-top: 0.5rem;
 }
 
 .honorary-row {

@@ -413,9 +413,8 @@ await check('the blurb is on the page, and it is the words the club asked for', 
   assert.match(body, /What is an Honorary Member\?/);
   assert.match(
     body,
-    /Honorary Members are those who go above and beyond to be an active and valuable member to PDSA\./,
+    /Honorary Members are those who go above and beyond as active and engaged members of PDSA\./,
   );
-  assert.match(body, /To reach Honorary Member status, certain requirements must be met\./);
 });
 
 await check('the number a requirement asks for is beside it, with no noun on it', async () => {
