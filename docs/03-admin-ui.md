@@ -148,7 +148,7 @@ narrow thing (print the code, change the fields); this is where the attendees ar
 │ [Back]  56 records   [QR] [Preview check-in] [Edit] [Duplicate] [Delete] │
 │                                                                          │
 │ Spring GBM 5                                                             │
-│ Aug 11 · HPA-1 205   ● Open    ⟨GBMs · 1⟩                                │
+│ Aug 11               ● Open    ⟨GBMs · 1⟩                                │
 │ Check-in has no close time                                               │
 │                                                                          │
 │ ┌────────┐┌────────┐┌────────┐┌─────────────┐┌───────────────┐           │
@@ -249,7 +249,8 @@ is the real check-in page, so a check-in made from it is a real check-in.
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Soap Carving                                         [ Save ] [ Cancel ] │
-│ Date [2026-03-05]   Term [Spring 2026 ▾]   Location [ HPA-1 205 ]        │
+│ Date [2026-03-05]   Term [Spring 2026 ▾]                                │
+│ Event starts [2026-03-05 18:00]  Event ends [2026-03-05 20:00]          │
 │                                                                          │
 │ Counts toward                                          [+ add category]  │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
@@ -269,6 +270,11 @@ is the real check-in page, so a check-in made from it is a real check-in.
 │           [ Print sheet ]  [ Download PNG ]  [ Rotate link ]             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+Event start and end are entered in America/New_York and stored as instants. Both may
+be blank, but one cannot be saved without the other and the end must be later. They are
+the actual event schedule, not the check-in window, and duration never affects credit
+or Honorary status. The old Location field has been removed from the schema and editor.
 
 ---
 

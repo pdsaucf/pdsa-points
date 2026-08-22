@@ -136,7 +136,7 @@
               class="input"
               type="search"
               autocomplete="off"
-              placeholder="Title or place"
+              placeholder="Title"
             />
           </div>
           <div class="toolbar-field toolbar-field-narrow">
@@ -255,15 +255,18 @@
             <label class="label" for="event-date">Date</label>
             <input id="event-date" class="input" type="date" required />
 
+            <label class="label" for="event-starts">Event starts (Eastern time)</label>
+            <input id="event-starts" class="input" type="datetime-local" />
+
+            <label class="label" for="event-ends">Event ends (Eastern time)</label>
+            <input id="event-ends" class="input" type="datetime-local" />
+
             <label class="label" for="event-closes">Check-in closes</label>
             <input id="event-closes" class="input" type="datetime-local" />
             <label class="event-checkbox">
               <input id="event-no-close" type="checkbox" />
               No close time
             </label>
-
-            <label class="label" for="event-location">Location</label>
-            <input id="event-location" class="input" type="text" autocomplete="off" />
 
             <div id="event-term-field" hidden>
               <label class="label" for="event-term">Term</label>

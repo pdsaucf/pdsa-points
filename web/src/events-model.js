@@ -74,6 +74,53 @@ export function fromDatetimeLocalValue(value) {
   return date.toISOString();
 }
 
+const NEW_YORK_ZONE = 'America/New_York';
+
+const nyFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: NEW_YORK_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** An instant rendered for the event editor in America/New_York. */
+export function toNewYorkDatetimeLocalValue(isoTimestamp) {
+  if (!isoTimestamp) return '';
+  const instant = new Date(isoTimestamp);
+  if (Number.isNaN(instant.getTime())) return '';
+  const parts = Object.fromEntries(
+    nyFormatter.formatToParts(instant).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+/**
+ * An America/New_York wall-clock value converted to an instant. If the field
+ * has not changed, preserve the original ISO timestamp exactly. Trying both
+ * New York UTC offsets also rejects nonexistent spring-forward times.
+ */
+export function fromNewYorkDatetimeLocalValue(value, originalIso = null) {
+  if (!value) return null;
+  if (originalIso && toNewYorkDatetimeLocalValue(originalIso) === value) return originalIso;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(value));
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match.map((part, index) =>
+    index === 0 ? part : Number(part),
+  );
+  const wallUtc = Date.UTC(year, month - 1, day, hour, minute);
+  for (const offsetHours of [4, 5]) {
+    const candidate = new Date(wallUtc + offsetHours * 60 * 60 * 1000);
+    if (toNewYorkDatetimeLocalValue(candidate.toISOString()) === value) {
+      return candidate.toISOString();
+    }
+  }
+  return null;
+}
+
 /**
  * "Open" when check-in has no closing time or it has not passed yet,
  * "Closed" otherwise. checkin_opens_at is never set by this screen (see the
@@ -322,7 +369,7 @@ export function filterEvents(events, { tab = 'all', query = '', status = 'all' }
     }
 
     if (needle) {
-      const haystack = `${event.title ?? ''} ${event.location ?? ''}`.toLowerCase();
+      const haystack = String(event.title ?? '').toLowerCase();
       if (!haystack.includes(needle)) return false;
     }
 
@@ -494,7 +541,8 @@ export function duplicateDraft(event, today) {
   return {
     title: event?.title ?? '',
     occurred_on: today,
-    location: event?.location ?? null,
+    starts_at: null,
+    ends_at: null,
     term_id: event?.term_id ?? null,
     categories: (event?.event_categories ?? []).map((link) => ({
       category_id: link.category_id,

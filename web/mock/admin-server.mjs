@@ -672,6 +672,53 @@ function memberStatusRows() {
   return out;
 }
 
+/** The public portal_scorecard payload, reusable inside portal_attendance. */
+function portalScorecardSnapshot(memberId, year = portalYear()) {
+  if (!year) return null;
+  const member = db.members.find((row) => row.id === memberId) ?? null;
+  const enrollment = db.member_enrollments.find(
+    (row) => row.member_id === memberId && row.academic_year_id === year.id,
+  );
+  if (!member || member.archived_at || member.merged_into_id || !enrollment) return null;
+
+  const status = memberStatusRows().find(
+    (row) => row.member_id === member.id && row.academic_year_id === year.id,
+  );
+  const index = totalsByMember(year.id);
+  const totals = index.get(member.id) ?? new Map();
+  const set = publishedSetFor(year.id);
+  const categories = db.categories
+    .filter((row) => !row.archived_at)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    .map((row) => ({ id: row.id, name: row.name, total: totals.get(row.id) ?? 0 }));
+  const requirements = set
+    ? evaluateSet(set.id, member.id, index).map((row) => {
+        const node = db.requirement_nodes.find((one) => one.id === row.node_id) ?? {};
+        return {
+          ...row,
+          sort_order: node.sort_order ?? 0,
+          category_ids: db.requirement_node_categories
+            .filter((link) => link.node_id === row.node_id)
+            .map((link) => link.category_id),
+        };
+      })
+    : [];
+
+  return {
+    year: { id: year.id, label: year.label },
+    member: {
+      id: member.id,
+      display_name: member.display_name,
+      joined_on: enrollment.joined_on ?? null,
+    },
+    point_total: status?.point_total ?? 0,
+    is_honorary: Boolean(status?.is_honorary),
+    categories,
+    requirements,
+    root_node_id: set?.root_node_id ?? null,
+  };
+}
+
 /**
  * v_possible_duplicate_members.
  *
@@ -1106,7 +1153,8 @@ const INSERT_DEFAULTS = {
   events: (row, auth) => ({
     id: uuid('e9000000-0000-4000-a000-'),
     term_id: null,
-    location: null,
+    starts_at: null,
+    ends_at: null,
     notes: null,
     review_policy: 'manual_review',
     checkin_token: randomBytes(9).toString('base64url'),
@@ -3910,59 +3958,14 @@ export const ADMIN_RPC = {
       return;
     }
 
-    const member = db.members.find((row) => row.id === body.p_member_id) ?? null;
-    const enrollment = db.member_enrollments.find(
-      (row) => row.member_id === body.p_member_id && row.academic_year_id === year.id,
-    );
-    if (!member || member.archived_at || member.merged_into_id || !enrollment) {
+    const snapshot = portalScorecardSnapshot(body.p_member_id, year);
+    if (!snapshot) {
       record({ fn: 'portal_scorecard', outcome: 'PDS03' });
       pds(res, 'PDS03', 'Nobody by that name is on this years roster.');
       return;
     }
-
-    const status = memberStatusRows().find(
-      (row) => row.member_id === member.id && row.academic_year_id === year.id,
-    );
-    const index = totalsByMember(year.id);
-    const totals = index.get(member.id) ?? new Map();
-    const set = publishedSetFor(year.id);
-
-    const categories = db.categories
-      .filter((row) => !row.archived_at)
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        total: totals.get(row.id) ?? 0,
-      }));
-
-    const requirements = set
-      ? evaluateSet(set.id, member.id, index).map((row) => {
-          const node = db.requirement_nodes.find((one) => one.id === row.node_id) ?? {};
-          return {
-            ...row,
-            sort_order: node.sort_order ?? 0,
-            category_ids: db.requirement_node_categories
-              .filter((link) => link.node_id === row.node_id)
-              .map((link) => link.category_id),
-          };
-        })
-      : [];
-
-    record({ fn: 'portal_scorecard', memberId: member.id });
-    json(res, 200, {
-      year: { id: year.id, label: year.label },
-      member: {
-        id: member.id,
-        display_name: member.display_name,
-        joined_on: enrollment.joined_on ?? null,
-      },
-      point_total: status?.point_total ?? 0,
-      is_honorary: Boolean(status?.is_honorary),
-      categories,
-      requirements,
-      root_node_id: set?.root_node_id ?? null,
-    });
+    record({ fn: 'portal_scorecard', memberId: snapshot.member.id });
+    json(res, 200, snapshot);
   },
 
   /** portal_leaderboard() returns jsonb */
@@ -4028,16 +4031,7 @@ export const ADMIN_RPC = {
     });
   },
 
-  /**
-   * portal_attendance(p_member_id uuid) returns jsonb
-   *
-   * Migration 23. Every published event of this year, by category, with what
-   * this member did about each one. The three rules that are easy to get
-   * subtly wrong and are therefore written out rather than inlined: a live
-   * record beats a superseded rejected one, an archived category still shows
-   * when the member has a record in it, and credit comes off creditRows()
-   * rather than being worked out a second time here.
-   */
+  /** portal_attendance(p_member_id uuid) returns one row per event. */
   portal_attendance(res, body, req, helpers) {
     const { json, pds } = helpers;
     const year = portalYear();
@@ -4082,73 +4076,59 @@ export const ADMIN_RPC = {
       credit.set(`${row.attendance_id}:${row.category_id}`, row.credit);
     }
 
-    const heldCategories = new Set();
-    for (const eventId of mine.keys()) {
-      for (const link of db.event_categories) {
-        if (link.event_id === eventId) heldCategories.add(link.category_id);
-      }
-    }
-
-    const totals = totalsByMember(year.id).get(member.id) ?? new Map();
-
-    const categories = db.categories
-      .filter((row) => !row.archived_at || heldCategories.has(row.id))
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name))
-      .map((category) => {
-        const events = db.events
-          .filter(
-            (event) =>
-              event.academic_year_id === year.id &&
-              event.is_published &&
-              db.event_categories.some(
-                (link) => link.event_id === event.id && link.category_id === category.id,
-              ),
-          )
-          .sort(
-            (a, b) =>
-              String(a.occurred_on).localeCompare(String(b.occurred_on)) ||
-              a.title.localeCompare(b.title),
-          )
-          .map((event) => {
-            const held = mine.get(event.id) ?? null;
-            const open =
-              event.checkin_closes_at && new Date(event.checkin_closes_at) > now ? true : false;
-            const status =
-              held?.status === 'approved'
-                ? 'attended'
-                : held?.status === 'pending'
-                  ? 'waiting'
-                  : held?.status === 'rejected'
-                    ? 'declined'
-                    : event.occurred_on > today || open
-                      ? 'upcoming'
-                      : 'none';
+    const events = db.events
+      .filter((event) => event.academic_year_id === year.id && event.is_published)
+      .sort(
+        (a, b) =>
+          String(b.occurred_on).localeCompare(String(a.occurred_on)) ||
+          a.title.localeCompare(b.title),
+      )
+      .map((event) => {
+        const held = mine.get(event.id) ?? null;
+        const open = event.checkin_closes_at && new Date(event.checkin_closes_at) > now;
+        const status =
+          held?.status === 'approved'
+            ? 'attended'
+            : held?.status === 'pending'
+              ? 'waiting'
+              : held?.status === 'rejected'
+                ? 'declined'
+                : event.occurred_on > today || open
+                  ? 'upcoming'
+                  : 'none';
+        const categories = db.event_categories
+          .filter((link) => link.event_id === event.id)
+          .map((link) => {
+            const category = db.categories.find((row) => row.id === link.category_id);
             return {
-              id: event.id,
-              title: event.title,
-              occurred_on: event.occurred_on,
-              status,
+              id: link.category_id,
+              name: category?.name ?? 'Unknown category',
               credit:
                 held?.status === 'approved'
-                  ? (credit.get(`${held.id}:${category.id}`) ?? null)
+                  ? (credit.get(`${held.id}:${link.category_id}`) ?? null)
                   : null,
+              sort_order: category?.sort_order ?? 0,
             };
-          });
-
+          })
+          .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
+          .map(({ sort_order, ...category }) => category);
         return {
-          id: category.id,
-          name: category.name,
-          total: totals.get(category.id) ?? 0,
-          events,
+          id: event.id,
+          title: event.title,
+          occurred_on: event.occurred_on,
+          starts_at: event.starts_at ?? null,
+          ends_at: event.ends_at ?? null,
+          status,
+          categories,
         };
-      })
-      .filter((section) => section.events.length > 0 || section.total !== 0);
+      });
 
     record({ fn: 'portal_attendance', memberId: member.id });
     json(res, 200, {
       year: { id: year.id, label: year.label },
       member: { id: member.id, display_name: member.display_name },
-      categories,
+      scorecard: portalScorecardSnapshot(member.id, year),
+      events,
     });
   },
 

@@ -204,7 +204,6 @@ function renderForm() {
   el.eventTitle.textContent = event.title ?? 'Check in';
 
   const bits = [formatEventDate(event.occurred_on)];
-  if (event.location) bits.push(event.location);
   el.eventMeta.textContent = bits.filter(Boolean).join(' · ');
 
   const closes = formatCloseTime(event.closes_at);

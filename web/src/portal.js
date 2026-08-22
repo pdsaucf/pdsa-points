@@ -10,15 +10,16 @@
 // NOTHING ON THIS PAGE IS AUTHENTICATED, and that is deliberate rather than
 // convenient. Every call goes through api.js, which sends the anon key and never
 // a session, so this page behaves the same for a member, an officer with a
-// laptop open, and a stranger with the link. The four functions it calls are
+// laptop open, and a stranger with the link. The five functions it calls are
 // SECURITY DEFINER and shaped: they answer with the club-facing figures and
 // nothing else. The reasoning, including what that does expose, is written out
 // in supabase/migrations/20260817110000_public_member_portal.sql.
 //
 // THE VERDICT IS STILL POSTGRES'S. is_honorary and every requirement's pass or
 // fail arrive from fn_member_requirement_status() through the scorecard call.
-// Nothing here decides whether somebody is honorary (invariant 2), and nothing
-// here knows what a threshold is: it draws the rows it is given.
+// Nothing here decides whether somebody is honorary (invariant 2). It uses the
+// server's row types only to separate measured requirements from grouping rows,
+// then draws the values and verdicts it is given.
 //
 // WHAT IS SHARED WITH THE OTHER SCREENS
 //
@@ -35,6 +36,12 @@ import { describeMember } from './member-errors.js';
 import { createScorecard } from './portal-scorecard.js';
 import { createLeaderboard } from './portal-leaderboard.js';
 import { createHistory } from './portal-history.js';
+import {
+  attendancePdfFilename,
+  buildAttendancePdf,
+  loadAttendancePdfFonts,
+  saveAttendancePdf,
+} from './attendance-pdf.js';
 import { $, h, announce, setHidden } from './ui.js';
 import { installButtonIcons } from './icons.js';
 
@@ -46,6 +53,8 @@ const app = {
   tab: 'points',
   candidates: [],
   looking: false,
+  card: null,
+  attendance: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,6 +119,12 @@ function refuse(message) {
   setHidden(el.lookupError, false);
 }
 
+function showNoMatch() {
+  setHidden(el.noMatch, false);
+  el.noMatchTitle.focus();
+  announce('Name not found. Check the spelling. Only paid members are listed.');
+}
+
 async function onLookup(event) {
   event.preventDefault();
   if (app.looking) return;
@@ -123,8 +138,10 @@ async function onLookup(event) {
   }
 
   setHidden(el.lookupError, true);
+  setHidden(el.noMatch, true);
   clearMessage();
   setLooking(true);
+  announce('Looking up member.');
   try {
     const rows = await rpc('portal_find_members', {
       p_first_name: first,
@@ -133,9 +150,7 @@ async function onLookup(event) {
     const found = Array.isArray(rows) ? rows : [];
 
     if (!found.length) {
-      // Not a failure of the page, and not something a retry fixes, so it is
-      // said at the field rather than in the strip at the top.
-      refuse('Nobody by that name is on this years roster. Ask an officer.');
+      showNoMatch();
       return;
     }
     if (found.length === 1) {
@@ -205,6 +220,16 @@ const joinedLabel = (isoDate) => {
 // superseded answer is dropped rather than shown.
 let activeMemberId = null;
 
+function attendanceSnapshotMatches(attendance, memberId) {
+  const snapshot = attendance?.scorecard;
+  return Boolean(
+    snapshot?.member?.id === memberId &&
+      attendance?.member?.id === memberId &&
+      snapshot?.year?.id &&
+      snapshot.year.id === attendance?.year?.id,
+  );
+}
+
 async function show(memberId) {
   activeMemberId = memberId;
   setHidden(el.pickBlock, true);
@@ -213,12 +238,34 @@ async function show(memberId) {
   try {
     const card = await rpc('portal_scorecard', { p_member_id: memberId });
     if (activeMemberId !== memberId) return; // superseded while this was in flight
+    app.card = card;
+    app.attendance = null;
     app.scorecard.render(card);
+    el.app.classList.add('results-view');
+    el.download.disabled = true;
+    setHidden(el.downloadError, true);
     setHidden(el.lookupForm, true);
+    setHidden(el.noMatch, true);
+    // The About Q&A remains after the attendance record in this same section.
+    // Its initial introduction and general requirements would repeat the
+    // member-specific Requirement progress, so only that introductory region
+    // is put away on successful results.
+    setHidden(el.honorary, false);
+    setHidden(el.honoraryIntro, true);
     // Not awaited. The figures are the answer and they are already on screen;
     // the event list is the detail behind them and arrives when it arrives.
     // load() carries its own guard against this same staleness.
-    app.history.load(memberId);
+    app.history.load(memberId, {
+      validate: (attendance) => attendanceSnapshotMatches(attendance, memberId),
+      onReady: (attendance) => {
+        if (activeMemberId !== memberId) return;
+        const snapshot = attendance.scorecard;
+        app.scorecard.render(snapshot, { focus: false, announceStatus: false });
+        app.card = snapshot;
+        app.attendance = attendance;
+        el.download.disabled = false;
+      },
+    });
     // The name they typed is not cleared: pressing "Not you?" puts them back on
     // the form with it still in the boxes, which is what somebody who mistyped
     // one letter needs.
@@ -234,9 +281,49 @@ function forget() {
   activeMemberId = null;
   app.scorecard.clear();
   app.history.clear();
+  app.card = null;
+  app.attendance = null;
+  el.download.disabled = true;
+  setHidden(el.downloadError, true);
+  setHidden(el.noMatch, true);
   setHidden(el.lookupForm, false);
+  el.app.classList.remove('results-view');
+  setHidden(el.honorary, false);
+  setHidden(el.honoraryIntro, false);
   setHidden(el.pickBlock, app.candidates.length < 2);
   el.lookupFirst.focus();
+}
+
+async function downloadPdf() {
+  if (!app.card || !app.attendance) return;
+  const card = app.card;
+  const attendance = app.attendance;
+  const memberId = activeMemberId;
+  el.download.disabled = true;
+  setHidden(el.downloadError, true);
+  announce('Preparing download.');
+  try {
+    const fonts = await loadAttendancePdfFonts();
+    if (activeMemberId !== memberId || app.card !== card || app.attendance !== attendance) return;
+    if (!attendanceSnapshotMatches(attendance, memberId) || attendance.scorecard !== card) {
+      throw new Error('Attendance data changed before the download was ready.');
+    }
+    const blob = buildAttendancePdf({
+      card,
+      attendance,
+      ...fonts,
+    });
+    saveAttendancePdf(blob, attendancePdfFilename(card));
+    announce('PDF downloaded.');
+  } catch {
+    if (activeMemberId !== memberId || app.card !== card || app.attendance !== attendance) return;
+    setHidden(el.downloadError, false);
+    announce('Download failed.');
+  } finally {
+    if (activeMemberId === memberId && app.card === card && app.attendance === attendance) {
+      el.download.disabled = false;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +332,7 @@ function forget() {
 
 function cacheElements() {
   Object.assign(el, {
+    app: $('app'),
     message: $('screen-message'),
     messageTitle: $('screen-message-title'),
     messageBody: $('screen-message-body'),
@@ -262,8 +350,18 @@ function cacheElements() {
     lookupSubmit: $('lookup-submit'),
     lookupSubmitLabel: $('lookup-submit-label'),
 
+    noMatch: $('no-match'),
+    noMatchTitle: $('no-match-title'),
+    noMatchBoard: $('no-match-board'),
+
     pickBlock: $('pick-block'),
     pickList: $('pick-list'),
+
+    download: $('score-download'),
+    downloadError: $('download-error'),
+    downloadRetry: $('download-retry'),
+    honorary: $('honorary'),
+    honoraryIntro: $('honorary-intro'),
   });
 }
 
@@ -282,6 +380,9 @@ export function start() {
   el.tabPoints.addEventListener('click', () => selectTab('points'));
   el.tabBoard.addEventListener('click', () => selectTab('board'));
   $('score-change').addEventListener('click', forget);
+  el.noMatchBoard.addEventListener('click', () => selectTab('board'));
+  el.download.addEventListener('click', downloadPdf);
+  el.downloadRetry.addEventListener('click', downloadPdf);
 
   if (!IS_CONFIGURED) {
     el.messageTitle.textContent = 'This page is not connected yet';

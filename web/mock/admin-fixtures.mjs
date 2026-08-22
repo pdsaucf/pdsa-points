@@ -65,7 +65,8 @@ const EVENTS = [
     academic_year_id: YEAR_CURRENT,
     title: 'Spring GBM 5',
     occurred_on: '2026-08-11',
-    location: 'HPA-1 205',
+    starts_at: '2026-08-11T22:00:00.000Z',
+    ends_at: '2026-08-11T23:30:00.000Z',
     is_published: true,
   },
   {
@@ -73,7 +74,8 @@ const EVENTS = [
     academic_year_id: YEAR_CURRENT,
     title: 'Soap Carving',
     occurred_on: '2026-08-10',
-    location: 'HPA-2 118',
+    starts_at: '2026-08-10T18:00:00.000Z',
+    ends_at: '2026-08-10T20:15:00.000Z',
     is_published: true,
   },
   {
@@ -81,7 +83,8 @@ const EVENTS = [
     academic_year_id: YEAR_CURRENT,
     title: 'Give Kids A Smile',
     occurred_on: '2026-08-09',
-    location: 'UCF College of Medicine',
+    starts_at: null,
+    ends_at: null,
     is_published: true,
   },
   {
@@ -91,7 +94,8 @@ const EVENTS = [
     academic_year_id: YEAR_PAST,
     title: 'Fall GBM 1',
     occurred_on: '2025-09-04',
-    location: 'Student Union 316',
+    starts_at: null,
+    ends_at: null,
     is_published: true,
   },
   {
@@ -121,7 +125,8 @@ const EVENTS = [
     academic_year_id: YEAR_CURRENT,
     title: 'Health Fair',
     occurred_on: '2026-08-08',
-    location: 'Memory Mall',
+    starts_at: '2026-08-08T13:00:00.000Z',
+    ends_at: '2026-08-08T17:00:00.000Z',
     is_published: true,
   },
 ];
@@ -901,11 +906,11 @@ export function buildDatabase() {
   // See the STORAGE comment above for why each event and record exists.
 
   const storageEvents = [
-    { id: STORAGE.eventOldA, academic_year_id: YEAR_PAST, title: 'Career Night', occurred_on: '2025-03-10', location: 'Business Admin 101', is_published: true },
-    { id: STORAGE.eventOldB, academic_year_id: YEAR_PAST, title: 'Movie Night', occurred_on: '2025-03-24', location: 'Student Union 316', is_published: true },
-    { id: STORAGE.eventOldRejected, academic_year_id: YEAR_PAST, title: 'Blood Drive', occurred_on: '2025-04-07', location: 'Recreation and Wellness Center', is_published: true },
-    { id: STORAGE.eventOldPending, academic_year_id: YEAR_PAST, title: 'Beach Cleanup', occurred_on: '2025-04-21', location: 'Cocoa Beach', is_published: true },
-    { id: STORAGE.eventRecent, academic_year_id: YEAR_CURRENT, title: 'Trivia Night', occurred_on: '2026-08-10', location: 'HPA-1 205', is_published: true },
+    { id: STORAGE.eventOldA, academic_year_id: YEAR_PAST, title: 'Career Night', occurred_on: '2025-03-10', is_published: true },
+    { id: STORAGE.eventOldB, academic_year_id: YEAR_PAST, title: 'Movie Night', occurred_on: '2025-03-24', is_published: true },
+    { id: STORAGE.eventOldRejected, academic_year_id: YEAR_PAST, title: 'Blood Drive', occurred_on: '2025-04-07', is_published: true },
+    { id: STORAGE.eventOldPending, academic_year_id: YEAR_PAST, title: 'Beach Cleanup', occurred_on: '2025-04-21', is_published: true },
+    { id: STORAGE.eventRecent, academic_year_id: YEAR_CURRENT, title: 'Trivia Night', occurred_on: '2026-08-10', is_published: true },
   ];
 
   // Two reviewed, unpurged photos at eventOldA, plus a third that an earlier
@@ -1136,12 +1141,14 @@ export function buildDatabase() {
   const historyEvents = [];
   const addHistory = (title, categoryId, index, mode = 'fixed') => {
     const id = `h0000000-0000-4000-a000-${String(historyEvents.length + 1).padStart(12, '0')}`;
+    const firstTimedEvent = historyEvents.length === 0;
     historyEvents.push({
       id,
       academic_year_id: YEAR_CURRENT,
       title: `${title} ${index}`,
       occurred_on: '2026-08-05',
-      location: null,
+      starts_at: firstTimedEvent ? '2026-08-05T22:00:00.000Z' : null,
+      ends_at: firstTimedEvent ? '2026-08-05T23:30:00.000Z' : null,
       is_published: true,
       category_id: categoryId,
       credit_mode: mode,
@@ -1184,7 +1191,8 @@ export function buildDatabase() {
       academic_year_id: YEAR_CURRENT,
       title: 'Draft Workshop',
       occurred_on: '2026-08-12',
-      location: null,
+      starts_at: null,
+      ends_at: null,
       is_published: false,
       category_id: CATEGORIES[0].id,
     },
@@ -1193,7 +1201,8 @@ export function buildDatabase() {
       academic_year_id: YEAR_CURRENT,
       title: 'Field Day',
       occurred_on: future,
-      location: 'Memory Mall',
+      starts_at: null,
+      ends_at: null,
       is_published: true,
       category_id: CATEGORIES[2].id,
     },

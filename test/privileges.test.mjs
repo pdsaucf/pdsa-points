@@ -50,19 +50,22 @@ let db;
 // a grant on v_member_status. If one of them ever starts carrying an address, a
 // student id or an unapproved record, that test fails rather than this one.
 //
-// PORTAL_ATTENDANCE(UUID) IS A SECOND, LATER WIDENING (migration 23), and it is
+// PORTAL_ATTENDANCE(UUID) IS A SECOND, LATER WIDENING (migrations 23 and 25), and it is
 // worth being honest about what it opens rather than folding it quietly into
 // the sentence above. Migration 21 deliberately withheld a member's own
 // check-in history: "the individual records are the part an officer needs and
 // a stranger does not." The club asked for that reversed, because the
 // spreadsheet this product replaces showed a member every event of the year
 // and whether they made it, and a point total alone cannot answer that. So this
-// function hands back, for one member, every published event of this year by
-// category with attended, waiting, declined, upcoming or nothing next to each
-// one. It still carries none of an officer's context: no decline reason, no
-// flags, no reviewer, no reviewed timestamp, no photo, no other member. That
-// boundary is asserted in test/public_portal.test.mjs, the same as the other
-// four.
+// function hands back, for one member, every published event of this year once,
+// with actual start and end instants, attended, waiting, declined, upcoming or
+// nothing, and all category credits grouped on that event. Migration 25 removes
+// Location and adds the same public scorecard payload inside the response, so
+// exports use one database statement snapshot instead of mixing two requests.
+// It still carries none of an officer's context: no decline reason, no flags,
+// no reviewer, no reviewed timestamp, no check-in window, no photo, no other
+// member. That boundary is asserted in test/public_portal.test.mjs, the same as
+// the other four.
 //
 // Full signatures rather than bare names. Postgres identifies a function by
 // name AND argument types, so an overload is a different function with its own

@@ -42,7 +42,23 @@ const attendance = (memberId) => anon(`select portal_attendance($1)`, [memberId]
 const leaderboard = () => anon(`select portal_leaderboard()`);
 const requirements = () => anon(`select portal_requirements()`);
 
-const categoryIn = (card, name) => card.categories.find((c) => c.name === name);
+const categoryIn = (card, name) => {
+  if (card.categories) return card.categories.find((category) => category.name === name);
+  const events = (card.events ?? [])
+    .map((event) => {
+      const category = (event.categories ?? []).find((row) => row.name === name);
+      return category ? { ...event, credit: category.credit } : null;
+    })
+    .filter(Boolean);
+  if (!events.length) return undefined;
+  return {
+    name,
+    events,
+    total: events
+      .filter((event) => event.status === 'attended')
+      .reduce((sum, event) => sum + Number(event.credit ?? 0), 0),
+  };
+};
 const eventIn = (category, title) => category?.events.find((e) => e.title === title);
 
 test.before(async () => {
@@ -249,7 +265,7 @@ test('an id nobody has is refused the same way', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// portal_attendance(): a member's own event history (migration 23)
+// portal_attendance(): one event row plus an atomic scorecard (migration 25)
 // ---------------------------------------------------------------------------
 // Migration 21 deliberately kept individual check-ins off the portal. The club
 // asked for that reversed: every published event of the year, by category,
@@ -258,8 +274,23 @@ test('an id nobody has is refused the same way', async () => {
 // events are in scope, and that nothing an officer alone should see rides
 // along in the answer.
 
-test('every event this member could have attended is there, by category, with nothing else mixed in', async () => {
+test('every event this member could have attended is present once with grouped category credit', async () => {
   const card = await attendance(MEMBERS.ada);
+  assert.ok(Array.isArray(card.events), 'the attendance contract has no event list');
+  assert.deepEqual(Object.keys(card).sort(), ['events', 'member', 'scorecard', 'year']);
+  assert.deepEqual(Object.keys(card.scorecard).sort(), [
+    'categories',
+    'is_honorary',
+    'member',
+    'point_total',
+    'requirements',
+    'root_node_id',
+    'year',
+  ]);
+  assert.equal(card.scorecard.member.id, card.member.id);
+  assert.equal(card.scorecard.year.id, card.year.id);
+  assert.deepEqual(card.scorecard, await scorecard(MEMBERS.ada));
+  assert.equal(new Set(card.events.map((event) => event.id)).size, card.events.length);
   const gbms = categoryIn(card, 'GBMs');
   assert.ok(gbms, 'GBMs is missing from a member enrolled all year');
   assert.equal(gbms.total, 10, 'the section total disagrees with the scorecard total');
@@ -276,6 +307,27 @@ test('every event this member could have attended is there, by category, with no
   const notYetHappened = eventIn(speaking, 'Test Media Speaking Spot');
   assert.ok(notYetHappened, 'a future event this member has no record for is missing from the section');
   assert.equal(notYetHappened.status, 'upcoming');
+});
+
+test('an approval between the fast scorecard and attendance cannot mix the export snapshot', async () => {
+  const initial = await scorecard(MEMBERS.dorian);
+  await db.exec(`
+    insert into attendance_records (event_id, member_id, status, source)
+    values ('${EVENTS.tabling}', '${MEMBERS.dorian}', 'approved', 'officer_entry')
+  `);
+  const atomic = await attendance(MEMBERS.dorian);
+  const event = atomic.events.find((row) => row.id === EVENTS.tabling);
+  assert.equal(event.status, 'attended');
+  assert.notEqual(Number(atomic.scorecard.point_total), Number(initial.point_total));
+  assert.equal(atomic.scorecard.year.id, atomic.year.id);
+  assert.equal(atomic.scorecard.member.id, atomic.member.id);
+  assert.equal(
+    Number(atomic.scorecard.point_total),
+    Number((await scorecard(MEMBERS.dorian)).point_total),
+  );
+  await db.exec(
+    `delete from attendance_records where event_id = '${EVENTS.tabling}' and member_id = '${MEMBERS.dorian}'`,
+  );
 });
 
 test('a past event nobody checked in for reads as none, not as upcoming', async () => {
@@ -299,7 +351,7 @@ test('a past event nobody checked in for reads as none, not as upcoming', async 
                  delete from events where id = '${eventId}';`);
 });
 
-test('an event counting for two categories is listed under both', async () => {
+test('an event counting for two categories has both credits on one event row', async () => {
   // Soap Carving is Clinical Workshops and Socials, both fixed, and Ada
   // attended it. A history that drew only the first category link would look
   // identical everywhere else in this fixture.
@@ -310,6 +362,7 @@ test('an event counting for two categories is listed under both', async () => {
   assert.ok(socials, 'Soap Carving is missing from Socials');
   assert.equal(clinical.status, 'attended');
   assert.equal(socials.status, 'attended');
+  assert.equal(card.events.filter((event) => event.title === 'Test Soap Carving Twofer').length, 1);
 });
 
 test('pending and rejected records read as waiting and declined, not as credit', async () => {
@@ -332,13 +385,7 @@ test('an event with no record from this member carries no credit either way', as
 
 test('last years events do not appear in this years history', async () => {
   const card = await attendance(MEMBERS.ada);
-  for (const category of card.categories) {
-    assert.equal(
-      eventIn(category, 'Test Prior Year GBM Block'),
-      undefined,
-      `${category.name} carries an event from a different academic year`,
-    );
-  }
+  assert.equal(card.events.find((event) => event.title === 'Test Prior Year GBM Block'), undefined);
 });
 
 test('an unpublished event is not on a members own history either', async () => {
@@ -384,11 +431,7 @@ test('a category retired mid year still shows if this member holds credit in it'
   assert.equal(eventIn(retired, 'Test Retired Category Event').status, 'attended');
 
   const other = await attendance(MEMBERS.dorian);
-  assert.equal(
-    categoryIn(other, 'Test Retired Category'),
-    undefined,
-    'an archived category with no credit for this member should not appear',
-  );
+  assert.equal(eventIn(categoryIn(other, 'Test Retired Category'), 'Test Retired Category Event').status, 'upcoming');
 
   await db.exec(`
     delete from attendance_records where event_id = '${eventId}';
@@ -496,10 +539,48 @@ test('portal_attendance carries none of an officers context', async () => {
     'claimed_email',
     'source',
     'object_path',
+    'location',
   ]) {
     assert.ok(!text.includes(secret), `portal_attendance carries ${secret}`);
   }
   assert.deepEqual(Object.keys(card.member).sort(), ['display_name', 'id']);
+  assert.deepEqual(Object.keys(card.scorecard.member).sort(), ['display_name', 'id', 'joined_on']);
+});
+
+test('event times are optional as a pair, ordered, and returned without changing credit', async () => {
+  const before = await scorecard(MEMBERS.ada);
+  await db.exec(`
+    update events
+    set starts_at = '2026-09-10 18:00:00-04',
+        ends_at = '2026-09-10 19:30:00-04'
+    where id = '${EVENTS.gbmBlock}'
+  `);
+  const card = await attendance(MEMBERS.ada);
+  const event = card.events.find((row) => row.id === EVENTS.gbmBlock);
+  assert.ok(event.starts_at && event.ends_at);
+  assert.deepEqual(Object.keys(event).sort(), [
+    'categories', 'ends_at', 'id', 'occurred_on', 'starts_at', 'status', 'title',
+  ]);
+  const after = await scorecard(MEMBERS.ada);
+  assert.equal(Number(after.point_total), Number(before.point_total));
+  assert.equal(after.is_honorary, before.is_honorary);
+  assert.deepEqual(after.categories, before.categories);
+  assert.deepEqual(after.requirements, before.requirements);
+
+  await assert.rejects(
+    db.exec(`update events set starts_at = now(), ends_at = null where id = '${EVENTS.gbmBlock}'`),
+  );
+  await assert.rejects(
+    db.exec(`update events set starts_at = now(), ends_at = now() where id = '${EVENTS.gbmBlock}'`),
+  );
+  await db.exec(`update events set starts_at = null, ends_at = null where id = '${EVENTS.gbmBlock}'`);
+});
+
+test('events has no location column', async () => {
+  assert.equal(
+    await db.val(`select count(*)::int from information_schema.columns where table_schema = 'public' and table_name = 'events' and column_name = 'location'`),
+    0,
+  );
 });
 
 test('a member not on this years roster is refused, not zeroed, by portal_attendance too', async () => {

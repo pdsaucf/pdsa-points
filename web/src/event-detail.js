@@ -66,7 +66,7 @@ const RECORD_SELECT = [
 // The same shape the list reads, because this screen re-reads the event for
 // itself rather than trusting the copy it was handed. See open().
 const EVENT_SELECT = [
-  'id,title,occurred_on,location,term_id,checkin_token,checkin_closes_at',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');
@@ -253,9 +253,7 @@ export function createEventDetail(ctx, host) {
     el.status.textContent = status;
     el.status.dataset.status = status.toLowerCase();
 
-    el.meta.textContent = [shortDate(event.occurred_on), event.location]
-      .filter(Boolean)
-      .join(' · ');
+    el.meta.textContent = shortDate(event.occurred_on);
 
     const links = event.event_categories ?? [];
     el.chips.replaceChildren(

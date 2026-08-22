@@ -9,13 +9,20 @@ with `font-display: swap` and retain the
 ## Included files
 
 - `PublicSans-VariableFont.woff2`: variable Roman, weight axis 100 through 900
+- `PublicSans-Regular.ttf`: static Roman cut embedded in member attendance PDFs
+- `NotoSans-Regular.ttf`: SIL-OFL fallback for PDF text outside Public Sans coverage
 - `OFL.txt`: the SIL Open Font License 1.1 distributed with Public Sans v2.001
+- `OFL-NotoSans.txt`: the SIL Open Font License 1.1 distributed with Noto Sans
 
 The variable font covers every weight the pages use (400, 500, 600, 700), which
 is why the rule declares `font-weight: 100 900` rather than shipping four
 static cuts. If a later screen needs italics, add
 `PublicSans-Italic-VariableFont.woff2` and a second `@font-face` block with
 `font-style: italic`.
+
+The web UI continues to load only the WOFF2. The PDF generator fetches the two local
+TTFs when a member downloads a record, embeds them in the Blob, and uses Noto Sans only
+for characters Public Sans does not contain.
 
 ## Source
 
@@ -24,6 +31,16 @@ The release does not include a variable WOFF2, so the WOFF2 here is a lossless
 web repackaging of the release's variable Roman TTF:
 
 `https://raw.githubusercontent.com/uswds/public-sans/v2.001/fonts/variable/PublicSans%5Bwght%5D.ttf`
+
+The static PDF cut is from the same release:
+
+`https://raw.githubusercontent.com/uswds/public-sans/v2.001/fonts/ttf/PublicSans-Regular.ttf`
+
+The PDF fallback and its license are from the official `notofonts/noto-fonts` repository:
+
+`https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf`
+
+`https://raw.githubusercontent.com/notofonts/noto-fonts/main/LICENSE`
 
 The license is the release's `OFL.txt`, with trailing whitespace normalized:
 

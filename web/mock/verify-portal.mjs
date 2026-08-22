@@ -82,6 +82,10 @@ globalThis.window = {
 const portalHtml = await readFile(`${WEB_ROOT}me/index.html`, 'utf8');
 const portalCss = await readFile(`${WEB_ROOT}assets/css/portal.css`, 'utf8');
 const checkinCss = await readFile(`${WEB_ROOT}assets/css/checkin.css`, 'utf8');
+const PDF_FONTS = {
+  fontBytes: await readFile(`${WEB_ROOT}assets/fonts/public-sans/PublicSans-Regular.ttf`),
+  fallbackFontBytes: await readFile(`${WEB_ROOT}assets/fonts/public-sans/NotoSans-Regular.ttf`),
+};
 
 let dom = installDom(portalHtml);
 
@@ -90,6 +94,14 @@ const { select, patch, callRpc } = await import('../src/rest.js');
 const { rpc } = await import('../src/api.js');
 const { RpcError } = await import('../src/errors.js');
 const { describeMember } = await import('../src/member-errors.js');
+const { buildAttendancePdf, attendancePdfFilename } = await import('../src/attendance-pdf.js');
+const {
+  approvedRecordSummary,
+  durationLabel,
+  durationMinutes,
+  easternTime,
+  timeDetails,
+} = await import('../src/portal-record.js');
 const { start } = await import('../src/portal.js');
 
 let failures = 0;
@@ -144,6 +156,49 @@ const honoraryRows = () => dom.$('honorary-list').querySelectorAll('li');
 const boardRows = () => dom.$('board-list').querySelectorAll('.board-row');
 const live = () => dom.$('live').textContent;
 
+const decodeUtf16Hex = (hex) => {
+  let value = '';
+  for (let index = 0; index < hex.length; index += 4) {
+    value += String.fromCharCode(Number.parseInt(hex.slice(index, index + 4), 16));
+  }
+  return value;
+};
+
+/** Extracts text through the generated PDF's ToUnicode maps, as a reader does. */
+async function extractPdfText(blob) {
+  const pdf = await blob.text();
+  const maps = new Map();
+  for (const [fontNumber, name] of [[1, 'PublicSans'], [2, 'NotoSans']]) {
+    const start = pdf.indexOf(`/CMapName /PDSA${name}UCS`);
+    const end = pdf.indexOf('endcmap', start);
+    assert.ok(start >= 0 && end > start, `${name} has no ToUnicode map`);
+    const cmap = new Map();
+    const source = pdf.slice(start, end);
+    for (const match of source.matchAll(/<([0-9A-F]{4})> <([0-9A-F]{4,8})>/g)) {
+      cmap.set(match[1], decodeUtf16Hex(match[2]));
+    }
+    maps.set(fontNumber, cmap);
+  }
+
+  const lines = [];
+  for (const textObject of pdf.matchAll(/BT ([\s\S]*?) ET/g)) {
+    let fontNumber = 1;
+    let line = '';
+    const tokens = /\/F([12])\s+[\d.]+\s+Tf|<([0-9A-F]+)>\s+Tj/g;
+    for (const token of textObject[1].matchAll(tokens)) {
+      if (token[1]) {
+        fontNumber = Number(token[1]);
+        continue;
+      }
+      for (let index = 0; index < token[2].length; index += 4) {
+        line += maps.get(fontNumber).get(token[2].slice(index, index + 4)) ?? '';
+      }
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
 const server = await startMock(PORT);
 await api('/__mock/reset');
 
@@ -156,6 +211,8 @@ const sources = {
   'src/portal-scorecard.js': await readFile(`${WEB_ROOT}src/portal-scorecard.js`, 'utf8'),
   'src/portal-leaderboard.js': await readFile(`${WEB_ROOT}src/portal-leaderboard.js`, 'utf8'),
   'src/portal-history.js': await readFile(`${WEB_ROOT}src/portal-history.js`, 'utf8'),
+  'src/portal-record.js': await readFile(`${WEB_ROOT}src/portal-record.js`, 'utf8'),
+  'src/attendance-pdf.js': await readFile(`${WEB_ROOT}src/attendance-pdf.js`, 'utf8'),
   'src/member-errors.js': await readFile(`${WEB_ROOT}src/member-errors.js`, 'utf8'),
 };
 
@@ -184,6 +241,13 @@ await check('the page loads no font, script or style from anywhere else', () => 
       `${label} loads a file from another host`,
     );
     assert.doesNotMatch(source, /cdn\.|unpkg\.com|jsdelivr/i, `${label} references a CDN`);
+  }
+  const pdfSource = sources['src/attendance-pdf.js'];
+  assert.doesNotMatch(pdfSource, /https?:\/\//, 'the PDF generator fetches an external asset');
+  assert.match(pdfSource, /\.\.\/assets\/fonts\/public-sans\/PublicSans-Regular\.ttf/);
+  assert.match(pdfSource, /\.\.\/assets\/fonts\/public-sans\/NotoSans-Regular\.ttf/);
+  for (const [label, bytes] of Object.entries(PDF_FONTS)) {
+    assert.equal(bytes.subarray(0, 4).toString('hex'), '00010000', `${label} is not a TrueType font`);
   }
 });
 
@@ -380,11 +444,11 @@ await check('the portal writes nothing at all, and asks for nothing signed in', 
   // and that difference would only ever show up in front of somebody.
   for (const [label, source] of Object.entries(sources)) {
     const code = withoutComments(source);
-    for (const verb of ['insert\\(', 'patch\\(', 'remove\\(', 'select\\(']) {
+    for (const verb of ['select', 'insert', 'patch', 'remove']) {
       assert.doesNotMatch(
         code,
-        new RegExp(verb),
-        `${label} reads or writes a table directly instead of calling a public function`,
+        new RegExp(`(?<![.\\w])${verb}\\s*\\(`),
+        `${label} calls the table ${verb} path instead of a public RPC`,
       );
     }
     assert.doesNotMatch(code, /from '\.\/rest\.js'/, `${label} imports the signed-in request path`);
@@ -465,6 +529,19 @@ await check('the focus ring is drawn clear of the control, not on top of it', ()
 process.stdout.write('\nwhat the page says before anybody types anything\n');
 // ---------------------------------------------------------------------------
 
+await check('the initial lookup stays the same', () => {
+  mountPortal();
+  assert.equal(dom.$('lookup-form').hidden, false);
+  assert.equal(dom.$('lookup-first').getAttribute('autocomplete'), 'given-name');
+  assert.equal(dom.$('lookup-last').getAttribute('autocomplete'), 'family-name');
+  assert.equal(dom.$('lookup-submit-label').textContent, 'Show my points');
+  assert.equal(dom.$('no-match').hidden, true);
+  assert.equal(dom.$('scorecard').hidden, true);
+  assert.equal(dom.$('honorary').hidden, false, 'the initial Honorary Q&A was hidden');
+  assert.equal(dom.$('honorary-intro').hidden, false, 'the initial Honorary intro was hidden');
+  assert.equal(dom.$('honorary-about').hidden, false, 'the initial About Q&A was hidden');
+});
+
 await check('the requirements box is the published rules, not copy in a file', async () => {
   mountPortal();
   await until(() => honoraryRows().length > 0, 'the requirements box never filled in');
@@ -541,17 +618,55 @@ await check('a name on the roster draws that members own figures', async () => {
   await until(scorecardShown, 'the scorecard never drew');
 
   const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
-  assert.equal(dom.$('score-name').textContent.trim(), card.member.display_name);
+  assert.equal(dom.$('score-name-text').textContent.trim(), card.member.display_name);
   assert.match(dom.$('score-points').textContent, new RegExp(`\\b${Number(card.point_total)}\\b`));
+  assert.equal(dom.$('score-state').textContent, card.is_honorary ? 'Earned' : 'Not yet');
   assert.equal(
-    dom.$('score-state').hidden,
-    !card.is_honorary,
-    'the honorary pill and the servers verdict disagree',
+    dom.$('score-state').parentNode.querySelector('dt').textContent.replace('★', '').trim(),
+    'Honorary Status',
   );
   assert.ok(checklistRows().length > 0, 'the requirement list is empty');
 });
 
+await check('Honorary status and name stars follow only the servers verdict', async () => {
+  mountPortal();
+  lookUp('Abigail', 'Catto');
+  await until(scorecardShown, 'the non-honorary scorecard never drew');
+  const notYet = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  assert.equal(notYet.is_honorary, false, 'the non-honorary fixture changed');
+  assert.equal(dom.$('score-state').textContent, 'Not yet');
+  assert.equal(dom.$('score-name-star').hidden, true, 'a non-honorary name has a star');
+  assert.equal(dom.$('score-label-star').hidden, false, 'the status label lost its star');
+  assert.ok(dom.$('score-label-star').classList.contains('board-star'));
+
+  mountPortal();
+  lookUp('Daniel', 'Nguyen');
+  await until(scorecardShown, 'the honorary scorecard never drew');
+  const earned = await rpc('portal_scorecard', { p_member_id: IDS.STORAGE.MEMBER_DANIEL });
+  assert.equal(earned.is_honorary, true, 'the honorary fixture changed');
+  assert.equal(dom.$('score-state').textContent, 'Earned');
+  assert.equal(dom.$('score-name-star').hidden, false, 'the honorary name has no star');
+  assert.ok(dom.$('score-name-star').classList.contains('board-star'));
+  assert.equal(dom.$('score-name-star').getAttribute('aria-hidden'), 'true');
+  assert.equal(dom.$('score-label-star').hidden, false, 'the earned status label lost its star');
+  assert.equal(dom.$('score-label-star').getAttribute('aria-hidden'), 'true');
+  assert.match(dom.$('score-state').textContent, /^(Earned|Not yet)$/);
+});
+
+await check('Not you? is a bordered secondary action with its existing X icon', () => {
+  const button = dom.$('score-change');
+  assert.ok(button.classList.contains('button-secondary'));
+  assert.ok(!button.classList.contains('button-quiet'));
+  assert.ok(button.querySelector('.button-label-icon'), 'Not you? lost its X icon');
+  const base = declarations(rule(portalCss, '.button'));
+  assert.match(base.get('border') ?? '', /1px\s+solid\s+var\(--line-strong\)/);
+  assert.equal(base.get('min-height'), 'var(--tap)');
+});
+
 await check('the form is put away, and Not you? brings it back with the name still in it', async () => {
+  mountPortal();
+  lookUp('Abigail', 'Catto');
+  await until(scorecardShown, 'the scorecard never drew');
   assert.equal(dom.$('lookup-form').hidden, true, 'the form is still on screen under the scorecard');
   dom.click(dom.$('score-change'));
   assert.equal(dom.$('lookup-form').hidden, false, 'Not you? did not bring the form back');
@@ -570,7 +685,7 @@ await check('the checklist is what the server said, line for line', async () => 
 
   const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
   // The root is the whole rule and its figures are in the line above the list.
-  const expected = card.requirements.filter((row) => row.node_id !== card.root_node_id);
+  const expected = card.requirements.filter((row) => row.type !== 'group');
   assert.equal(
     checklistRows().length,
     expected.length,
@@ -587,6 +702,49 @@ await check('the checklist is what the server said, line for line', async () => 
   }
 });
 
+await check('the summary counts all measured requirements, not an N-of-M root value', async () => {
+  await signInAs('officers@pdsaucf.com');
+  const draft = await callRpc('clone_requirement_set', { p_set_id: IDS.SET_CURRENT });
+  const [draftRoot] = await select('requirement_nodes', {
+    select: 'id',
+    filters: { requirement_set_id: `eq.${draft}`, parent_id: 'is.null' },
+  });
+  assert.ok(draftRoot, 'the cloned set has no root');
+  const changed = await patch(
+    'requirement_nodes',
+    { id: `eq.${draftRoot.id}` },
+    { min_children_passing: 2 },
+  );
+  assert.equal(changed.length, 1, 'the N-of-M root edit was refused');
+  await callRpc('publish_requirement_set', { p_set_id: draft });
+  try {
+    mountPortal();
+    lookUp('Abigail', 'Catto');
+    await until(
+      () => !dom.$('history').hidden && dom.$('history-loading').hidden,
+      'the atomic scorecard never drew',
+    );
+    const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+    const root = card.requirements.find((row) => row.node_id === card.root_node_id);
+    const measured = card.requirements.filter((row) => row.type !== 'group');
+    const met = measured.filter((row) => row.passed).length;
+    assert.equal(root.target, 2, 'the fixture root is not N-of-M for this check');
+    assert.ok(measured.some((row) => row.parent_id !== card.root_node_id), 'the seeded nested requirement vanished');
+    assert.equal(dom.$('score-figures').textContent, `${met} of ${measured.length}`);
+    assert.notEqual(dom.$('score-figures').textContent, `${root.value} of ${root.target}`);
+    assert.equal(checklistRows().length, measured.length);
+    for (const requirement of measured) {
+      const row = [...checklistRows()].find((node) => node.textContent.includes(requirement.label));
+      assert.ok(row, `${requirement.label} is missing`);
+      assert.ok(row.textContent.includes(`${requirement.value} of ${requirement.target}`));
+      assert.equal(row.dataset.met, String(requirement.passed));
+    }
+    assert.equal(dom.$('score-state').textContent, card.is_honorary ? 'Earned' : 'Not yet');
+  } finally {
+    await api('/__mock/reset');
+  }
+});
+
 await check('progress is never conveyed by colour alone', () => {
   for (const node of checklistRows()) {
     const mark = node.querySelector('.check-mark');
@@ -598,14 +756,23 @@ await check('progress is never conveyed by colour alone', () => {
   }
 });
 
-await check('a name nobody on the roster has is said at the field, not as a failure', async () => {
+await check('a name nobody on the roster has shows the compact result and retains the name', async () => {
   mountPortal();
   lookUp('Nobody', 'Whatsoever');
-  await until(() => !dom.$('lookup-error').hidden, 'nothing was said about a name that is not there');
+  await until(() => !dom.$('no-match').hidden, 'nothing was said about a name that is not there');
 
   assert.equal(dom.$('scorecard').hidden, true, 'a scorecard was drawn for nobody');
-  assert.match(dom.$('lookup-error').textContent, /roster/i);
+  assert.equal(dom.$('no-match-title').textContent, 'Name not found');
+  assert.match(dom.$('no-match').textContent, /Check the spelling\. Only paid members are listed\./);
+  assert.match(dom.$('no-match').textContent, /pdsa\.ucf@gmail\.com/);
+  assert.equal(dom.$('no-match-contact').getAttribute('href'), 'mailto:pdsa.ucf@gmail.com');
+  assert.equal(dom.$('lookup-first').value, 'Nobody');
+  assert.equal(dom.$('lookup-last').value, 'Whatsoever');
   assert.equal(dom.$('screen-message').hidden, true, 'a name that is not on the roster read as a failure');
+
+  dom.click(dom.$('no-match-board'));
+  assert.equal(dom.$('tab-board').getAttribute('aria-selected'), 'true');
+  assert.equal(dom.$('view-board').hidden, false);
 });
 
 await check('half a name is refused before anything is sent', async () => {
@@ -677,150 +844,377 @@ await check('two members with one name are told apart, not guessed between', asy
 // ---------------------------------------------------------------------------
 process.stdout.write('\nyour own event history\n');
 // ---------------------------------------------------------------------------
-// The grid the spreadsheet had, drawn from portal_attendance(). What fails
-// silently here is not "the list is missing": it is a list that is subtly the
-// wrong list. A draft event shown to the club, an event counted for one of its
-// two categories, a superseded rejection shown as the current answer, or a
-// status carried in colour with nothing said out loud.
 
-const historyShown = () => !dom.$('history').hidden;
-const historyGroups = () => dom.$('history-list').querySelectorAll('details');
-const historyRows = () => dom.$('history-list').querySelectorAll('.event-row');
-const rowFor = (title) =>
-  [...historyRows()].find((li) => li.querySelector('.event-title').textContent === title) ?? null;
+const historyShown = () => !dom.$('history').hidden && dom.$('history-loading').hidden;
+const historyRows = () => dom.$('history-table-body').querySelectorAll('tr');
+const rowFor = (title) => [...historyRows()].find((row) => row.querySelector('th').textContent === title) ?? null;
 
-await check('the history is every published event of the year, by category', async () => {
+await check('the same Honorary Q&A follows each successful attendance record', async () => {
+  mountPortal();
+  await until(() => honoraryRows().length > 0, 'the initial Honorary Q&A never filled in');
+  const honorary = dom.$('honorary');
+  const about = dom.$('honorary-about');
+  const initialCopy = about.textContent.replace(/\s+/g, ' ').trim();
+  assert.equal(honorary.hidden, false, 'the initial Q&A is not visible');
+  assert.equal(dom.$('honorary-intro').hidden, false, 'the initial intro is not visible');
+  assert.ok(honoraryRows().length > 0, 'the initial published Requirements are missing');
+
+  lookUp('Abigail', 'Catto');
+  await until(historyShown, 'the attendance record never drew');
+
+  assert.equal(dom.$('honorary'), honorary, 'the results use a second Q&A node');
+  assert.equal(honorary.hidden, false, 'the results Q&A is hidden');
+  assert.equal(dom.$('honorary-intro').hidden, true, 'results repeat the general requirements');
+  assert.equal(about.hidden, false, 'the About Q&A is hidden in results');
+  assert.equal(
+    about.textContent.replace(/\s+/g, ' ').trim(),
+    initialCopy,
+    'the initial and results Q&A copies drifted',
+  );
+  const siblings = dom.$('view-points').children;
+  assert.ok(
+    siblings.indexOf(dom.$('history')) < siblings.indexOf(honorary),
+    'the Q&A does not follow the attendance record',
+  );
+  assert.equal(
+    (portalHtml.match(/Why become an Honorary Member\?/g) ?? []).length,
+    1,
+    'the Q&A prose is duplicated in the page',
+  );
+});
+
+await check('the history draws approved events once with grouped category credit', async () => {
+  mountPortal();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) =>
+    String(url).includes('portal_attendance')
+      ? new Promise((resolve) => setTimeout(() => resolve(realFetch(url, init)), 100))
+      : realFetch(url, init);
+  try {
+    lookUp('Abigail', 'Catto');
+    await until(scorecardShown, 'the scorecard never drew');
+    assert.equal(dom.$('score-download').disabled, true, 'download enabled before history loaded');
+    await until(historyShown, 'the event history never drew');
+    assert.equal(dom.$('score-download').disabled, false, 'download stayed disabled after history loaded');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  assert.ok(Array.isArray(answer.events));
+  assert.equal(new Set(answer.events.map((event) => event.id)).size, answer.events.length);
+  assert.ok(!answer.events.some((event) => event.title === 'Draft Workshop'));
+  const multi = answer.events.find((event) => event.title === 'Health Fair');
+  assert.ok(multi.categories.length > 1, 'the fixture has no grouped multi-category event');
+  assert.equal(answer.events.filter((event) => event.id === multi.id).length, 1);
+
+  const approved = answer.events.filter((event) => event.status === 'attended');
+  assert.equal(historyRows().length, approved.length, 'approved is not the default view');
+  for (const event of approved) {
+    const row = rowFor(event.title);
+    assert.ok(row, `${event.title} is missing`);
+    for (const category of event.categories) {
+      assert.ok(row.textContent.includes(category.name), `${event.title} lost ${category.name}`);
+    }
+    assert.match(row.textContent, /Approved/);
+  }
+});
+
+await check('the final screen and PDF use the attendance RPCs atomic scorecard snapshot', async () => {
+  await signInAs('officers@pdsaucf.com');
+  const [record] = await select('attendance_records', {
+    select: 'id,event_id,status',
+    filters: { member_id: `eq.${IDS.MEMBER_ABIGAIL}`, status: 'eq.approved' },
+  });
+  assert.ok(record, 'the fixture needs an approved record to change between requests');
+
+  const realFetch = globalThis.fetch;
+  let releaseAttendance;
+  const heldAttendance = new Promise((resolve) => {
+    releaseAttendance = resolve;
+  });
+  globalThis.fetch = (url, init) =>
+    String(url).includes('portal_attendance')
+      ? heldAttendance.then(() => realFetch(url, init))
+      : realFetch(url, init);
+
+  let savedBlob = null;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = (blob) => {
+    savedBlob = blob;
+    return 'blob:atomic-snapshot-test';
+  };
+  URL.revokeObjectURL = () => {};
+
+  try {
+    mountPortal();
+    lookUp('Abigail', 'Catto');
+    await until(scorecardShown, 'the fast scorecard never drew');
+    const initialPoints = dom.$('score-points').textContent;
+    await callRpc('review_records', {
+      p_ids: [record.id],
+      p_decision: 'reject',
+      p_note: 'snapshot consistency test',
+    });
+    releaseAttendance();
+    await until(historyShown, 'the atomic attendance response never drew');
+
+    const atomic = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+    assert.notEqual(String(atomic.scorecard.point_total), initialPoints);
+    assert.equal(dom.$('score-points').textContent, String(atomic.scorecard.point_total));
+    assert.equal(dom.$('score-year').textContent, atomic.scorecard.year.label);
+    assert.equal(atomic.year.id, atomic.scorecard.year.id);
+    assert.equal(atomic.member.id, atomic.scorecard.member.id);
+    assert.equal(dom.$('score-download').disabled, false);
+
+    dom.click(dom.$('score-download'));
+    await until(() => savedBlob !== null, 'the atomic PDF was not generated');
+    const extracted = await extractPdfText(savedBlob);
+    assert.ok(extracted.includes(`Total points: ${atomic.scorecard.point_total}`));
+    const changedEvent = atomic.events.find((event) => event.id === record.event_id);
+    assert.equal(changedEvent.status, 'declined');
+    assert.ok(!extracted.includes(changedEvent.title), 'the PDF mixed the old approval into the new total');
+  } finally {
+    releaseAttendance?.();
+    globalThis.fetch = realFetch;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+    await callRpc('review_records', {
+      p_ids: [record.id],
+      p_decision: 'approve',
+      p_note: null,
+    });
+  }
+});
+
+await check('actual Eastern times, duration and missing times are rendered without the check-in window', async () => {
   mountPortal();
   lookUp('Abigail', 'Catto');
-  await until(scorecardShown, 'the scorecard never drew');
-  await until(historyShown, 'the event history never drew');
-
+  await until(historyShown, 'attendance did not reload for the time check');
   const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
-  assert.ok(answer.categories.length > 0, 'the server sent no categories at all');
-  assert.equal(
-    historyGroups().length,
-    answer.categories.length,
-    'the page drew a different number of sections than the server sent',
-  );
-
-  const sent = answer.categories.flatMap((category) =>
-    category.events.map((event) => `${category.name}:${event.title}`),
-  );
-  assert.equal(historyRows().length, sent.length, 'the page drew a different number of events');
+  const timed = answer.events.find((event) => event.status === 'attended' && event.starts_at);
+  const missing = answer.events.find((event) => event.status === 'attended' && !event.starts_at);
+  assert.ok(timed && missing, 'the fixture needs timed and untimed approved events');
+  assert.equal(durationMinutes(timed), (new Date(timed.ends_at) - new Date(timed.starts_at)) / 60000);
+  assert.ok(rowFor(timed.title).textContent.includes(easternTime(timed.starts_at)));
+  assert.ok(rowFor(timed.title).textContent.includes(timeDetails(timed).duration));
+  assert.ok(rowFor(missing.title).textContent.includes('Time not recorded'));
+  assert.ok(!('checkin_closes_at' in missing), 'the public response exposed the check-in window');
 });
 
-await check('an event that counts for two categories is listed under both', async () => {
-  // Health Fair is Tabling and Volunteering. A page that drew only an event's
-  // first category would look right on every other row in these fixtures, and
-  // would make counting twice read as a bug.
-  const rows = [...historyRows()].filter(
-    (li) => li.querySelector('.event-title').textContent === 'Health Fair',
-  );
-  assert.equal(rows.length, 2, 'the two-category event is not under both of its categories');
-});
-
-await check('a draft event is not on a members screen', async () => {
-  assert.equal(rowFor('Draft Workshop'), null, 'an unpublished event was shown to a member');
-
-  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
-  const titles = answer.categories.flatMap((category) =>
-    category.events.map((event) => event.title),
-  );
-  assert.ok(!titles.includes('Draft Workshop'), 'the function itself carries the draft');
-});
-
-await check('an event that has not happened yet reads as upcoming, not as one they missed', () => {
-  const row = rowFor('Field Day');
-  assert.ok(row, 'the scheduled event is not on the list at all');
-  assert.equal(row.dataset.status, 'upcoming');
-  assert.equal(row.querySelector('.event-mark').textContent, 'Upcoming');
-});
-
-await check('an attended event carries the credit the server gave it', async () => {
-  const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
-  const attended = answer.categories
-    .flatMap((category) => category.events)
-    .filter((event) => event.status === 'attended');
-  assert.ok(attended.length > 0, 'the fixture member attended nothing, so this proves nothing');
-
-  for (const event of attended) {
-    const row = rowFor(event.title);
-    assert.ok(row, `${event.title} is missing from the list`);
-    assert.equal(row.dataset.status, 'attended');
-    assert.equal(
-      row.querySelector('.event-mark').textContent,
-      String(Number(event.credit)),
-      `${event.title} shows a number the server did not send`,
-    );
-  }
-});
-
-await check('an event they did not attend is a blank, not a verdict', () => {
-  const missed = [...historyRows()].filter((li) => li.dataset.status === 'none');
-  assert.ok(missed.length > 0, 'the fixture member attended everything, so this proves nothing');
-  for (const row of missed) {
-    assert.equal(row.querySelector('.event-mark').textContent, '');
-  }
-});
-
-await check('a section they have a record in is open, one they have never touched is shut', () => {
-  for (const group of historyGroups()) {
-    const rows = [...group.querySelectorAll('.event-row')];
-    const touched = rows.some((li) => ['attended', 'waiting', 'declined'].includes(li.dataset.status));
-    assert.equal(
-      group.open === true,
-      touched,
-      `${group.querySelector('.event-group-name').textContent} is ${
-        group.open ? 'open' : 'shut'
-      } and the member ${touched ? 'has' : 'has no'} record in it`,
-    );
-  }
-});
-
-await check('a rejection that was checked in again shows where they stand now', async () => {
-  // Aaron Ozan was turned down at the GBM and checked in again. The unique
-  // index lets both rows exist, and the live one is the answer: a member who
-  // fixed the problem must not read their own page as still declined.
+await check('waiting and declined records stay separate from approved attendance', async () => {
   mountPortal();
   lookUp('Aaron', 'Ozan');
-  await until(scorecardShown, 'the scorecard never drew');
-  await until(historyShown, 'the event history never drew');
-
+  await until(historyShown, 'Aarons history never drew');
+  const waiting = [...dom.$('history-filters').querySelectorAll('button')].find((button) => button.textContent.startsWith('Waiting'));
+  dom.click(waiting);
   const row = rowFor('Spring GBM 5');
-  assert.ok(row, 'the event they were declined at is not on the list');
-  assert.equal(row.dataset.status, 'waiting', 'the superseded rejection is what the page shows');
-  assert.equal(row.querySelector('.event-mark').textContent, 'Waiting');
+  assert.ok(row, 'the waiting record is unavailable');
+  assert.equal(row.dataset.status, 'waiting');
+  assert.match(row.textContent, /Waiting/);
 });
 
-await check('no status is carried by colour alone', () => {
-  for (const row of historyRows()) {
-    const words = row.querySelector('.visually-hidden');
-    assert.ok(words, 'an event row carries its state in colour and nothing else');
-    assert.match(words.textContent, /^(Attended|Waiting for review|Declined|Upcoming|Not attended)$/);
+await check('attendance failure leaves the scorecard visible with retry and download disabled', async () => {
+  mountPortal();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) =>
+    String(url).includes('portal_attendance')
+      ? Promise.resolve(new Response(JSON.stringify({ code: 'TEMP', message: 'offline' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      : realFetch(url, init);
+  try {
+    lookUp('Abigail', 'Catto');
+    await until(scorecardShown, 'the scorecard never drew');
+    await until(() => !dom.$('history-error').hidden, 'attendance failure was not shown', 8000);
+    assert.equal(dom.$('scorecard').hidden, false, 'attendance failure hid the scorecard');
+    assert.equal(dom.$('score-download').disabled, true, 'download enabled without attendance');
+    assert.equal(dom.$('history-retry').textContent, 'Try again');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  dom.click(dom.$('history-retry'));
+  await until(historyShown, 'attendance retry did not recover');
+  assert.equal(dom.$('score-download').disabled, false, 'download stayed disabled after retry');
+});
+
+await check('a mismatched attendance snapshot never enables the download', async () => {
+  mountPortal();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const response = await realFetch(url, init);
+    if (!String(url).includes('portal_attendance')) return response;
+    const answer = await response.json();
+    answer.scorecard.year.id = IDS.YEAR_PAST;
+    return new Response(JSON.stringify(answer), {
+      status: response.status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    lookUp('Abigail', 'Catto');
+    await until(() => !dom.$('history-error').hidden, 'the mismatched snapshot was accepted');
+    assert.equal(dom.$('scorecard').hidden, false);
+    assert.equal(dom.$('score-download').disabled, true);
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 
-await check('the history carries no decline reason, no photo and nobody else', async () => {
-  // The widening migration 23 made is one thing and one thing only. Everything
-  // an officer sees about a record stays with the officer, and the page has no
-  // way to draw what it never receives.
+await check('the history carries no private record context or location', async () => {
   const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_AARON });
   const text = JSON.stringify(answer);
   for (const forbidden of [
-    'review_note',
-    'reviewed_by',
-    'reviewed_at',
-    'submitted_at',
-    'flags',
-    'claimed_name',
-    'claimed_email',
-    'object_path',
-    'member_note',
-    'Photo was taken in the car park',
-  ]) {
-    assert.ok(!text.includes(forbidden), `portal_attendance carries ${forbidden}`);
-  }
+    'review_note', 'reviewed_by', 'reviewed_at', 'submitted_at', 'flags',
+    'claimed_name', 'claimed_email', 'object_path', 'member_note', 'location',
+  ]) assert.ok(!text.includes(forbidden), `portal_attendance carries ${forbidden}`);
   assert.equal(Object.keys(answer.member).sort().join(','), 'display_name,id');
+});
+
+await check('the PDF is a real local Blob with approved rows, totals and a safe filename', async () => {
+  const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const attendance = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const blob = buildAttendancePdf({
+    card,
+    attendance,
+    ...PDF_FONTS,
+    generatedAt: new Date('2026-08-22T12:00:00Z'),
+  });
+  assert.equal(blob.type, 'application/pdf');
+  assert.ok(blob.size > 500);
+  const text = await blob.text();
+  const extracted = await extractPdfText(blob);
+  assert.ok(text.startsWith('%PDF-1.4'));
+  assert.ok(extracted.includes(card.member.display_name));
+  assert.ok(extracted.includes(card.year.label));
+  assert.ok(extracted.includes('Requirement progress'));
+  assert.ok(extracted.includes('Recorded duration'));
+  assert.ok(extracted.includes('Approved events without recorded duration'));
+  const summary = approvedRecordSummary(attendance.events);
+  assert.ok(extracted.includes(`Approved events: ${summary.approved.length}`));
+  assert.ok(extracted.includes(`Recorded duration: ${durationLabel(summary.recordedMinutes)}`));
+  assert.ok(extracted.includes(`Approved events without recorded duration: ${summary.missingTimes}`));
+  for (const event of summary.approved) {
+    assert.equal(extracted.split(event.title).length - 1, 1, `${event.title} is duplicated in the PDF`);
+  }
+  for (const event of attendance.events.filter((row) => row.status !== 'attended')) {
+    assert.ok(!extracted.includes(event.title), `${event.title} was counted as approved in the PDF`);
+  }
+  assert.ok(!extracted.toLowerCase().includes('location'));
+  assert.equal(attendancePdfFilename(card), 'pdsa-attendance-abigail-catto-2026-2027.pdf');
+});
+
+await check('PDF text extraction preserves accented and non-Latin member, event and category text', async () => {
+  const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const attendance = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const approved = attendance.events.find((event) => event.status === 'attended');
+  const unicodeCard = {
+    ...card,
+    member: { ...card.member, display_name: 'Jos\u00e9 Mar\u00eda \u0418\u0432\u0430\u043d\u043e\u0432\u0430' },
+    requirements: (() => {
+      let replaced = false;
+      return card.requirements.map((row) => {
+        if (replaced || row.type === 'group') return row;
+        replaced = true;
+        return { ...row, label: 'Participaci\u00f3n \u041e\u0431\u0449\u0435\u043d\u0438\u0435' };
+      });
+    })(),
+  };
+  const unicodeAttendance = {
+    ...attendance,
+    events: [{
+      ...approved,
+      title: 'Cl\u00ednica \u0421\u043e\u0431\u044b\u0442\u0438\u0435',
+      categories: [{ id: 'unicode', name: 'Odontolog\u00eda \u0421\u0442\u043e\u043c\u0430\u0442\u043e\u043b\u043e\u0433\u0438\u044f', credit: 2 }],
+    }],
+  };
+  const blob = buildAttendancePdf({
+    card: unicodeCard,
+    attendance: unicodeAttendance,
+    ...PDF_FONTS,
+    generatedAt: new Date('2026-08-22T12:00:00Z'),
+  });
+  const extracted = await extractPdfText(blob);
+  for (const expected of [
+    'Jos\u00e9 Mar\u00eda \u0418\u0432\u0430\u043d\u043e\u0432\u0430',
+    'Participaci\u00f3n \u041e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Cl\u00ednica \u0421\u043e\u0431\u044b\u0442\u0438\u0435',
+    'Odontolog\u00eda \u0421\u0442\u043e\u043c\u0430\u0442\u043e\u043b\u043e\u0433\u0438\u044f',
+  ]) assert.ok(extracted.includes(expected), `PDF extraction lost ${expected}`);
+});
+
+await check('long attendance records make a multi-page Letter PDF with repeated headings', async () => {
+  const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const attendance = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const sample = attendance.events.find((event) => event.status === 'attended');
+  assert.ok(sample, 'the fixture needs an approved event');
+  const manyEvents = Array.from({ length: 60 }, (_, index) => ({
+    ...sample,
+    id: `pdf-event-${index + 1}`,
+    title: `PDF event ${index + 1}`,
+  }));
+  const blob = buildAttendancePdf({
+    card,
+    attendance: { ...attendance, events: manyEvents },
+    ...PDF_FONTS,
+    generatedAt: new Date('2026-08-22T12:00:00Z'),
+  });
+  const text = await blob.text();
+  const extracted = await extractPdfText(blob);
+  const pageCount = Number(text.match(/\/Type \/Pages .*\/Count (\d+)/)?.[1] ?? 0);
+  assert.ok(pageCount > 1, 'the long attendance record stayed on one page');
+  assert.equal(
+    (text.match(/\/MediaBox \[0 0 612 792\]/g) ?? []).length,
+    pageCount,
+    'a generated page is not US Letter size',
+  );
+  assert.ok(
+    (extracted.match(/Event \| Date \| Time \| Duration \| Categories and credit/g) ?? []).length > 1,
+    'continued event pages do not repeat the table heading',
+  );
+});
+
+await check('a failed browser download keeps results visible and Try again recovers', async () => {
+  mountPortal();
+  lookUp('Abigail', 'Catto');
+  await until(historyShown, 'attendance never loaded for the download check');
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  let savedName = null;
+  URL.createObjectURL = () => {
+    throw new Error('download blocked');
+  };
+  dom.click(dom.$('score-download'));
+  await until(() => !dom.$('download-error').hidden, 'download failure was not shown');
+  assert.equal(dom.$('scorecard').hidden, false);
+  assert.match(live(), /Download failed/);
+
+  URL.createObjectURL = () => 'blob:attendance-test';
+  URL.revokeObjectURL = () => {};
+  const originalCreateElement = document.createElement;
+  document.createElement = (tag) => {
+    const node = originalCreateElement(tag);
+    if (tag === 'a') {
+      const originalClick = node.click.bind(node);
+      node.click = () => {
+        savedName = node.download;
+        originalClick();
+      };
+    }
+    return node;
+  };
+  try {
+    dom.click(dom.$('download-retry'));
+    await until(() => savedName !== null, 'download retry did not save the PDF');
+    assert.equal(savedName, 'pdsa-attendance-abigail-catto-2026-2027.pdf');
+    assert.match(live(), /PDF downloaded/);
+  } finally {
+    document.createElement = originalCreateElement;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  }
 });
 
 await check('a slow, superseded history answer cannot paint over the member on screen', async () => {
@@ -846,7 +1240,7 @@ await check('a slow, superseded history answer cannot paint over the member on s
   try {
     lookUp('Abigail', 'Catto');
     await until(scorecardShown, 'the first lookup never drew');
-    assert.equal(dom.$('score-name').textContent.trim(), 'Abigail Catto');
+    assert.equal(dom.$('score-name-text').textContent.trim(), 'Abigail Catto');
     dom.click(dom.$('score-change')); // "Not you?", the real path back to the form
 
     lookUp('Aaron', 'Ozan');
@@ -854,7 +1248,7 @@ await check('a slow, superseded history answer cannot paint over the member on s
     // across the switch, so it would read true immediately, before Aaron's
     // own lookup has actually finished. Wait for his name specifically.
     await until(
-      () => dom.$('score-name').textContent.trim() === 'Aaron Ozan',
+      () => dom.$('score-name-text').textContent.trim() === 'Aaron Ozan',
       'the second lookup never drew',
     );
     await until(historyShown, 'the second lookups history never drew');
@@ -864,10 +1258,12 @@ await check('a slow, superseded history answer cannot paint over the member on s
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     assert.equal(
-      dom.$('score-name').textContent.trim(),
+      dom.$('score-name-text').textContent.trim(),
       'Aaron Ozan',
       'a slower, superseded lookup overwrote the member on screen',
     );
+    const waiting = [...dom.$('history-filters').querySelectorAll('button')].find((button) => button.textContent.startsWith('Waiting'));
+    dom.click(waiting);
     const row = rowFor('Spring GBM 5');
     assert.ok(row, 'Aarons own event history was overwritten by a stale answer');
     assert.equal(row.dataset.status, 'waiting');

@@ -125,6 +125,10 @@ body {
   .app {
     max-width: 36rem;
   }
+
+  .app.results-view {
+    max-width: 72rem;
+  }
 }
 
 .brand-row {
@@ -338,6 +342,202 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.score-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.summary-grid div {
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--bg);
+  border-radius: 10px;
+}
+
+.summary-grid dt,
+.record-details dt {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.summary-grid dd,
+.record-details dd {
+  margin: 0.125rem 0 0;
+  font-weight: 700;
+}
+
+.score-actions,
+.no-match-actions,
+.inline-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.requirement-progress-title {
+  margin-top: 0.75rem;
+}
+
+.inline-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.no-match {
+  gap: 0.75rem;
+}
+
+.contact-address {
+  align-self: flex-start;
+  min-height: 2.75rem;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.record-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.record-filter {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.record-filter[aria-pressed='true'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.record-table-wrap {
+  display: none;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.record-table {
+  width: 100%;
+  min-width: 58rem;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.record-table th,
+.record-table td {
+  padding: 0.625rem;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.record-table thead th {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+
+.record-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.record-cards {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.record-card {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.record-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.record-card h3 {
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.record-details {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.record-details div {
+  min-width: 0;
+}
+
+.record-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.credit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record-status {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.record-status[data-status='attended'] {
+  color: var(--ok);
+}
+
+.record-status[data-status='waiting'] {
+  color: var(--accent);
+}
+
+.record-status[data-status='declined'] {
+  color: var(--danger);
+}
+
+@media (min-width: 48rem) {
+  .record-table-wrap {
+    display: block;
+  }
+
+  .record-cards {
+    display: none;
+  }
+}
+
 /* ---------------------------------------------------------------------------
    The event history
 
@@ -515,6 +715,22 @@ body {
   margin-top: 1.75rem;
 }
 
+/* In results, the view's standard gap already separates the attendance card
+   from this section. The larger introduction gap remains unchanged on the
+   initial lookup screen. */
+.app.results-view .honorary {
+  margin-top: 0;
+}
+
+/* The About section needs its divider only when it follows the introductory
+   requirements. In results, the attendance card and the view gap provide the
+   separation. */
+.app.results-view .honorary-about {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 /* Shared by both headings in this section. Bigger than a panel title, because
    these two are the section's own table of contents, not a label on a box. */
 .section-title {
@@ -662,6 +878,15 @@ body {
   color: var(--gold-ink);
   background: var(--gold-soft);
   border-radius: 999px;
+}
+
+.summary-star,
+.score-name-star {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  vertical-align: 0.1em;
 }
 
 .board-points {

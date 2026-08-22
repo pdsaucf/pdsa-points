@@ -161,7 +161,8 @@ create table events (
   term_id           uuid references terms,
   title             text not null,
   occurred_on       date not null,
-  location          text,
+  starts_at         timestamptz,
+  ends_at           timestamptz,
   notes             text,
   review_policy     review_policy_t not null default 'manual_review',
   checkin_token     text not null unique,        -- short, random, url-safe; not the PK
@@ -170,7 +171,10 @@ create table events (
   token_rotated_at  timestamptz,
   is_published      boolean not null default true,
   created_by        uuid references auth.users,
-  created_at        timestamptz not null default now()
+  created_at        timestamptz not null default now(),
+  check ((starts_at is null and ends_at is null)
+         or (starts_at is not null and ends_at is not null)),
+  check (starts_at is null or ends_at > starts_at)
 );
 
 create table event_categories (
@@ -207,6 +211,11 @@ Why this shape:
 - **A double-credit GBM** is `fixed_credit = 2`. No schema change.
 - `checkin_token` is separate from the PK so it can be **rotated** if a QR image leaks,
   and `checkin_opens_at/closes_at` mean a photographed QR code is useless next week.
+- `starts_at/ends_at` are the verified actual event schedule. They are optional as a
+  pair, display in America/New_York, and are never inferred from or used as the
+  check-in window. Existing events remain blank until an officer verifies their times.
+- Events have no Location property. The club did not use it, so migration 25 discards
+  the old column instead of carrying a deprecated field.
 
 ## 5. Attendance (one table with statuses, not a queue plus a ledger)
 
@@ -630,7 +639,7 @@ They return only the public progress data required by that interface:
 |---|---|---|
 | `portal_find_members(q)` | matching member ids and display names | at least three search characters; current-year enrolled members only |
 | `portal_scorecard(member_id)` | point total, honorary state, and category progress | current-year enrolled member only |
-| `portal_attendance(member_id)` | that member's approved attendance history | current-year enrolled member only; no review metadata |
+| `portal_attendance(member_id)` | each published current-year event once, with actual start and end instants, that member's status, grouped categories, approved credit, and a public scorecard evaluated in the same statement snapshot | current-year enrolled member only; no check-in window, location, review metadata, evidence, notes, or another member's records |
 | `portal_leaderboard()` | ranked current-year names and totals | approved attendance only |
 | `portal_requirements()` | published requirement summary | published current-year rules only |
 

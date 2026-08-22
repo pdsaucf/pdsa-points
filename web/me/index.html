@@ -24,9 +24,9 @@
       collecting any, so the magic link, the account, and the claim an officer
       used to confirm are all gone (migration 21).
 
-      Everything here is served by four SECURITY DEFINER functions any visitor
-      may call, and every one of them answers with club-facing figures only: no
-      address, no student id, no individual check-ins, nothing pending.
+      Everything here is served by five SECURITY DEFINER functions any visitor
+      may call. They answer with club-facing figures and this member's own
+      current-year attendance statuses, never private review context.
     -->
     <main id="app" class="app">
       <!--
@@ -96,6 +96,20 @@
           </section>
         </form>
 
+        <section id="no-match" class="panel no-match" hidden aria-labelledby="no-match-title">
+          <h2 id="no-match-title" class="panel-title" tabindex="-1">Name not found</h2>
+          <p class="muted">Check the spelling. Only paid members are listed.</p>
+          <div class="no-match-actions">
+            <button id="no-match-board" type="button" class="button button-secondary">
+              Search leaderboard
+            </button>
+            <a id="no-match-contact" class="button button-quiet" href="mailto:pdsa.ucf@gmail.com">
+              Contact PDSA
+            </a>
+          </div>
+          <a class="contact-address" href="mailto:pdsa.ucf@gmail.com">pdsa.ucf@gmail.com</a>
+        </section>
+
         <!--
           Two members with one name. With no address on file the join month is
           the only thing that tells them apart, so it is what the buttons carry.
@@ -106,46 +120,94 @@
         </section>
 
         <section id="scorecard" class="panel" hidden aria-labelledby="score-name">
-          <div class="progress-head">
-            <h1 id="score-name" class="title"></h1>
-            <p id="score-figures" class="figures"></p>
+          <h1 id="score-name" class="title score-name" tabindex="-1">
+            <span id="score-name-text"></span>
+            <span id="score-name-star" class="board-star score-name-star" aria-hidden="true" hidden>★</span>
+          </h1>
+          <p id="score-year" class="muted"></p>
+          <dl class="summary-grid">
+            <div>
+              <dt>
+                Honorary Status
+                <span id="score-label-star" class="board-star summary-star" aria-hidden="true">★</span>
+              </dt>
+              <dd id="score-state"></dd>
+            </div>
+            <div>
+              <dt>Requirements met</dt>
+              <dd id="score-figures"></dd>
+            </div>
+            <div>
+              <dt>Total points</dt>
+              <dd id="score-points"></dd>
+            </div>
+          </dl>
+          <div class="score-actions">
+            <button id="score-download" type="button" class="button button-primary" disabled>
+              Download PDF
+            </button>
+            <button id="score-change" type="button" class="button button-secondary">Not you?</button>
           </div>
-          <p id="score-state" class="state" hidden></p>
+          <div id="download-error" class="inline-error" role="alert" hidden>
+            <span>Download failed</span>
+            <button id="download-retry" type="button" class="button button-quiet">Try again</button>
+          </div>
+          <h2 class="panel-title requirement-progress-title">Requirement progress</h2>
           <ul id="score-list" class="checklist"></ul>
-          <p id="score-points" class="points"></p>
-          <button id="score-change" type="button" class="button button-quiet">Not you?</button>
         </section>
 
-        <!--
-          Every event of the year and what this member did about each one, from
-          portal_attendance(). Drawn under the scorecard and loaded after it, so
-          the figures never wait on the list. A category they have a record in
-          opens; one they have never been to stays shut.
-        -->
+        <!-- One event per row from portal_attendance(), loaded after the scorecard. -->
         <section id="history" class="panel history" hidden aria-labelledby="history-title">
-          <h2 id="history-title" class="panel-title">Your events</h2>
-          <div id="history-list" class="event-groups"></div>
+          <div class="progress-head">
+            <h2 id="history-title" class="panel-title">Attendance record</h2>
+            <p id="history-meta" class="muted small"></p>
+          </div>
+          <div id="history-filters" class="record-filters" role="group" aria-label="Attendance status"></div>
+          <p id="history-loading" class="muted" role="status" hidden>Loading attendance…</p>
+          <div id="history-error" class="inline-error" role="alert" hidden>
+            <span>Attendance unavailable</span>
+            <button id="history-retry" type="button" class="button button-quiet">Try again</button>
+          </div>
+          <p id="history-empty" class="muted" hidden>No records in this view.</p>
+          <div id="history-table-wrap" class="record-table-wrap">
+            <table class="record-table">
+              <thead>
+                <tr>
+                  <th scope="col">Event</th>
+                  <th scope="col">Date</th>
+                  <th scope="col">Time</th>
+                  <th scope="col">Duration</th>
+                  <th scope="col">Categories and credit</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody id="history-table-body"></tbody>
+            </table>
+          </div>
+          <div id="history-cards" class="record-cards"></div>
         </section>
 
         <!--
-          What the requirements are, for somebody who has not looked themselves
-          up. Drawn from the published rules, so it cannot drift from what the
-          scorecard above is scored against.
+          One source for the Honorary Membership Q&A. The introductory copy and
+          published Requirements stay on the initial screen. The About section
+          also follows the attendance record on successful results.
         -->
         <section id="honorary" class="honorary" aria-label="Honorary Member">
-          <h2 id="honorary-title" class="section-title">What is an Honorary Member?</h2>
-          <p class="honorary-body">
-            Honorary Members are those who go above and beyond as active and engaged
-            members of PDSA.
-          </p>
+          <div id="honorary-intro">
+            <h2 id="honorary-title" class="section-title">What is an Honorary Member?</h2>
+            <p class="honorary-body">
+              Honorary Members are those who go above and beyond as active and engaged
+              members of PDSA.
+            </p>
 
-          <div class="panel honorary-requirements">
-            <h3 class="panel-title">Requirements</h3>
-            <ul id="honorary-list" class="honorary-list"></ul>
-            <p id="honorary-note" class="muted small" hidden></p>
+            <div class="panel honorary-requirements">
+              <h3 class="panel-title">Requirements</h3>
+              <ul id="honorary-list" class="honorary-list"></ul>
+              <p id="honorary-note" class="muted small" hidden></p>
+            </div>
           </div>
 
-          <div class="honorary-about">
+          <div id="honorary-about" class="honorary-about">
             <h2 class="section-title">About Honorary Membership</h2>
 
             <div class="faq-item">

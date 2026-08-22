@@ -86,6 +86,7 @@ feature, so each one can be read on its own.
 | `..._one_unit_called_points.sql` | drops `categories.unit`, `categories.unit_label`, the `unit_type` enum and `counts_toward_point_total`. The unit never changed any arithmetic and the flag was false for Volunteering hours alone, so there is one unit and it is points |
 | `..._shared_admin_session.sql` | makes the valid shared session the complete admin authorization decision; drops `profiles`, `member_claims`, `app_role`, and the retired signed-in member RPCs |
 | `..._member_event_history.sql` | `portal_attendance()`, the fifth: a member's own event-by-event attendance for the current year, reversing migration 21's decision to withhold it |
+| `..._event_times_and_portal_attendance.sql` | optional paired actual event times, removal of event Location, and the one-row-per-event public attendance contract |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
@@ -195,7 +196,12 @@ own points, and the leaderboard lists the club the way the spreadsheet this
 replaces did. `portal_attendance` is a later, deliberate widening: it hands
 back that member's own event-by-event attendance for the current year, which
 migration 21 originally withheld and the club asked to have back, the way the
-old spreadsheet showed it. Each function answers a shaped question with the
+old spreadsheet showed it. Each published event is returned once with grouped category
+credit and optional verified start and end instants. The same response embeds the public
+scorecard from its database statement snapshot, so the final screen and PDF cannot mix
+totals or years from two requests. The member can generate a current-year attendance PDF
+locally in the browser; it is not uploaded or stored.
+Each function answers a shaped question with the
 club-facing figures and nothing else, and `test/public_portal.test.mjs` holds
 that line: no address, no student id, no notes, no officer's decline reason,
 no photo, nobody else's records.

@@ -28,10 +28,25 @@ const number = (value) => {
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
 };
 
+/**
+ * Count measured requirements using only verdicts Postgres already supplied.
+ * Group nodes describe the pass rule and are not themselves measured rows.
+ */
+export function measuredRequirementSummary(requirements) {
+  const measured = (requirements ?? []).filter((row) => row.type !== 'group');
+  return {
+    met: measured.filter((row) => Boolean(row.passed)).length,
+    total: measured.length,
+  };
+}
+
 export function createScorecard(ctx) {
   const el = {
     card: $('scorecard'),
     name: $('score-name'),
+    nameText: $('score-name-text'),
+    nameStar: $('score-name-star'),
+    year: $('score-year'),
     figures: $('score-figures'),
     state: $('score-state'),
     list: $('score-list'),
@@ -123,8 +138,11 @@ export function createScorecard(ctx) {
   // One member
   // -------------------------------------------------------------------------
 
-  function render(card) {
-    el.name.textContent = card?.member?.display_name ?? '';
+  function render(card, { focus = true, announceStatus = true } = {}) {
+    const honorary = Boolean(card?.is_honorary);
+    el.nameText.textContent = card?.member?.display_name ?? '';
+    setHidden(el.nameStar, !honorary);
+    el.year.textContent = card?.year?.label ?? '';
 
     const requirements = (card?.requirements ?? []).map((row) => ({
       id: row.node_id,
@@ -138,48 +156,43 @@ export function createScorecard(ctx) {
     }));
 
     const { root } = buildTree(requirements, card?.root_node_id ?? null);
-    const rows = root ? flatten(root).slice(1) : [];
+    const rows = root
+      ? flatten(root)
+          .slice(1)
+          .filter(({ item }) => item.type !== 'group')
+      : [];
 
-    el.figures.textContent = root ? `${number(root.value)} of ${number(root.target)} met` : '';
+    const progress = measuredRequirementSummary(card?.requirements);
+    el.figures.textContent = `${progress.met} of ${progress.total}`;
 
-    const honorary = Boolean(card?.is_honorary);
-    el.state.textContent = honorary ? 'Honorary Member' : '';
-    setHidden(el.state, !honorary);
+    el.state.textContent = honorary ? 'Earned' : 'Not yet';
+    setHidden(el.state, false);
 
     el.list.replaceChildren(...rows.map(({ item, depth }) => memberRow(item, depth)));
 
-    el.points.textContent = plural(Number(card?.point_total ?? 0), 'point');
+    el.points.textContent = number(card?.point_total ?? 0);
     setHidden(el.card, false);
-    announce(
-      `${card?.member?.display_name ?? 'You'}: ${plural(Number(card?.point_total ?? 0), 'point')}${
-        honorary ? ', Honorary Member' : ''
-      }`,
-    );
+    if (focus) el.name.focus();
+    if (announceStatus) {
+      announce(
+        `${card?.member?.display_name ?? 'You'}: ${plural(Number(card?.point_total ?? 0), 'point')}${
+          honorary ? ', Honorary Member' : ''
+        }`,
+      );
+    }
   }
 
   function memberRow(item, depth) {
-    const measured = item.type !== 'group';
-
-    // A group whose rule is "some of these" is the one place a tick with no
-    // figures would look wrong: two of its three requirements are visibly not
-    // met and the group passed anyway. Where a group needs all of them, the
-    // ticks below it already say the same thing, so it stays quiet.
-    const showFigures = measured || item.target < (item.children?.length ?? 0);
-
     return h(
       'li',
       { class: 'check-row', dataset: { met: String(item.passed), depth: String(depth) } },
       h('span', { class: 'check-mark', 'aria-hidden': 'true' }, item.passed ? '✓' : '○'),
       h('span', { class: 'check-label' }, item.label),
-      showFigures
-        ? h(
-            'span',
-            { class: 'check-figures' },
-            [`${number(item.value)} of ${number(item.target)}`, measured ? '' : 'met']
-              .filter(Boolean)
-              .join(' '),
-          )
-        : null,
+      h(
+        'span',
+        { class: 'check-figures' },
+        `${number(item.value)} of ${number(item.target)}`,
+      ),
       // Never the colour alone, and never the glyph alone either.
       h('span', { class: 'visually-hidden' }, item.passed ? 'Met' : 'Not met'),
     );
@@ -187,7 +200,10 @@ export function createScorecard(ctx) {
 
   function clear() {
     setHidden(el.card, true);
+    el.nameText.textContent = '';
+    setHidden(el.nameStar, true);
     el.list.replaceChildren();
+    el.year.textContent = '';
     el.figures.textContent = '';
     el.points.textContent = '';
     setHidden(el.state, true);

@@ -25,8 +25,8 @@ The question is now asked directly:
   one match     two matches               no match
      │              │                           │
      ▼              ▼                           ▼
- their points   "Which one is you?"      "Not on this years roster.
-                (told apart by the        Ask an officer."
+ their points   "Which one is you?"      "Name not found"
+                (told apart by the        Search leaderboard or contact PDSA
                  month they joined)
 ```
 
@@ -48,8 +48,9 @@ have typed their name. Migration 21 originally withheld this: "the individual re
 the part an officer needs and a stranger does not." The club asked for that reversed. The
 spreadsheet this product replaces showed a member every event of the year and whether
 they made it, and a point total alone cannot answer that. So `portal_attendance()`
-(migration 23) hands back every published event of the year, by category, with attended,
-waiting, declined, upcoming or nothing next to each one, for the member looked up. It
+hands back every published event once with categories and approved credit grouped into
+that row, plus optional verified actual start and end instants. Attended, waiting,
+declined, upcoming or nothing remains the member's status for each event. It
 still carries none of an officer's context: no decline reason, no flags, no reviewer, no
 photo, no other member. That boundary is tested the same way the rest of this file is.
 
@@ -57,7 +58,9 @@ photo, no other member. That boundary is tested the same way the rest of this fi
 
 Every one is a `SECURITY DEFINER` function that any caller may execute, including one
 holding nothing but the anon key. Four are defined in `..._public_member_portal.sql`
-(migration 21); `portal_attendance()` is `..._member_event_history.sql` (migration 23).
+(migration 21). `portal_attendance()` originated in `..._member_event_history.sql`
+(migration 23), and its current one-row-per-event contract is defined in
+`..._event_times_and_portal_attendance.sql` (migration 25).
 
 | What the page needs | Function |
 |---|---|
@@ -143,52 +146,64 @@ already ask officers, so the page answers them once instead.
 This is what the page says before anybody has typed anything, which is the common case
 for somebody who followed a link from a group chat.
 
-## Your events
+## Attendance record
 
-Below the scorecard, one collapsible section per category, drawn from
-`portal_attendance()` once the points have already loaded. The figures are the answer;
-this is the detail behind them, so it is fetched after and fails silently if it does not
-come back, the same as the requirements box does.
+The successful result starts with the member name, academic year, server-computed
+Honorary Status, number of published requirements met, total points, Download PDF, and
+Not you?. The status value is `Earned` or `Not yet`, directly from the server verdict.
+The Honorary Status label always carries the same small star used by the leaderboard;
+an honorary member's name carries it as well. The visible status words remain the
+accessible signal. Every published requirement follows with its current value, target,
+and explicit Met or Not met status. None of those rules are calculated in the client.
+The summary count is the number of non-group requirement rows whose server verdict is
+Met out of all non-group requirement rows. It never substitutes a root group's N-of-M
+value and never determines Honorary status.
+
+The scorecard draws as soon as `portal_scorecard()` returns. Attendance loads
+independently through `portal_attendance()`, with a visible retry if that request fails.
+The attendance response also embeds a fresh public scorecard evaluated in the same
+database statement snapshot as its event rows. Once it arrives, that atomic scorecard
+becomes the final displayed and exported summary. Member and year ids must agree across
+the envelope and embedded scorecard before Download PDF is enabled.
+
+The `About Honorary Membership` Q&A shown below the initial lookup also follows the
+successful attendance record. It is one shared section in the page, not a duplicated
+copy, so its fixed answers cannot drift between states. The introductory `What is an
+Honorary Member?` copy and general published Requirements stay on the initial screen;
+successful results already carry the member-specific Requirement progress.
 
 ```
-┌──────────────────────────────────┐
-│ ▾ GBMs                        9  │
-│    Fall GBM 1        Sep 4     9 │
-│    Fall GBM 2        Sep 18      │
-│ ▸ Volunteering                30 │
-│ ▸ Clinical Workshops           6 │
-└──────────────────────────────────┘
+┌────────────────────────────────────────┐
+│ [Approved 8] [Waiting 1] [Declined 1] │
+│ Fall GBM 1  Sep 4  6:00 to 7:30 PM    │
+│ 1 hr 30 min  GBMs: 1        Approved  │
+│ Give Kids A Smile  Sep 2               │
+│ Time not recorded  Volunteering: 5     │
+└────────────────────────────────────────┘
 ```
 
-Every published event of the year is a row, grouped under the category it counts for. An
-event linked to two categories, like Soap Carving, is a row under both. What is in the
-last column:
+Approved records are the default. Waiting and declined records remain available through
+status filters and are never presented as completed attendance. Each event renders once,
+newest first, with title, date, actual Eastern start and end times, duration, grouped
+category credit, and attendance status. Desktop uses a semantic table and mobile uses
+stacked cards. An event linked to two categories remains one row with both credits.
 
-| Status | Shown as |
-|---|---|
-| approved | the credit earned, the spreadsheet's `1` |
-| pending | `Waiting` |
-| rejected | `Declined` |
-| no record, not yet held | `Upcoming` |
-| no record, already held | blank, the spreadsheet's blank cell |
+When either actual instant is missing, the row says `Time not recorded`. The check-in
+window is never used to infer a schedule or duration. Event duration is informational
+and does not enter points, requirement progress, or Honorary status. Event Location no
+longer exists and appears nowhere in the response or page.
 
-A section the member has any record in opens; one they have never touched stays shut with
-its total on the summary line. A club year is on the order of a hundred events across
-thirteen categories, and drawn flat that is a page nobody scrolls to the bottom of. Their
-own history is never behind an interaction they have to discover; the events they have
-not been to are.
+Where more than one `attendance_records` row exists for the same event, the live row
+wins. A member who was declined, corrected the problem, and checked in again sees their
+current status.
 
-Where more than one `attendance_records` row exists for the same event (a rejection
-followed by a fresh check-in, which `one_live_record_per_member_event` permits because a
-rejected row sits outside that index), the live row wins. A member who was turned down,
-fixed the problem and checked in again reads where they stand now, not the state that was
-superseded.
-
-Nothing here is denormalised. The title, the date and the credit are read from `events`,
-`event_categories` and `v_attendance_credit` on every call, keyed off `member_id`, so
-renaming an event, moving its date, or merging a duplicate member into another all show up
-with nothing to run. `test/public_portal.test.mjs` proves this by doing exactly those
-three things and reading the answer back, rather than assuming a live join implies it.
+The current-year PDF is generated locally in the browser from the atomic attendance
+response already loaded. It is never uploaded or stored. It includes the summary, requirement progress,
+and approved events only, with one row per event. Recorded duration totals only events
+with both actual instants and separately counts approved events with missing times. The
+PDF embeds the locally bundled Public Sans TTF and a locally bundled Noto Sans fallback,
+so accented and supported non-Latin text remains extractable without a CDN or runtime
+external font request.
 
 ## The leaderboard
 

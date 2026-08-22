@@ -121,6 +121,8 @@ const {
   diffCategoryRows,
   diffEvidenceRow,
   defaultCloseTime,
+  toNewYorkDatetimeLocalValue,
+  fromNewYorkDatetimeLocalValue,
   eventStatus,
   buildCheckinUrl,
 } = await import('../src/events-model.js');
@@ -147,7 +149,7 @@ const signInAs = (email) => signInAsAccount(email, PORT);
 const server = await startMock(PORT);
 
 const EVENT_SELECT = [
-  'id,title,occurred_on,location,term_id,checkin_token,checkin_opens_at,checkin_closes_at,',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_opens_at,checkin_closes_at,',
   'review_policy,is_published,',
   'event_categories(category_id,credit_mode,fixed_credit),',
   'event_evidence_requirements(id,kind,is_required,prompt)',
@@ -166,7 +168,8 @@ await check('creating an event writes all three tables, and the event comes back
       academic_year_id: IDS.YEAR_CURRENT,
       title: 'Verify Event Create',
       occurred_on: '2026-09-01',
-      location: 'HPA-1 100',
+      starts_at: '2026-09-01T22:00:00.000Z',
+      ends_at: '2026-09-02T00:00:00.000Z',
       checkin_closes_at: '2026-09-01T23:59:00.000Z',
     },
   ]);
@@ -315,6 +318,17 @@ await check('defaultCloseTime lands on 11:59 PM local time for the given date', 
   assert.equal(date.getHours(), 23);
   assert.equal(date.getMinutes(), 59);
   assert.equal(date.getDate(), 5);
+});
+
+await check('actual event times round trip as America/New_York instants', () => {
+  const summer = '2026-08-11T22:00:00.000Z';
+  const winter = '2027-01-11T23:00:00.000Z';
+  assert.equal(toNewYorkDatetimeLocalValue(summer), '2026-08-11T18:00');
+  assert.equal(toNewYorkDatetimeLocalValue(winter), '2027-01-11T18:00');
+  assert.equal(fromNewYorkDatetimeLocalValue('2026-08-11T18:00'), summer);
+  assert.equal(fromNewYorkDatetimeLocalValue('2027-01-11T18:00'), winter);
+  assert.equal(fromNewYorkDatetimeLocalValue('2026-03-08T02:30'), null);
+  assert.equal(fromNewYorkDatetimeLocalValue('2026-11-01T01:30', '2026-11-01T06:30:00.000Z'), '2026-11-01T06:30:00.000Z');
 });
 
 await check('buildCheckinUrl resolves against the admin page location and carries the token', () => {
@@ -713,6 +727,29 @@ await check('the events list draws the year, and last year stays out of it', () 
   assert.ok(!titles.includes('Fall GBM 1'), 'last year\'s event is on this year\'s list');
 });
 
+await check('the editor requires paired, ordered actual times and has no Location field', async () => {
+  const before = (await select('events', {
+    select: 'id',
+    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+  })).length;
+  dom.click(dom.$('event-new'));
+  assert.equal(dom.$('event-location'), null);
+  dom.$('event-title').value = 'Verify Time Validation';
+  dom.$('event-starts').value = '2026-09-20T18:00';
+  dom.fire(dom.$('event-form'), 'submit');
+  assert.match(dom.$('event-error').textContent, /both event times/i);
+
+  dom.$('event-ends').value = '2026-09-20T17:00';
+  dom.fire(dom.$('event-form'), 'submit');
+  assert.match(dom.$('event-error').textContent, /end must be after/i);
+  const after = (await select('events', {
+    select: 'id',
+    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+  })).length;
+  assert.equal(after, before, 'an invalid time pair was submitted');
+  dom.click(dom.$('event-cancel'));
+});
+
 await check('event cards separate headings, status metadata, counts, and actions', async () => {
   await patch(
     'events',
@@ -912,17 +949,17 @@ await check('picking a tab narrows the list to that category', () => {
   assert.ok(rowTitles().includes('Spring GBM 5'), 'All did not put the list back');
 });
 
-await check('search narrows on the title and on the place', () => {
+await check('search narrows on the title and carries no location field', () => {
   try {
     const search = dom.$('events-search');
     search.value = 'soap';
     dom.fire(search, 'input');
     assert.deepEqual(rowTitles(), ['Soap Carving']);
 
-    // HPA-2 118 is Soap Carving's room, and appears in no event's title.
+    assert.equal(dom.$('event-location'), null, 'the removed Location input is still in the form');
     search.value = 'hpa-2';
     dom.fire(search, 'input');
-    assert.deepEqual(rowTitles(), ['Soap Carving'], 'the place is not searched');
+    assert.ok(!dom.$('empty-events').hidden, 'removed location data still affects search');
 
     search.value = 'zzzz';
     dom.fire(search, 'input');
@@ -1981,18 +2018,21 @@ await check('Edit pressed on an event puts the officer back on it, showing what 
   dom.click(dom.$('event-detail-edit'));
   assert.equal(dom.$('event-form-title').textContent, 'Edit event', 'Edit did not open the editor');
 
-  dom.$('event-location').value = 'HPA-1 210';
+  dom.$('event-starts').value = '2026-08-11T18:00';
+  dom.$('event-ends').value = '2026-08-11T20:00';
   dom.fire(dom.$('event-form'), 'submit');
   await until(() => !dom.$('event-detail-view').hidden, 'Save did not go back to the event');
   await settle();
 
   assert.ok(dom.$('event-list').hidden, 'Save dropped the officer back on the list');
   assert.equal(dom.$('event-detail-title').textContent, 'Spring GBM 5');
-  assert.match(
-    dom.$('event-detail-meta').textContent,
-    /HPA-1 210/,
-    'the event screen is still showing what it showed before the save',
-  );
+  const [saved] = await select('events', {
+    select: 'starts_at,ends_at',
+    filters: { title: 'eq.Spring GBM 5' },
+  });
+  assert.equal(saved.starts_at, '2026-08-11T22:00:00.000Z');
+  assert.equal(saved.ends_at, '2026-08-12T00:00:00.000Z');
+  assert.ok(!dom.$('event-detail-meta').textContent.includes('HPA'));
 });
 
 await check('an event nobody checked in to can be deleted, and takes its categories with it', async () => {

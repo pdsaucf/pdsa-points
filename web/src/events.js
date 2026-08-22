@@ -42,6 +42,8 @@ import {
   sortEvents,
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
+  toNewYorkDatetimeLocalValue,
+  fromNewYorkDatetimeLocalValue,
   eventStatus,
   parseCredit,
   validateCategoryRows,
@@ -53,7 +55,7 @@ import {
 import { $, h, announce, setHidden, shortDate, plural } from './ui.js';
 
 const EVENT_SELECT = [
-  'id,title,occurred_on,location,term_id,checkin_token,checkin_closes_at',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');
@@ -99,9 +101,10 @@ export function createEvents(ctx) {
 
     title: $('event-title'),
     date: $('event-date'),
+    starts: $('event-starts'),
+    ends: $('event-ends'),
     closes: $('event-closes'),
     noClose: $('event-no-close'),
-    location: $('event-location'),
     termField: $('event-term-field'),
     term: $('event-term'),
 
@@ -556,7 +559,8 @@ export function createEvents(ctx) {
     el.formTitle.textContent = event ? 'Edit event' : 'New event';
     el.title.value = event?.title ?? draft?.title ?? '';
     el.date.value = event?.occurred_on ?? draft?.occurred_on ?? todayIsoDate();
-    el.location.value = event?.location ?? draft?.location ?? '';
+    el.starts.value = toNewYorkDatetimeLocalValue(event?.starts_at ?? draft?.starts_at);
+    el.ends.value = toNewYorkDatetimeLocalValue(event?.ends_at ?? draft?.ends_at);
 
     state.closesAutoLinked = !event;
     if (event?.checkin_closes_at) {
@@ -890,7 +894,14 @@ export function createEvents(ctx) {
     return {
       title: el.title.value.trim(),
       occurred_on: el.date.value,
-      location: el.location.value.trim() || null,
+      starts_at: fromNewYorkDatetimeLocalValue(
+        el.starts.value,
+        state.editingEvent?.starts_at ?? null,
+      ),
+      ends_at: fromNewYorkDatetimeLocalValue(
+        el.ends.value,
+        state.editingEvent?.ends_at ?? null,
+      ),
       term_id: el.term.value || null,
       checkin_closes_at: el.noClose.checked ? null : fromDatetimeLocalValue(el.closes.value),
     };
@@ -914,6 +925,20 @@ export function createEvents(ctx) {
     if (!fields.occurred_on) {
       showFormError('Pick a date.');
       el.date.focus();
+      return;
+    }
+    if (Boolean(el.starts.value) !== Boolean(el.ends.value)) {
+      showFormError('Enter both event times, or leave both blank.');
+      (el.starts.value ? el.ends : el.starts).focus();
+      return;
+    }
+    if ((el.starts.value && !fields.starts_at) || (el.ends.value && !fields.ends_at)) {
+      showFormError('Enter valid Eastern times.');
+      return;
+    }
+    if (fields.starts_at && new Date(fields.ends_at) <= new Date(fields.starts_at)) {
+      showFormError('Event end must be after event start.');
+      el.ends.focus();
       return;
     }
 
