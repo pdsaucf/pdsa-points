@@ -58,6 +58,17 @@ const BY_CODE = {
     body: 'Wait a few seconds, then press the button again. Nothing was lost.',
     recover: 'retry',
   }),
+
+  // PostgREST raises PGRST202 when an RPC is absent from its schema cache or
+  // when the request's parameter names do not match any installed signature.
+  // The database answered, so calling this a connection failure sends an
+  // admin toward the wrong fix. It normally means the static page was
+  // published before its database migration.
+  PGRST202: () => ({
+    title: 'Action unavailable',
+    body: 'An admin needs to finish the site update',
+    recover: 'none',
+  }),
 };
 
 const HTTP_FALLBACK = {
@@ -65,7 +76,7 @@ const HTTP_FALLBACK = {
   403: SESSION_EXPIRED,
   404: {
     title: 'Cannot reach the database',
-    body: 'An admin needs to check the connection details for this site.',
+    body: 'An admin needs to check the connection details for this site',
     recover: 'none',
   },
   409: {
@@ -85,9 +96,10 @@ const HTTP_FALLBACK = {
  *   'none'     nothing here will help, so no button
  *
  * @param {unknown} err
+ * @param {{title?: string}|null} context mutation-specific heading, when useful
  * @returns {{title: string, body: string, recover: 'signin'|'refresh'|'retry'|'none'}}
  */
-export function describeOfficer(err) {
+export function describeOfficer(err, context = null) {
   if (err instanceof SessionExpiredError) return SESSION_EXPIRED;
 
   if (err instanceof NetworkError) {
@@ -100,9 +112,19 @@ export function describeOfficer(err) {
 
   if (err instanceof RpcError) {
     const build = BY_CODE[err.code];
-    if (build) return build(err.message);
+    if (build) {
+      const copy = build(err.message);
+      // A caller may name the mutation that failed without replacing a useful
+      // PDS refusal or a sign-in decision. This is used for failures that
+      // would otherwise have only a transport-level heading such as "Action
+      // unavailable".
+      if (context?.title && err.code === 'PGRST202') return { ...copy, title: context.title };
+      return copy;
+    }
 
-    if (err.status && HTTP_FALLBACK[err.status]) return HTTP_FALLBACK[err.status];
+    if (err.status && HTTP_FALLBACK[err.status]) {
+      return HTTP_FALLBACK[err.status];
+    }
 
     if (err.status >= 500) {
       return {

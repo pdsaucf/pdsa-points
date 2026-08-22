@@ -44,9 +44,21 @@ const app = {
   roster: null,
   member: null,
   storage: null,
+  storageReloadQueue: Promise.resolve(),
   tab: 'events',
   returnTab: 'roster',
 };
+
+let quietFailureDepth = 0;
+
+async function quietRefresh(run) {
+  quietFailureDepth += 1;
+  try {
+    return await run();
+  } finally {
+    quietFailureDepth -= 1;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Whole-screen states
@@ -112,14 +124,20 @@ function note(text, tone = 'ok') {
  * a given failure is worth retrying.
  *
  */
-function fail(err, retry) {
-  const copy = describeOfficer(err);
+function fail(err, retry, context = null) {
+  const copy = describeOfficer(err, context);
 
   if (copy.recover === 'signin') {
     forgetSession();
     showSignIn(copy.title);
     return;
   }
+
+  // A committed attendance mutation keeps its success strip while the
+  // screens derived from it refresh in the background. Those reload methods
+  // already preserve their last good state on failure. Replacing the success
+  // with a secondary read error makes the completed mutation look refused.
+  if (quietFailureDepth > 0) return;
 
   el.screenMessage.dataset.tone = 'warn';
   el.screenMessageTitle.textContent = copy.title;
@@ -236,6 +254,7 @@ function context() {
     fail,
     note,
     clearMessage,
+    quietRefresh,
     setReviewCount: (count) => setCount(el.tabReviewCount, count),
     openMember,
     closeMember,
@@ -251,13 +270,24 @@ function context() {
     // the roster are both showing. They reload rather than being patched in
     // place, because the point total and the honorary star are the database's
     // answer and not something this screen may recompute.
-    onMemberChanged: () => {
-      app.progress?.reload();
-      app.roster?.reload();
+    onMemberChanged: () =>
+      quietRefresh(() =>
+        Promise.allSettled([
+          app.progress?.reload(),
+          app.roster?.reload(),
+          app.member?.currentId() ? app.member.reload() : undefined,
+        ]),
+      ),
+    // A Remove that carried evidence creates or finishes purge bookkeeping
+    // while the Storage panel is mounted but may be hidden. Reload it now so
+    // opening Storage never shows the snapshot from before the removal.
+    onStorageChanged: () => {
+      const reload = () => quietRefresh(() => app.storage?.reload());
+      const next = app.storageReloadQueue.then(reload, reload);
+      app.storageReloadQueue = next.catch(() => undefined);
+      return next;
     },
-    onRosterChanged: () => {
-      app.progress?.reload();
-    },
+    onRosterChanged: () => quietRefresh(() => app.progress?.reload()),
     // Requirements and Events can make a category inline. The manager in the
     // Honorary requirements workspace re-reads the shared category table.
     onCategoriesChanged: () => {
@@ -273,10 +303,8 @@ function context() {
     // A new or edited event can change which events the review queue's
     // filter offers, and an event's categories changing can change the
     // board underneath it.
-    onEventsChanged: () => {
-      app.review?.reload();
-      app.progress?.reload();
-    },
+    onEventsChanged: () =>
+      quietRefresh(() => Promise.allSettled([app.review?.reload(), app.progress?.reload()])),
   };
 }
 
@@ -332,7 +360,7 @@ function startApp() {
   app.progress.mount();
   app.roster.mount();
   app.member.mount();
-  app.storage.mount();
+  app.storageReloadQueue = Promise.resolve(app.storage.mount());
 }
 
 // ---------------------------------------------------------------------------

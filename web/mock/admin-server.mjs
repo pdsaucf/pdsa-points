@@ -77,6 +77,7 @@ const rateCounters = new Map(); // `${bucket}:${minute}` -> count
 // Set from the check process, never over HTTP and never from anything the page
 // can reach, and cleared the moment it fires.
 let pendingFailure = null; // { fn, nth, seen }
+let pendingDroppedResponse = null; // RPC whose next committed response is lost
 
 export function failRpcOnce(fn, nth = 1) {
   pendingFailure = { fn, nth, seen: 0 };
@@ -89,6 +90,19 @@ function injectedFailure(res, fn, helpers) {
   pendingFailure = null;
   record({ fn, outcome: 'injected failure' });
   helpers.pds(res, 'PDS03', 'The mock was asked to fail this call once.');
+  return true;
+}
+
+/** Simulates a committed RPC whose HTTP response never reaches the browser. */
+export function dropRpcResponseOnce(fn) {
+  pendingDroppedResponse = fn;
+}
+
+function dropCommittedResponse(res, fn) {
+  if (pendingDroppedResponse !== fn) return false;
+  pendingDroppedResponse = null;
+  record({ fn, outcome: 'response dropped after commit' });
+  res.destroy();
   return true;
 }
 
@@ -145,6 +159,7 @@ export function resetAdmin() {
   rateCounters.clear();
   auditCalls.length = 0;
   pendingFailure = null;
+  pendingDroppedResponse = null;
   pendingRowRefusal = null;
   pendingShortResult = false;
   pendingDeleteFailures = null;
@@ -160,6 +175,8 @@ export function adminState() {
       member_id: r.member_id,
       claimed_name: r.claimed_name,
       status: r.status,
+      source: r.source,
+      submitted_value: r.submitted_value,
       flags: r.flags,
       review_note: r.review_note,
       reviewed_by: r.reviewed_by,
@@ -1935,6 +1952,7 @@ export const ADMIN_RPC = {
       ids,
     });
 
+    if (dropCommittedResponse(res, 'review_records')) return;
     json(res, 200, targets.length);
   },
 
@@ -2046,6 +2064,7 @@ export const ADMIN_RPC = {
       submittedValue: value,
     });
 
+    if (dropCommittedResponse(res, 'add_officer_attendance')) return;
     json(res, 200, ids);
   },
 
@@ -2123,6 +2142,7 @@ export const ADMIN_RPC = {
       objectPaths: paths.length,
     });
 
+    if (dropCommittedResponse(res, 'remove_attendance_record')) return;
     json(res, 200, { purge_run_id: runId, object_paths: paths });
   },
 

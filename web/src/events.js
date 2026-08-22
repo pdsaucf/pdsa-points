@@ -88,6 +88,7 @@ export function createEvents(ctx) {
     emptyBody: $('empty-events-body'),
     list: $('event-list'),
     detailView: $('event-detail-view'),
+    detailBack: $('event-detail-back'),
 
     formView: $('event-form-view'),
     form: $('event-form'),
@@ -168,6 +169,9 @@ export function createEvents(ctx) {
     // a retry diffs against what exists rather than trying to insert twice.
     existingCategoryLinks: [],
     existingEvidence: null,
+    // Only a deliberate trip from a card into its detail gets a return
+    // target. Quiet reloads repaint the list too, but must not move focus.
+    detailOriginEventId: null,
   };
 
   const activeCategories = () => state.categories.filter((row) => !row.archived_at);
@@ -180,7 +184,7 @@ export function createEvents(ctx) {
     openQr: (event) => openQr(event),
     previewCheckin: (event) => previewCheckin(event),
     duplicate: (event) => duplicate(event),
-    backToList: () => showList(),
+    backToList: () => showList({ restoreDetailFocus: true }),
     // An approve, a decline, a removal or an added member all move the counts
     // on the row behind this screen, and the review queue's badge with them.
     afterChange: async () => {
@@ -305,7 +309,7 @@ export function createEvents(ctx) {
   // The list
   // -------------------------------------------------------------------------
 
-  function showList() {
+  function showList({ restoreDetailFocus = false } = {}) {
     state.view = 'list';
     setHidden(el.formView, true);
     setHidden(el.toolbar, false);
@@ -333,12 +337,23 @@ export function createEvents(ctx) {
         : 'Create the first event for this year.';
       setHidden(el.empty, false);
       setHidden(el.list, true);
+      if (restoreDetailFocus) state.detailOriginEventId = null;
       return;
     }
 
     setHidden(el.empty, true);
     setHidden(el.list, false);
     el.list.replaceChildren(...shown.map(renderRow));
+
+    if (restoreDetailFocus) {
+      const originId = state.detailOriginEventId;
+      state.detailOriginEventId = null;
+      if (!originId) return;
+      el.list
+        .querySelector(`[data-id="${CSS.escape(String(originId))}"]`)
+        ?.querySelector('.event-view')
+        ?.focus();
+    }
   }
 
   /**
@@ -395,8 +410,18 @@ export function createEvents(ctx) {
         : [h('span', { class: 'muted small' }, 'No categories')]),
     );
 
-    const actions = h('div', { class: 'rule-actions' });
+    const actions = h('div', { class: 'event-actions' });
     actions.append(
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'button button-small button-primary event-view',
+          'aria-label': `View event: ${event.title}`,
+          onClick: () => openDetail(event, { rememberOrigin: true }),
+        },
+        'View event',
+      ),
       h(
         'button',
         {
@@ -426,23 +451,24 @@ export function createEvents(ctx) {
       h(
         'span',
         { class: 'event-title-cell' },
-        // The title is the way in. Every other control on the row does one
-        // narrow thing (print the code, change the fields); this opens the
-        // event itself, which is where the attendees are.
-        h(
-          'button',
-          { type: 'button', class: 'event-open', onClick: () => openDetail(event) },
-          event.title,
-        ),
+        h('h3', { class: 'event-title' }, event.title),
         evidence ? h('span', { class: 'muted small' }, 'photo required') : null,
       ),
       chips,
       h(
         'span',
         { class: 'event-counts muted small' },
-        `${event.counts.approved} approved · ${event.counts.pending} pending`,
+        `${event.counts.approved} approved · ${event.counts.pending} waiting`,
       ),
-      h('span', { class: 'event-status', dataset: { status: status.toLowerCase() } }, status),
+      h(
+        'span',
+        {
+          class: 'event-checkin-status',
+          dataset: { status: status.toLowerCase() },
+        },
+        h('span', { class: 'event-status-dot', 'aria-hidden': 'true' }),
+        `Check-in ${status.toLowerCase()}`,
+      ),
       actions,
     );
   }
@@ -456,7 +482,8 @@ export function createEvents(ctx) {
   // One event, in full
   // -------------------------------------------------------------------------
 
-  function openDetail(event) {
+  function openDetail(event, { rememberOrigin = false } = {}) {
+    if (rememberOrigin) state.detailOriginEventId = event.id;
     state.view = 'detail';
     ctx.clearMessage();
     setHidden(el.formView, true);
@@ -464,7 +491,9 @@ export function createEvents(ctx) {
     setHidden(el.tabs, true);
     setHidden(el.list, true);
     setHidden(el.empty, true);
-    return detail.open(event);
+    const opened = detail.open(event);
+    if (rememberOrigin) el.detailBack.focus();
+    return opened;
   }
 
   /**

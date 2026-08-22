@@ -351,6 +351,64 @@ test('removing a record with no photo writes no purge run', async () => {
   assert.equal(Number(await db.val(`select count(*) from purge_runs`)), before);
 });
 
+test('removing deletes only the named attendance record', async () => {
+  const [targetId] = await add(FIXED_EVENT, [MEMBERS.dorian]);
+  const [sameEventId] = await add(FIXED_EVENT, [MEMBERS.greta]);
+  const [otherEventId] = await add(TYPED_EVENT, [MEMBERS.fergus], 2.5);
+
+  const memberBefore = await db.val(
+    `select to_jsonb(m) from members m where id = $1`,
+    [MEMBERS.dorian],
+  );
+  const eventBefore = await db.val(
+    `select to_jsonb(e) from events e where id = $1`,
+    [FIXED_EVENT],
+  );
+  const unrelatedBefore = await db.q(
+    `select to_jsonb(a) as row from attendance_records a
+      where id = any($1::uuid[]) order by id`,
+    [[sameEventId, otherEventId]],
+  );
+
+  await asOfficer(`select remove_attendance_record($1::uuid)`, [targetId]);
+
+  assert.equal(
+    Number(await db.val(`select count(*) from attendance_records where id = $1`, [targetId])),
+    0,
+  );
+  assert.deepEqual(
+    await db.val(`select to_jsonb(m) from members m where id = $1`, [MEMBERS.dorian]),
+    memberBefore,
+    'the member changed with the attendance record',
+  );
+  assert.deepEqual(
+    await db.val(`select to_jsonb(e) from events e where id = $1`, [FIXED_EVENT]),
+    eventBefore,
+    'the event changed with the attendance record',
+  );
+  assert.deepEqual(
+    await db.q(
+      `select to_jsonb(a) as row from attendance_records a
+        where id = any($1::uuid[]) order by id`,
+      [[sameEventId, otherEventId]],
+    ),
+    unrelatedBefore,
+    'an unrelated attendance record changed',
+  );
+
+  const audit = await db.one(
+    `select entity_id, detail from audit_log
+      where action = 'remove_attendance_record' order by created_at desc limit 1`,
+  );
+  assert.equal(audit.entity_id, targetId);
+  assert.equal(audit.detail.event_id, FIXED_EVENT);
+  assert.equal(audit.detail.member_id, MEMBERS.dorian);
+
+  await db.q(`delete from attendance_records where id = any($1::uuid[])`, [
+    [sameEventId, otherEventId],
+  ]);
+});
+
 test('removing refuses an unknown record, and a viewer cannot remove at all', async () => {
   const unknown = await db.withRole('authenticated', USERS.officer, () =>
     db.expectError(`select remove_attendance_record($1::uuid)`, [

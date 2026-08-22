@@ -38,7 +38,11 @@ import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
 import { signInAs as signInAsAccount } from './sign-in.mjs';
 import { IDS } from './admin-fixtures.mjs';
-import { failStorageDeleteOnce } from './admin-server.mjs';
+import {
+  dropRpcResponseOnce,
+  failRpcOnce,
+  failStorageDeleteOnce,
+} from './admin-server.mjs';
 import { installDom } from './dom.mjs';
 
 const PORT = 8799;
@@ -64,6 +68,18 @@ globalThis.localStorage = {
 const adminHtml = await readFile(`${WEB_ROOT}admin/index.html`, 'utf8');
 const adminCss = await readFile(`${WEB_ROOT}assets/css/admin.css`, 'utf8');
 const dom = installDom(adminHtml);
+
+// The production browser owns activeElement. The intentionally small DOM
+// harness does not model focus, so give its shared element prototype the one
+// behavior this accessibility regression needs to observe.
+let activeElement = null;
+Object.defineProperty(globalThis.document, 'activeElement', {
+  configurable: true,
+  get: () => activeElement,
+});
+Object.getPrototypeOf(dom.$('event-detail-back')).focus = function focus() {
+  activeElement = this;
+};
 
 // What the screen opens for the officer, caught rather than opened. Preview
 // has to send them to the same URL the QR code encodes, and the only way to
@@ -98,7 +114,7 @@ URL.createObjectURL = (blob) => {
 URL.revokeObjectURL = () => {};
 
 const auth = await import('../src/auth.js');
-const { select, insert, patch, remove } = await import('../src/rest.js');
+const { select, insert, patch, remove, callRpc } = await import('../src/rest.js');
 const { RpcError } = await import('../src/errors.js');
 const {
   validateCategoryRows,
@@ -518,8 +534,13 @@ async function until(predicate, message, timeout = 4000) {
 }
 
 const adminAudit = () => api('/__mock/audit').then((body) => body.admin);
+const eventRowFor = (title) =>
+  dom
+    .$('event-list')
+    .querySelectorAll('.event-row')
+    .find((row) => row.querySelector('.event-title')?.textContent.trim() === title) ?? null;
 const rowTitles = () =>
-  dom.$('event-list').querySelectorAll('.event-open').map((node) => node.textContent.trim());
+  dom.$('event-list').querySelectorAll('.event-title').map((node) => node.textContent.trim());
 const tabLabels = () =>
   dom.$('event-category-tabs').querySelectorAll('.filter-tab').map((node) => node.textContent.trim());
 const attendeeNames = () =>
@@ -529,18 +550,300 @@ const rowFor = (name) =>
     .$('attendee-rows')
     .querySelectorAll('tr')
     .find((row) => row.querySelectorAll('td')[0].textContent.includes(name)) ?? null;
+const rowForRecord = (recordId) =>
+  dom
+    .$('attendee-rows')
+    .querySelectorAll('tr')
+    .find((row) => row.getAttribute('data-record') === recordId) ?? null;
 
+const detailSnapshot = () => {
+  const stats = Object.fromEntries(
+    dom
+      .$('event-detail-stats')
+      .querySelectorAll('.event-stat')
+      .map((tile) => {
+        const label = tile.querySelector('.event-stat-label').textContent.trim();
+        const raw = tile.querySelector('.event-stat-value').textContent.trim();
+        return [label, /^\d+$/.test(raw) ? Number(raw) : raw];
+      }),
+  );
+  const sources = Object.fromEntries(
+    dom
+      .$('event-detail-sources')
+      .textContent.split(' · ')
+      .map((part) => /^(.*) (\d+)$/.exec(part.trim()))
+      .filter(Boolean)
+      .map((match) => [match[1], Number(match[2])]),
+  );
+  return {
+    records: dom.$('attendee-rows').querySelectorAll('tr').length,
+    count: dom.$('attendee-count').textContent.trim(),
+    stats,
+    sources,
+  };
+};
+
+function failRpcAsMissingOnce(name) {
+  const originalFetch = globalThis.fetch;
+  let pending = true;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (pending && new URL(url).pathname === `/rest/v1/rpc/${name}`) {
+      pending = false;
+      globalThis.fetch = originalFetch;
+      return new Response(
+        JSON.stringify({
+          code: 'PGRST202',
+          message: `Could not find the function public.${name} in the schema cache`,
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return originalFetch(input, init);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+function dropRpcBodyOnce(name) {
+  const originalFetch = globalThis.fetch;
+  let pending = true;
+  let calls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const response = await originalFetch(input, init);
+    if (new URL(url).pathname === `/rest/v1/rpc/${name}`) calls += 1;
+    if (pending && new URL(url).pathname === `/rest/v1/rpc/${name}`) {
+      pending = false;
+      return {
+        ok: response.ok,
+        status: response.status,
+        headers: response.headers,
+        text: async () => {
+          throw new TypeError('response body terminated');
+        },
+      };
+    }
+    return response;
+  };
+  const restore = () => {
+    globalThis.fetch = originalFetch;
+  };
+  restore.calls = () => calls;
+  return restore;
+}
+
+function failRestReadOnce(table) {
+  const originalFetch = globalThis.fetch;
+  let pending = true;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (pending && new URL(url).pathname === `/rest/v1/${table}`) {
+      pending = false;
+      globalThis.fetch = originalFetch;
+      await originalFetch(input, init);
+      return new Response(JSON.stringify({ code: 'REST_READ_FAILED', message: 'read failed' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return originalFetch(input, init);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+function holdNextRestResponse(table) {
+  const originalFetch = globalThis.fetch;
+  let release;
+  let captured;
+  let pending = true;
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  const responseCaptured = new Promise((resolve) => {
+    captured = resolve;
+  });
+
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (pending && new URL(url).pathname === `/rest/v1/${table}`) {
+      pending = false;
+      const response = await originalFetch(input, init);
+      captured();
+      await released;
+      return response;
+    }
+    return originalFetch(input, init);
+  };
+
+  return {
+    captured: responseCaptured,
+    release() {
+      globalThis.fetch = originalFetch;
+      release();
+    },
+  };
+}
+
+const initialStorageLoad = holdNextRestResponse('v_purge_runs_outstanding');
 start();
 dom.$('signin-passcode').value = 'mock-passcode';
 dom.fire(dom.$('signin-form'), 'submit');
 await until(() => !dom.$('view-app').hidden, 'the app never opened');
 await until(() => !dom.$('event-list').hidden, 'the events list never rendered');
 
+await check('a read-only RPC retries when its response body is lost', async () => {
+  const restoreFetch = dropRpcBodyOnce('fn_storage_usage');
+  try {
+    const rows = await callRpc('fn_storage_usage', undefined, { sleep: async () => {} });
+    assert.ok(Array.isArray(rows) && rows.length === 1, 'the read did not recover its result');
+  } finally {
+    restoreFetch();
+  }
+  assert.equal(restoreFetch.calls(), 2, 'the read-only RPC did not retry exactly once');
+});
+
 await check('the events list draws the year, and last year stays out of it', () => {
   const titles = rowTitles();
   assert.ok(titles.includes('Spring GBM 5'), `Spring GBM 5 is missing: ${titles.join(', ')}`);
   assert.ok(titles.includes('Health Fair'), 'Health Fair is missing');
   assert.ok(!titles.includes('Fall GBM 1'), 'last year\'s event is on this year\'s list');
+});
+
+await check('event cards separate headings, status metadata, counts, and actions', async () => {
+  await patch(
+    'events',
+    { id: `eq.${IDS.EVENT_SOAP}` },
+    { checkin_closes_at: new Date(Date.now() - 60_000).toISOString() },
+  );
+  dom.fire(dom.$('year-select'), 'change');
+  await until(
+    () =>
+      eventRowFor('Soap Carving')
+        ?.querySelector('.event-checkin-status')
+        ?.textContent.trim() === 'Check-in closed',
+    'the closed card never rendered',
+  );
+
+  const rows = dom.$('event-list').querySelectorAll('.event-row');
+  const statuses = new Set();
+  assert.ok(rows.length > 1, 'there are not enough cards to check both statuses');
+
+  for (const row of rows) {
+    const title = row.querySelector('.event-title');
+    assert.equal(title?.tagName, 'H3', `the title is not a heading: ${row.textContent}`);
+    assert.equal(title.querySelector('button, a'), null, 'the title still contains navigation');
+    assert.equal(row.querySelector('.event-open'), null, 'the hidden title button still exists');
+    assert.ok(row.querySelector('.event-date')?.textContent.trim(), 'the date is missing');
+    assert.ok(row.querySelector('.chip-row'), 'the category metadata is missing');
+
+    const view = dom.buttonNamed(row, 'View event');
+    assert.ok(view, `View event is missing from ${title.textContent}`);
+    assert.match(view.getAttribute('class') ?? '', /button-primary/);
+
+    const qr = dom.buttonNamed(row, 'QR');
+    const edit = dom.buttonNamed(row, 'Edit');
+    assert.equal(qr?.getAttribute('aria-label'), `QR code for ${title.textContent}`);
+    assert.equal(edit?.getAttribute('aria-label'), `Edit ${title.textContent}`);
+
+    const status = row.querySelector('.event-checkin-status');
+    assert.equal(status?.tagName, 'SPAN', 'check-in status is not plain metadata');
+    assert.equal(status.getAttribute('role'), null, 'check-in status has an interactive role');
+    assert.equal(status.querySelector('button, a'), null, 'check-in status contains a control');
+    assert.match(status.textContent.trim(), /^Check-in (open|closed)$/);
+    assert.equal(status.querySelector('.event-status-dot')?.getAttribute('aria-hidden'), 'true');
+    statuses.add(status.textContent.trim());
+
+    const counts = row.querySelector('.event-counts')?.textContent.trim() ?? '';
+    assert.match(counts, /^\d+ approved · \d+ waiting$/);
+    assert.doesNotMatch(counts, /pending/i);
+  }
+
+  assert.deepEqual(statuses, new Set(['Check-in open', 'Check-in closed']));
+  assert.ok(
+    rows.some((row) => /photo required/.test(row.querySelector('.event-title-cell').textContent)),
+    'photo-required metadata disappeared',
+  );
+});
+
+await check('View event opens the event named on its card', async () => {
+  const row = eventRowFor('Field Day');
+  assert.ok(row, 'Field Day is not on the list');
+  const view = dom.buttonNamed(row, 'View event');
+  view.focus();
+  assert.equal(document.activeElement, view, 'the originating View event button was not focused');
+  dom.click(view);
+  assert.equal(
+    document.activeElement,
+    dom.$('event-detail-back'),
+    'detail entry left focus in the hidden list',
+  );
+  await until(() => !dom.$('event-detail-body').hidden, 'View event did not open the detail');
+  assert.equal(dom.$('event-detail-title').textContent, 'Field Day');
+  dom.click(dom.$('event-detail-back'));
+  await until(() => !dom.$('event-list').hidden, 'Back did not return to the cards');
+  const returned = dom.buttonNamed(eventRowFor('Field Day'), 'View event');
+  assert.notEqual(returned, view, 'Back did not rebuild the event cards');
+  assert.equal(document.activeElement, returned, 'Back did not restore focus to Field Day');
+});
+
+await check('ordinary list repainting does not steal focus', () => {
+  const search = dom.$('events-search');
+  search.focus();
+  dom.$('events-sort').value = 'title_asc';
+  dom.fire(dom.$('events-sort'), 'change');
+  assert.equal(document.activeElement, search);
+  dom.$('events-sort').value = 'date_desc';
+  dom.fire(dom.$('events-sort'), 'change');
+  assert.equal(document.activeElement, search);
+});
+
+await check('card QR and Edit keep their existing flows', async () => {
+  let row = eventRowFor('Soap Carving');
+  assert.ok(row, 'Soap Carving is not on the list');
+  dom.click(dom.buttonNamed(row, 'QR'));
+  assert.equal(dom.$('qr-dialog').open, true, 'QR did not open its dialog');
+  assert.equal(dom.$('qr-title').textContent, 'Soap Carving');
+  dom.$('qr-dialog').close();
+
+  row = eventRowFor('Soap Carving');
+  dom.click(dom.buttonNamed(row, 'Edit'));
+  assert.ok(!dom.$('event-form-view').hidden, 'Edit did not open the event form');
+  assert.equal(dom.$('event-form-title').textContent, 'Edit event');
+  assert.equal(dom.$('event-title').value, 'Soap Carving');
+  dom.click(dom.$('event-cancel'));
+  await until(() => !dom.$('event-list').hidden, 'Cancel did not return to the cards');
+});
+
+await check('event cards stack actions with full tap targets on narrow screens', () => {
+  assert.match(
+    adminCss,
+    /@media \(max-width: 46rem\)[\s\S]*?\.event-row[\s\S]*?grid-template-areas:[\s\S]*?'actions actions'/,
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 46rem\)[\s\S]*?\.event-actions \.button\s*\{[\s\S]*?min-height: var\(--tap\)/,
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 34rem\)[\s\S]*?\.event-row\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/,
+  );
+  assert.match(adminCss, /\.event-title\s*\{[^}]*overflow-wrap: anywhere/);
+  assert.match(
+    adminCss,
+    /\.event-row > \.chip-row\s*\{[^}]*min-width: 0[^}]*max-width: 100%/,
+  );
+  assert.match(
+    adminCss,
+    /\.event-row > \.chip-row \.category-chip\s*\{[^}]*min-width: 0[^}]*max-width: 100%/,
+  );
+  assert.match(
+    adminCss,
+    /\.event-row > \.chip-row \.category-chip > span\s*\{[^}]*min-width: 0[^}]*overflow-wrap: anywhere/,
+  );
 });
 
 await check('the tabs are built from the events, not from the category table', () => {
@@ -629,8 +932,8 @@ await check('Show narrows to what is still open for check-in', () => {
     assert.ok(open.includes('Field Day'), `Field Day is not open: ${open.join(', ')}`);
     for (const row of dom.$('event-list').querySelectorAll('.event-row')) {
       assert.equal(
-        row.querySelector('.event-status').textContent.trim(),
-        'Open',
+        row.querySelector('.event-checkin-status').textContent.trim(),
+        'Check-in open',
         `a closed event is under the Open filter: ${row.textContent}`,
       );
     }
@@ -666,9 +969,9 @@ await check('the order picker reorders the list without re-reading the server', 
         // Read off its own cell, never off the row's text: a category chip
         // ending in a credit runs straight into the count beside it, and
         // "Socials · 1" plus "64 approved" reads as 164.
-        const [, approved, pending] =
-          /(\d+) approved · (\d+) pending/.exec(row.querySelector('.event-counts').textContent) ?? [];
-        return Number(approved ?? 0) + Number(pending ?? 0);
+        const [, approved, waiting] =
+          /(\d+) approved · (\d+) waiting/.exec(row.querySelector('.event-counts').textContent) ?? [];
+        return Number(approved ?? 0) + Number(waiting ?? 0);
       });
     assert.deepEqual(live, [...live].sort((a, b) => b - a), 'Most check-ins is not in order');
     assert.ok(live[0] > live[live.length - 1], 'every event has the same number of check-ins');
@@ -685,9 +988,9 @@ process.stdout.write('\none event, in full\n');
 // ---------------------------------------------------------------------------
 
 const openEvent = async (title) => {
-  const node = dom.$('event-list').querySelectorAll('.event-open').find((one) => one.textContent.trim() === title);
-  assert.ok(node, `${title} is not on the list`);
-  dom.click(node);
+  const row = eventRowFor(title);
+  assert.ok(row, `${title} is not on the list`);
+  dom.click(dom.buttonNamed(row, 'View event'));
   await until(() => !dom.$('event-detail-body').hidden, `${title} never opened`);
 };
 
@@ -776,6 +1079,162 @@ await check('Approve goes through review_records, and never writes status direct
     'the row never turned approved',
   );
   await settle();
+});
+
+await check('Approve reconciles a committed call whose response was lost', async () => {
+  const row = dom
+    .$('attendee-rows')
+    .querySelectorAll('tr[data-status="pending"]')
+    .find((candidate) => dom.buttonNamed(candidate, 'Approve'));
+  assert.ok(row, 'there is no linked waiting record to approve');
+  const recordId = row.getAttribute('data-record');
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter((entry) => entry.action === 'review_records').length;
+
+  dropRpcResponseOnce('review_records');
+  dom.click(dom.buttonNamed(row, 'Approve'));
+  await settle();
+
+  const after = await adminAudit();
+  const mutationCalls = after.calls
+    .slice(beforeCalls)
+    .filter((call) => call.fn === 'review_records' && call.actor);
+  assert.equal(mutationCalls.length, 1, 'Approve retried after its committed response was lost');
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'review_records').length,
+    beforeAudits + 1,
+    'Approve wrote more than one audit row',
+  );
+  assert.equal(rowForRecord(recordId)?.getAttribute('data-status'), 'approved');
+  assert.equal(dom.$('screen-message-title').textContent, '1 record approved');
+  assert.ok(
+    after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
+    'Approve did not refresh member-derived views',
+  );
+});
+
+await check('Review reconciles a committed call whose response body was lost', async () => {
+  const row = dom
+    .$('attendee-rows')
+    .querySelectorAll('tr[data-status="pending"]')
+    .find((candidate) => dom.buttonNamed(candidate, 'Approve'));
+  assert.ok(row, 'there is no linked waiting record for the body-loss check');
+  const recordId = row.getAttribute('data-record');
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter((entry) => entry.action === 'review_records').length;
+  const restoreFetch = dropRpcBodyOnce('review_records');
+
+  try {
+    dom.click(dom.buttonNamed(row, 'Approve'));
+    await settle();
+  } finally {
+    restoreFetch();
+  }
+
+  const after = await adminAudit();
+  assert.equal(
+    after.calls
+      .slice(beforeCalls)
+      .filter((call) => call.fn === 'review_records' && call.actor).length,
+    1,
+    'Review retried after success headers and a lost body',
+  );
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'review_records').length,
+    beforeAudits + 1,
+    'Review wrote more than one audit row after body loss',
+  );
+  assert.equal(rowForRecord(recordId)?.getAttribute('data-status'), 'approved');
+  assert.equal(dom.$('screen-message-title').textContent, '1 record approved');
+});
+
+await check('Decline reconciles a committed call whose response was lost', async () => {
+  const row = rowFor('Tobias Renner');
+  assert.ok(row, 'the unmatched waiting record is missing');
+  const recordId = row.getAttribute('data-record');
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter((entry) => entry.action === 'review_records').length;
+
+  dropRpcResponseOnce('review_records');
+  const restoreDerivedRead = failRestReadOnce('v_possible_duplicate_members');
+  try {
+    dom.click(dom.buttonNamed(row, 'Decline'));
+    await settle();
+  } finally {
+    restoreDerivedRead();
+  }
+
+  const after = await adminAudit();
+  const mutationCalls = after.calls
+    .slice(beforeCalls)
+    .filter((call) => call.fn === 'review_records' && call.actor);
+  assert.equal(mutationCalls.length, 1, 'Decline retried after its committed response was lost');
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'review_records').length,
+    beforeAudits + 1,
+    'Decline wrote more than one audit row',
+  );
+  assert.equal(rowForRecord(recordId)?.getAttribute('data-status'), 'rejected');
+  assert.equal(dom.$('screen-message-title').textContent, '1 record declined');
+  assert.equal(
+    dom.$('screen-message-body').textContent,
+    '',
+    'a derived reload failure replaced the committed success',
+  );
+  assert.ok(
+    after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
+    'Decline did not refresh member-derived views',
+  );
+});
+
+await check('a failed post-commit event reload keeps stale mutation controls locked', async () => {
+  const row = dom
+    .$('attendee-rows')
+    .querySelectorAll('tr[data-status="pending"]')
+    .find((candidate) => dom.buttonNamed(candidate, 'Approve'));
+  assert.ok(row, 'there is no linked waiting record for the reload-failure check');
+  const recordId = row.getAttribute('data-record');
+  const approve = dom.buttonNamed(row, 'Approve');
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const restoreRead = failRestReadOnce('events');
+
+  try {
+    dom.click(approve);
+    await until(async () => {
+      const current = await adminAudit();
+      return (
+        current.attendance.find((record) => record.id === recordId)?.status === 'approved' &&
+        dom.$('screen-message-title').textContent === '1 record approved'
+      );
+    }, 'the mutation did not commit before its reload failed');
+  } finally {
+    restoreRead();
+  }
+
+  assert.equal(dom.$('screen-message-body').textContent, '', 'the success strip became an error');
+  assert.equal(dom.$('event-detail-body').hidden, true, 'stale event controls remained visible');
+  const lockedApprove = dom.buttonNamed(rowForRecord(recordId), 'Approve');
+  assert.equal(lockedApprove.disabled, true, 'the stale Approve button was re-enabled');
+
+  dom.click(lockedApprove);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const afterRepeat = await adminAudit();
+  assert.equal(
+    afterRepeat.calls
+      .slice(beforeCalls)
+      .filter((call) => call.fn === 'review_records' && call.actor).length,
+    1,
+    'the stale button repeated a committed review',
+  );
+
+  await backToList();
+  await openEvent('Spring GBM 5');
+  assert.equal(rowForRecord(recordId)?.getAttribute('data-status'), 'approved');
+  assert.equal(dom.$('attendee-add').disabled, false, 'a successful re-read did not release the lock');
 });
 
 await check('Approve on every waiting record leaves the unmatched ones alone', async () => {
@@ -886,6 +1345,100 @@ await check('adding goes through one call, not an insert the approval can be los
   assert.ok(names.some((name) => name.includes('Marcus Bell')), `Marcus Bell is not on the list: ${names.join(', ')}`);
 });
 
+await check('Add reconciles a committed call whose response was lost', async () => {
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter(
+    (entry) => entry.action === 'add_officer_attendance',
+  ).length;
+  const beforeFiled = before.attendance.filter(
+    (row) => row.event_id === IDS.EVENT_GKAS && row.source === 'officer_entry',
+  ).length;
+
+  dom.click(dom.$('attendee-add'));
+  const picked = dom.$('attendee-add-list').querySelectorAll('input')[0];
+  assert.ok(picked, 'there is nobody left to add');
+  picked.checked = true;
+  dom.fire(picked, 'change');
+  dom.$('attendee-add-value').value = '1.5';
+  dropRpcResponseOnce('add_officer_attendance');
+  dom.fire(dom.$('attendee-add-form'), 'submit');
+  await settle();
+
+  const after = await adminAudit();
+  const mutationCalls = after.calls
+    .slice(beforeCalls)
+    .filter((call) => call.fn === 'add_officer_attendance' && call.actor);
+  assert.equal(mutationCalls.length, 1, 'Add retried after its committed response was lost');
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance').length,
+    beforeAudits + 1,
+    'Add wrote more than one audit row',
+  );
+  assert.equal(
+    after.attendance.filter(
+      (row) => row.event_id === IDS.EVENT_GKAS && row.source === 'officer_entry',
+    ).length,
+    beforeFiled + 1,
+    'Add did not leave exactly one new record',
+  );
+  assert.equal(dom.$('screen-message-title').textContent, '1 member added');
+  assert.ok(
+    after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
+    'Add did not refresh member-derived views',
+  );
+});
+
+await check('Add reconciles a committed call whose response body was lost', async () => {
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter(
+    (entry) => entry.action === 'add_officer_attendance',
+  ).length;
+  const beforeIds = new Set(
+    before.attendance
+      .filter((row) => row.event_id === IDS.EVENT_GKAS && row.source === 'officer_entry')
+      .map((row) => row.id),
+  );
+
+  dom.click(dom.$('attendee-add'));
+  const picked = dom.$('attendee-add-list').querySelectorAll('input')[0];
+  assert.ok(picked, 'there is nobody left for the Add body-loss check');
+  picked.checked = true;
+  dom.fire(picked, 'change');
+  dom.$('attendee-add-value').value = '1.25';
+  const restoreFetch = dropRpcBodyOnce('add_officer_attendance');
+  try {
+    dom.fire(dom.$('attendee-add-form'), 'submit');
+    await settle();
+  } finally {
+    restoreFetch();
+  }
+
+  const after = await adminAudit();
+  assert.equal(
+    after.calls
+      .slice(beforeCalls)
+      .filter((call) => call.fn === 'add_officer_attendance' && call.actor).length,
+    1,
+    'Add retried after success headers and a lost body',
+  );
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance').length,
+    beforeAudits + 1,
+    'Add wrote more than one audit row after body loss',
+  );
+  const added = after.attendance.filter(
+    (row) =>
+      row.event_id === IDS.EVENT_GKAS &&
+      row.source === 'officer_entry' &&
+      !beforeIds.has(row.id),
+  );
+  assert.equal(added.length, 1, 'Add body loss did not leave exactly one new record');
+  assert.equal(Number(added[0].submitted_value), 1.25);
+  assert.equal(dom.$('screen-message-title').textContent, '1 member added');
+});
+
 await check('an event whose credit mode changed under the screen refuses the add', async () => {
   // THE SILENT ONE. The screen decides whether to ask for a number from the
   // event as it was when it opened. Switch the event to fixed credit
@@ -974,11 +1527,217 @@ async function aRecordWithAPhoto(skip = new Set()) {
   throw new Error('no routine record with a photo to remove');
 }
 
-await check('removing deletes the record and clears the photo from the bucket', async () => {
+function storageOutstandingCount() {
+  if (dom.$('storage-outstanding').hidden) return 0;
+  const match = /^(\d+)/.exec(dom.$('storage-outstanding-title').textContent.trim());
+  return match ? Number(match[1]) : 0;
+}
+
+async function finishOutstandingFromStorage(runId) {
+  dom.click(dom.$('tab-storage'));
+  await until(
+    () => !dom.$('storage-body').hidden,
+    'Storage did not open with the outstanding run',
+  );
+  assert.equal(dom.$('storage-outstanding').hidden, false, 'Storage hid the outstanding run');
+  dom.click(dom.$('storage-finish'));
+  await until(async () => {
+    const rows = await select('v_purge_runs_outstanding', {
+      select: 'purge_run_id',
+      filters: { purge_run_id: `eq.${runId}` },
+    });
+    return rows.length === 0 && !dom.$('storage-body').hidden;
+  }, 'Storage could not finish the outstanding run');
+  dom.click(dom.$('tab-events'));
+  await until(
+    () => !dom.$('event-detail-view').hidden && !dom.$('event-detail-body').hidden,
+    'Events did not return to the open event',
+  );
+}
+
+await check('a missing remove RPC stays on the event with a contextual error', async () => {
+  await backToList();
+  await openEvent('Spring GBM 5');
+
+  const noPhotoRow = dom
+    .$('attendee-rows')
+    .querySelectorAll('tr')
+    .find((row) => row.getAttribute('data-record') === 'r0000000-0000-4000-a000-000000000007');
+  assert.ok(noPhotoRow, 'the no-photo record is not on the event');
+  dom.click(dom.buttonNamed(noPhotoRow, 'Remove'));
+  assert.equal(dom.$('attendee-remove-note').textContent, 'Decline to keep this record in event history');
+  assert.doesNotMatch(dom.$('attendee-remove-note').textContent, /\.$/);
+  dom.$('attendee-remove-dialog').close();
+
+  const { record, name } = await aRecordWithAPhoto();
+  const before = detailSnapshot();
+  const restoreFetch = failRpcAsMissingOnce('remove_attendance_record');
+
+  try {
+    const row = rowFor(name);
+    dom.click(dom.buttonNamed(row, 'Remove'));
+    assert.equal(dom.$('attendee-remove-dialog').querySelector('.dialog-title').textContent, 'Remove record');
+    assert.equal(dom.$('attendee-remove-note').textContent, 'The attached photo will also be removed');
+    assert.doesNotMatch(dom.$('attendee-remove-note').textContent, /\.$/);
+    dom.fire(dom.$('attendee-remove-form'), 'submit');
+    await settle();
+  } finally {
+    restoreFetch();
+  }
+
+  assert.ok(!dom.$('event-detail-view').hidden, 'the event detail closed after a failed removal');
+  assert.ok(rowFor(name), 'the row disappeared after the delete request was refused');
+  assert.deepEqual(detailSnapshot(), before, 'the event figures changed after a failed removal');
+  assert.equal(
+    (await adminAudit()).attendance.filter((one) => one.id === record.id).length,
+    1,
+    'the record was deleted after the RPC was reported missing',
+  );
+  assert.equal(dom.$('screen-message-title').textContent, 'Record not removed');
+  assert.equal(dom.$('screen-message-body').textContent, 'An admin needs to finish the site update');
+  assert.doesNotMatch(
+    `${dom.$('screen-message-title').textContent} ${dom.$('screen-message-body').textContent}`,
+    /cannot reach the database|schema cache|p_record_id/i,
+  );
+});
+
+await check('Remove reconciles a committed call whose response was lost', async () => {
+  const { record, path, name } = await aRecordWithAPhoto();
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter(
+    (entry) => entry.action === 'remove_attendance_record',
+  ).length;
+
+  dropRpcResponseOnce('remove_attendance_record');
+  const row = rowFor(name);
+  dom.click(dom.buttonNamed(row, 'Remove'));
+  dom.fire(dom.$('attendee-remove-form'), 'submit');
+  try {
+    await initialStorageLoad.captured;
+    await until(
+      async () =>
+        (await adminAudit()).attendance.every((candidate) => candidate.id !== record.id),
+      'Remove did not commit while the older Storage load was held',
+    );
+  } finally {
+    initialStorageLoad.release();
+  }
+  await settle();
+
+  const after = await adminAudit();
+  const mutationCalls = after.calls
+    .slice(beforeCalls)
+    .filter((call) => call.fn === 'remove_attendance_record' && call.actor);
+  assert.equal(mutationCalls.length, 1, 'Remove retried after its committed response was lost');
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'remove_attendance_record').length,
+    beforeAudits + 1,
+    'Remove wrote more than one audit row',
+  );
+  assert.equal(
+    after.attendance.filter((one) => one.id === record.id).length,
+    0,
+    'Remove reconciliation left the record behind',
+  );
+  assert.ok(!rowFor(name), 'Remove reconciliation left the row on screen');
+  assert.equal(await evidenceObjectExists(path), true, 'response loss unexpectedly deleted the photo');
+  assert.equal(
+    dom.$('screen-message-title').textContent,
+    `${name} removed · Photo waiting on Storage`,
+  );
+  assert.ok(
+    after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
+    'Remove did not refresh member-derived views',
+  );
+
+  const outstanding = await select('v_purge_runs_outstanding', {
+    select: 'purge_run_id,kind,outstanding_count',
+  });
+  const mine = outstanding.filter((one) => one.kind === 'record_removed');
+  assert.equal(mine.length, 1, 'response loss did not leave a recoverable purge run');
+  assert.equal(Number(mine[0].outstanding_count), 1);
+  const totalOutstanding = outstanding.reduce(
+    (sum, run) => sum + Number(run.outstanding_count ?? 0),
+    0,
+  );
+  assert.equal(
+    storageOutstandingCount(),
+    totalOutstanding,
+    'an older Storage load overwrote the post-removal recovery reload',
+  );
+
+  await finishOutstandingFromStorage(mine[0].purge_run_id);
+  assert.equal(await evidenceObjectExists(path), false, 'Storage did not finish the recovered photo');
+});
+
+await check('Remove reconciles a committed call whose response body was lost', async () => {
+  const { record, path, name } = await aRecordWithAPhoto();
+  const before = await adminAudit();
+  const beforeCalls = before.calls.length;
+  const beforeAudits = before.auditLog.filter(
+    (entry) => entry.action === 'remove_attendance_record',
+  ).length;
+  const beforeOutstanding = storageOutstandingCount();
+  const restoreFetch = dropRpcBodyOnce('remove_attendance_record');
+
+  try {
+    const row = rowFor(name);
+    dom.click(dom.buttonNamed(row, 'Remove'));
+    dom.fire(dom.$('attendee-remove-form'), 'submit');
+    await settle();
+  } finally {
+    restoreFetch();
+  }
+
+  const after = await adminAudit();
+  assert.equal(
+    after.calls
+      .slice(beforeCalls)
+      .filter((call) => call.fn === 'remove_attendance_record' && call.actor).length,
+    1,
+    'Remove retried after success headers and a lost body',
+  );
+  assert.equal(
+    after.auditLog.filter((entry) => entry.action === 'remove_attendance_record').length,
+    beforeAudits + 1,
+    'Remove wrote more than one audit row after body loss',
+  );
+  assert.equal(
+    after.attendance.filter((candidate) => candidate.id === record.id).length,
+    0,
+    'Remove body loss left the attendance record behind',
+  );
+  assert.ok(!rowFor(name), 'Remove body loss left the row on screen');
+  assert.equal(await evidenceObjectExists(path), true, 'body loss unexpectedly deleted the photo');
+  assert.equal(
+    dom.$('screen-message-title').textContent,
+    `${name} removed · Photo waiting on Storage`,
+  );
+
+  const outstanding = await select('v_purge_runs_outstanding', {
+    select: 'purge_run_id,kind,outstanding_count',
+  });
+  const mine = outstanding.filter((one) => one.kind === 'record_removed');
+  assert.equal(mine.length, 1, 'body loss did not leave a recoverable purge run');
+  assert.equal(storageOutstandingCount(), beforeOutstanding + 1);
+  await finishOutstandingFromStorage(mine[0].purge_run_id);
+  assert.equal(await evidenceObjectExists(path), false, 'Storage did not finish the body-loss run');
+});
+
+await check('removing updates every event figure and deletes only the intended record', async () => {
   await backToList();
   await openEvent('Spring GBM 5');
 
   const { record, path, name } = await aRecordWithAPhoto();
+  const beforeUi = detailSnapshot();
+  const beforeDb = await adminAudit();
+  const memberBefore = beforeDb.members.find((member) => member.id === record.member_id);
+  const unrelatedBefore = beforeDb.attendance.filter((one) => one.id !== record.id);
+  const [eventBefore] = await select('events', {
+    select: EVENT_SELECT,
+    filters: { id: `eq.${record.event_id}` },
+  });
   assert.equal(await evidenceObjectExists(path), true, 'the photo is not in the bucket to begin with');
 
   const row = rowFor(name);
@@ -995,6 +1754,55 @@ await check('removing deletes the record and clears the photo from the bucket', 
   );
   assert.equal(await evidenceObjectExists(path), false, 'the photo is still in the bucket');
   assert.ok(!rowFor(name), 'the row is still on screen');
+
+  const afterDb = await adminAudit();
+  assert.deepEqual(
+    afterDb.members.find((member) => member.id === record.member_id),
+    memberBefore,
+    'the member changed with the attendance record',
+  );
+  assert.deepEqual(
+    afterDb.attendance.filter((one) => one.id !== record.id),
+    unrelatedBefore,
+    'an unrelated attendance record changed',
+  );
+  const [eventAfter] = await select('events', {
+    select: EVENT_SELECT,
+    filters: { id: `eq.${record.event_id}` },
+  });
+  assert.deepEqual(eventAfter, eventBefore, 'the event changed with the attendance record');
+
+  const afterUi = detailSnapshot();
+  assert.equal(afterUi.records, beforeUi.records - 1);
+  assert.equal(afterUi.count, `${afterUi.records} records`);
+  const changedStat =
+    record.status === 'approved' ? 'Approved' : record.status === 'pending' ? 'Waiting' : 'Declined';
+  for (const label of ['Approved', 'Waiting', 'Declined', 'Not matched']) {
+    const decrease = label === changedStat || (label === 'Not matched' && !record.member_id) ? 1 : 0;
+    assert.equal(afterUi.stats[label], beforeUi.stats[label] - decrease, `${label} did not refresh`);
+  }
+  assert.equal(afterUi.sources.Scanned, beforeUi.sources.Scanned - 1, 'the source count did not refresh');
+
+  const enrolled = (
+    await select('member_enrollments', {
+      select: 'member_id,members(id,archived_at,merged_into_id)',
+      filters: {
+        academic_year_id: `eq.${IDS.YEAR_CURRENT}`,
+        'members.archived_at': 'is.null',
+        'members.merged_into_id': 'is.null',
+      },
+    })
+  ).length;
+  assert.equal(
+    afterUi.stats['Of the roster'],
+    `${Math.round((afterUi.stats.Approved / enrolled) * 100)}%`,
+    'the roster percentage did not refresh',
+  );
+
+  await backToList();
+  await openEvent('Spring GBM 5');
+  assert.ok(!rowFor(name), 'the removed row came back after reopening the event');
+  assert.deepEqual(detailSnapshot(), afterUi, 'the refreshed event disagrees with the saved deletion');
 });
 
 await check('a bucket that refuses leaves an outstanding purge run, not bytes nobody can name', async () => {
@@ -1006,6 +1814,7 @@ await check('a bucket that refuses leaves an outstanding purge run, not bytes no
   // submit_checkin() consumes them). So the intent is written down first, and
   // what proves it is a purge run still outstanding after the bucket refused.
   const { record, path, name } = await aRecordWithAPhoto();
+  const beforeOutstanding = storageOutstandingCount();
   failStorageDeleteOnce([path]);
 
   const row = rowFor(name);
@@ -1026,12 +1835,52 @@ await check('a bucket that refuses leaves an outstanding purge run, not bytes no
   const mine = outstanding.filter((one) => one.kind === 'record_removed');
   assert.equal(mine.length, 1, 'the stranded photo is not on any outstanding run');
   assert.equal(Number(mine[0].outstanding_count), 1);
+  assert.equal(
+    storageOutstandingCount(),
+    beforeOutstanding + 1,
+    'the mounted Storage panel missed the run after the bucket failure',
+  );
 
   assert.match(
     dom.$('screen-message-title').textContent,
     /waiting on Storage/i,
     `nothing said the photo was left behind: ${JSON.stringify(dom.$('screen-message-title').textContent)}`,
   );
+
+  await finishOutstandingFromStorage(mine[0].purge_run_id);
+  assert.equal(await evidenceObjectExists(path), false, 'Storage did not finish the refused photo');
+});
+
+await check('a finish failure reloads Storage with a run it can finish', async () => {
+  const beforeOutstanding = storageOutstandingCount();
+  const { record, path, name } = await aRecordWithAPhoto();
+  failRpcOnce('finish_purge_run');
+
+  const row = rowFor(name);
+  dom.click(dom.buttonNamed(row, 'Remove'));
+  dom.fire(dom.$('attendee-remove-form'), 'submit');
+  await settle();
+
+  assert.equal(
+    (await adminAudit()).attendance.filter((one) => one.id === record.id).length,
+    0,
+    'the record survived a finish failure',
+  );
+  assert.equal(await evidenceObjectExists(path), false, 'the bucket delete did not happen');
+  const outstanding = await select('v_purge_runs_outstanding', {
+    select: 'purge_run_id,kind,outstanding_count',
+  });
+  const mine = outstanding.filter((one) => one.kind === 'record_removed');
+  assert.equal(mine.length, 1, 'the bookkeeping failure did not stay outstanding');
+  assert.equal(Number(mine[0].outstanding_count), 1);
+  assert.equal(
+    storageOutstandingCount(),
+    beforeOutstanding + 1,
+    'the mounted Storage panel missed the run after the finish failure',
+  );
+  assert.match(dom.$('screen-message-title').textContent, /waiting on Storage/i);
+
+  await finishOutstandingFromStorage(mine[0].purge_run_id);
 });
 
 await check('a removal whose bucket call works leaves no outstanding run behind', async () => {

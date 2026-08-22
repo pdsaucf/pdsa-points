@@ -14,7 +14,15 @@
 // those RPCs are also what write the audit trail and what refuse to approve a
 // record with no member attached.
 
-import { rpc, API_BASE, authHeaders, withRetries, requestOnce, RpcError } from './api.js';
+import {
+  rpc,
+  API_BASE,
+  authHeaders,
+  withRetries,
+  requestOnce,
+  RpcError,
+  NetworkError,
+} from './api.js';
 import { accessToken, SessionExpiredError } from './auth.js';
 
 // ---------------------------------------------------------------------------
@@ -150,15 +158,63 @@ export async function remove(table, filters, options = {}) {
   });
 }
 
-/** An officer RPC. Same transport as the anonymous ones, with a token on it. */
+/**
+ * An officer RPC. Same transport as the anonymous ones, with a token on it.
+ *
+ * Authenticated RPCs include mutations without idempotency keys. A request can
+ * commit and still lose its response, so repeating it automatically can write
+ * a second audit row, move a review timestamp, or turn a successful Add into a
+ * false conflict. One transport attempt is the safe default for mutations.
+ * The read-only function allowlist below keeps the ordinary retry policy, and
+ * a caller may still override attempts explicitly for a shorter-lived read.
+ */
+const READ_ONLY_RPCS = new Set([
+  'fn_member_requirement_status',
+  'fn_purge_preview',
+  'fn_retroactive_match_candidates',
+  'fn_storage_usage',
+  'preview_requirement_set',
+  'validate_requirement_set',
+]);
+
 export async function callRpc(name, args, opts = {}) {
+  const readOnly = READ_ONLY_RPCS.has(name);
+  const rpcOpts = {
+    ...opts,
+    // A mutation stays one-shot even if a shared options object carries an
+    // attempts value intended for a read.
+    attempts: readOnly ? (opts.attempts ?? 4) : 1,
+  };
+  const run = (accessToken) =>
+    withRetries(async () => {
+      try {
+        // Keep retry ownership here. rpc() gets one attempt so a raw body-read
+        // failure can first be normalized below, then retried only when this
+        // call's read or mutation policy allows it.
+        return await rpc(name, args, {
+          ...rpcOpts,
+          attempts: 1,
+          rateLimitAttempts: 0,
+          accessToken,
+        });
+      } catch (err) {
+        // fetch can resolve once response headers arrive and still throw while
+        // consuming a body from a socket that closes early. For a mutation,
+        // that is just as commit-ambiguous as fetch rejecting before headers.
+        if (err instanceof TypeError) {
+          throw new NetworkError('The response did not complete.', err);
+        }
+        throw err;
+      }
+    }, rpcOpts);
+
   const token = await accessToken();
   try {
-    return await rpc(name, args, { ...opts, accessToken: token });
+    return await run(token);
   } catch (err) {
     if (err instanceof RpcError && err.status === 401) {
       const fresh = await accessToken({ force: true });
-      return rpc(name, args, { ...opts, accessToken: fresh });
+      return run(fresh);
     }
     throw err;
   }

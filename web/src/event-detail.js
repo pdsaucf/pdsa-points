@@ -31,6 +31,7 @@
 // at and no purge run will ever find.
 
 import { select, remove, callRpc, deleteEvidenceObjects } from './rest.js';
+import { NetworkError } from './errors.js';
 import { downloadCsv } from './csv.js';
 import {
   ATTENDANCE_STATUS,
@@ -144,6 +145,10 @@ export function createEventDetail(ctx, host) {
     // captured token before it paints anything. Same guard member.js keeps.
     loadToken: 0,
     busy: false,
+    // A mutation committed but its authoritative re-read failed. The old DOM
+    // remains disabled until a later open() proves current state and clears
+    // this lock, so stale buttons cannot repeat the completed mutation.
+    refreshLocked: false,
     // The add dialog's own state: who is ticked, and what is typed in its
     // search box. Kept here rather than read off the DOM so a re-render of
     // the list cannot lose a tick.
@@ -160,7 +165,7 @@ export function createEventDetail(ctx, host) {
   // Reading
   // -------------------------------------------------------------------------
 
-  async function open(event) {
+  async function open(event, { quietFailure = false } = {}) {
     state.event = event;
     state.loadToken += 1;
     const token = state.loadToken;
@@ -195,14 +200,14 @@ export function createEventDetail(ctx, host) {
           },
         }),
       ]);
-      if (token !== state.loadToken) return;
+      if (token !== state.loadToken) return false;
 
       if (!fresh.length) {
         // Deleted from under the officer, by another officer or another tab.
         ctx.note('That event is gone.', 'warn');
         close();
         await host.afterChange?.();
-        return;
+        return true;
       }
       state.event = fresh[0];
       state.records = records;
@@ -212,19 +217,28 @@ export function createEventDetail(ctx, host) {
         .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name)));
       state.enrolled = state.roster.length;
 
+      // This is the successful authoritative read a post-commit refresh lock
+      // was waiting for. Only now may the old action controls become usable.
+      if (state.refreshLocked) {
+        state.refreshLocked = false;
+        setBusy(false);
+      }
+
       setHidden(el.loading, true);
       render();
+      return true;
     } catch (err) {
-      if (token !== state.loadToken) return;
+      if (token !== state.loadToken) return false;
       setHidden(el.loading, true);
-      ctx.fail(err, () => open(event));
+      if (!quietFailure) ctx.fail(err, () => open(event));
+      return false;
     }
   }
 
   /** Re-reads this event's records after a write, without a full page load. */
-  async function reload() {
-    if (!state.event) return;
-    await open(state.event);
+  async function reload(options) {
+    if (!state.event) return false;
+    return open(state.event, options);
   }
 
   // -------------------------------------------------------------------------
@@ -483,27 +497,71 @@ export function createEventDetail(ctx, host) {
     renderAttendees();
   }
 
+  const idFilter = (ids) => `in.(${[...new Set(ids)].join(',')})`;
+
+  async function refreshAfterAttendanceChange(said, tone = 'ok') {
+    ctx.note(said, tone);
+    announce(said);
+    const refreshed = await reload({ quietFailure: true });
+    if (!refreshed) {
+      state.refreshLocked = true;
+      // Keep the committed result visible. open() was quiet, but repeating
+      // the note also protects against any synchronous shell work between
+      // the mutation response and this failed read.
+      ctx.note(said, tone);
+      return false;
+    }
+    if (ctx.quietRefresh) await ctx.quietRefresh(() => host.afterChange?.());
+    else await host.afterChange?.();
+    await ctx.onMemberChanged?.();
+    return true;
+  }
+
+  async function decisionWasApplied(ids, decision) {
+    try {
+      const rows = await select('attendance_records', {
+        select: 'id,status,reviewed_by',
+        filters: { id: idFilter(ids) },
+      });
+      const wanted = new Set(ids);
+      const status = decision === 'approve' ? 'approved' : 'rejected';
+      return (
+        rows.length === wanted.size &&
+        rows.every(
+          (row) => wanted.has(row.id) && row.status === status && row.reviewed_by === ctx.userId,
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async function decide(ids, decision) {
     if (state.busy || !ids.length) return;
     ctx.clearMessage();
     setBusy(true);
     try {
-      const count = await callRpc('review_records', {
-        p_ids: ids,
-        p_decision: decision,
-        p_note: null,
-      });
+      let count;
+      try {
+        count = await callRpc('review_records', {
+          p_ids: ids,
+          p_decision: decision,
+          p_note: null,
+        });
+      } catch (err) {
+        if (err instanceof NetworkError && (await decisionWasApplied(ids, decision))) {
+          count = ids.length;
+        } else {
+          ctx.fail(err, null);
+          return;
+        }
+      }
       const said = `${plural(Number(count ?? ids.length), 'record')} ${
         decision === 'approve' ? 'approved' : 'declined'
-      }.`;
-      ctx.note(said);
-      announce(said);
-      await reload();
-      await host.afterChange?.();
-    } catch (err) {
-      ctx.fail(err, null);
+      }`;
+      await refreshAfterAttendanceChange(said);
     } finally {
-      setBusy(false);
+      if (!state.refreshLocked) setBusy(false);
     }
   }
 
@@ -532,13 +590,39 @@ export function createEventDetail(ctx, host) {
       ATTENDANCE_STATUS[record.status] ?? record.status
     }`;
     el.removeNote.textContent = photoPathsOf(record).length
-      ? 'The photo goes with it.'
-      : 'Decline instead to keep the record and its reason.';
+      ? 'The attached photo will also be removed'
+      : 'Decline to keep this record in event history';
     el.removeDialog.showModal();
   }
 
   const photoPathsOf = (record) =>
     (record?.attendance_evidence ?? []).map((row) => row.object_path).filter(Boolean);
+
+  async function recordWasRemoved(recordId) {
+    try {
+      const rows = await select('attendance_records', {
+        select: 'id',
+        filters: { id: `eq.${recordId}` },
+        limit: 1,
+      });
+      return rows.length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async function purgeRunWasFinished(runId) {
+    try {
+      const rows = await select('v_purge_runs_outstanding', {
+        select: 'purge_run_id',
+        filters: { purge_run_id: `eq.${runId}` },
+        limit: 1,
+      });
+      return rows.length === 0;
+    } catch {
+      return false;
+    }
+  }
 
   function confirmRemove(event) {
     event.preventDefault();
@@ -566,13 +650,29 @@ export function createEventDetail(ctx, host) {
       // gone before anything is. What is left below is the same two-step
       // handoff the storage screen uses for every other purge, and a browser
       // that dies halfway leaves an outstanding run that screen can finish.
-      const outcome = await callRpc('remove_attendance_record', { p_record_id: record.id });
-
-      const said = `${attendeeName(record)} removed.`;
-      ctx.note(said);
-      announce(said);
+      let outcome;
+      try {
+        outcome = await callRpc('remove_attendance_record', { p_record_id: record.id });
+      } catch (err) {
+        if (err instanceof NetworkError && (await recordWasRemoved(record.id))) {
+          const photoWaiting = paths.length > 0;
+          const said = photoWaiting
+            ? `${attendeeName(record)} removed · Photo waiting on Storage`
+            : `${attendeeName(record)} removed`;
+          await refreshAfterAttendanceChange(said, photoWaiting ? 'warn' : 'ok');
+          // With the response gone, the purge run id is unavailable. The saved
+          // intent is still discoverable by Storage, which is the recovery path.
+          if (photoWaiting) await ctx.onStorageChanged?.();
+          return;
+        }
+        ctx.fail(err, null, { title: 'Record not removed' });
+        await reload();
+        return;
+      }
 
       const pending = outcome?.object_paths ?? paths;
+      const storageChanged = Boolean(outcome?.purge_run_id);
+      let photoWaiting = false;
       if (outcome?.purge_run_id && pending.length) {
         let deleted = [];
         try {
@@ -586,26 +686,26 @@ export function createEventDetail(ctx, host) {
               p_run_id: outcome.purge_run_id,
               p_object_paths: deleted,
             });
-          } catch {
+          } catch (err) {
             // The bytes are gone and the bookkeeping is not, which the storage
             // screen shows as an outstanding run. Same sentence it uses.
-            deleted = [];
+            if (!(err instanceof NetworkError) || !(await purgeRunWasFinished(outcome.purge_run_id))) {
+              deleted = [];
+            }
           }
         }
         if (deleted.length !== pending.length) {
-          // Said out loud rather than swallowed: the record IS gone, and an
-          // officer told nothing has no reason to go and look at Storage.
-          ctx.note(`${attendeeName(record)} removed. The photo is waiting on Storage.`, 'warn');
+          photoWaiting = true;
         }
       }
 
-      await reload();
-      await host.afterChange?.();
-    } catch (err) {
-      ctx.fail(err, null);
-      await reload();
+      const said = photoWaiting
+        ? `${attendeeName(record)} removed · Photo waiting on Storage`
+        : `${attendeeName(record)} removed`;
+      await refreshAfterAttendanceChange(said, photoWaiting ? 'warn' : 'ok');
+      if (storageChanged) await ctx.onStorageChanged?.();
     } finally {
-      setBusy(false);
+      if (!state.refreshLocked) setBusy(false);
     }
   }
 
@@ -701,28 +801,60 @@ export function createEventDetail(ctx, host) {
       // the screen opened. add_officer_attendance() reads event_categories
       // itself, under a lock, and refuses rather than filing credit worth
       // zero. See supabase/migrations/20260822100000_officer_attendance_entry.sql.
-      const filed = await callRpc('add_officer_attendance', {
-        p_event_id: state.event.id,
-        p_member_ids: memberIds,
-        p_submitted_value: needsValue ? value : null,
-      });
+      const recordsBeforeCall = new Set(state.records.map((row) => row.id));
+      let filed;
+      try {
+        filed = await callRpc('add_officer_attendance', {
+          p_event_id: state.event.id,
+          p_member_ids: memberIds,
+          p_submitted_value: needsValue ? value : null,
+        });
+      } catch (err) {
+        if (
+          err instanceof NetworkError &&
+          (await addedRecordsWereFiled(memberIds, needsValue ? value : null, recordsBeforeCall))
+        ) {
+          filed = memberIds;
+        } else {
+          ctx.fail(err, null);
+          // Re-read the event after a definitive refusal. Its credit mode or
+          // attendance may have changed while the dialog was open.
+          await reload();
+          return;
+        }
+      }
 
       const count = Array.isArray(filed) ? filed.length : memberIds.length;
-      const said = `${plural(count, 'member')} added.`;
-      ctx.note(said);
-      announce(said);
-      await reload();
-      await host.afterChange?.();
-      ctx.onMemberChanged?.();
-    } catch (err) {
-      ctx.fail(err, null);
-      // The call is all or nothing, so there is nothing half-written to
-      // account for. The re-read is for the reason the call was refused: an
-      // event whose credit mode changed, or a member somebody else just
-      // added, are both things this screen is now showing wrongly.
-      await reload();
+      await refreshAfterAttendanceChange(`${plural(count, 'member')} added`);
     } finally {
-      setBusy(false);
+      if (!state.refreshLocked) setBusy(false);
+    }
+  }
+
+  async function addedRecordsWereFiled(memberIds, submittedValue, recordsBeforeCall) {
+    try {
+      const rows = await select('attendance_records', {
+        select: 'id,member_id,status,source,submitted_value,reviewed_by',
+        filters: {
+          event_id: `eq.${state.event.id}`,
+          member_id: idFilter(memberIds),
+        },
+      });
+      return memberIds.every((memberId) =>
+        rows.some(
+          (row) =>
+            !recordsBeforeCall.has(row.id) &&
+            row.member_id === memberId &&
+            row.status === 'approved' &&
+            row.source === 'officer_entry' &&
+            row.reviewed_by === ctx.userId &&
+            (submittedValue === null
+              ? row.submitted_value === null
+              : Number(row.submitted_value) === submittedValue),
+        ),
+      );
+    } catch {
+      return false;
     }
   }
 
