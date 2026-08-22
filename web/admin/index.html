@@ -128,9 +128,32 @@
       -->
       <main id="panel-events" class="panel-view">
         <div id="events-toolbar" class="toolbar">
+          <div class="toolbar-field">
+            <label class="label" for="events-search">Search</label>
+            <input
+              id="events-search"
+              class="input"
+              type="search"
+              autocomplete="off"
+              placeholder="Title or place"
+            />
+          </div>
+          <div class="toolbar-field toolbar-field-narrow">
+            <label class="label" for="events-status">Show</label>
+            <select id="events-status" class="select"></select>
+          </div>
+          <div class="toolbar-field toolbar-field-narrow">
+            <label class="label" for="events-sort">Order</label>
+            <select id="events-sort" class="select"></select>
+          </div>
           <p id="events-count" class="count" aria-live="polite"></p>
           <button id="event-new" type="button" class="button button-primary">New event</button>
         </div>
+
+        <!-- One tab per category this year's events actually use, built from
+             the events themselves rather than from the category table: a tab
+             that filters to nothing teaches an officer nothing. -->
+        <div id="event-category-tabs" class="filter-tabs" role="group" aria-label="Category" hidden></div>
 
         <section id="loading-events" class="empty" aria-busy="true">
           <p class="spinner" aria-hidden="true"></p>
@@ -138,11 +161,81 @@
         </section>
 
         <section id="empty-events" class="empty" hidden>
-          <h2 class="empty-title">No events yet</h2>
-          <p class="muted">Create the first event for this year.</p>
+          <h2 id="empty-events-title" class="empty-title">No events yet</h2>
+          <p id="empty-events-body" class="muted">Create the first event for this year.</p>
         </section>
 
         <div id="event-list" class="event-list" hidden></div>
+
+        <!--
+          One event, opened from its title in the list: the numbers, and every
+          attendance record on it. Approve, Decline and adding somebody by
+          hand all go through review_records(), so nothing on this screen
+          writes `status` and invariant 6 holds. A record with no member
+          linked offers Review instead of Approve, because approving one is
+          refused by the database.
+        -->
+        <div id="event-detail-view" hidden>
+          <div class="toolbar">
+            <button id="event-detail-back" type="button" class="button">Back</button>
+            <p id="attendee-count" class="count" aria-live="polite"></p>
+            <button id="event-detail-qr" type="button" class="button">QR</button>
+            <button id="event-detail-preview" type="button" class="button">Preview check-in</button>
+            <button id="event-detail-edit" type="button" class="button">Edit</button>
+            <button id="event-detail-duplicate" type="button" class="button">Duplicate</button>
+            <button id="event-detail-delete" type="button" class="button button-danger">Delete</button>
+          </div>
+
+          <section id="loading-event-detail" class="empty" aria-busy="true">
+            <p class="spinner" aria-hidden="true"></p>
+            <p class="muted">Loading the event…</p>
+          </section>
+
+          <div id="event-detail-body" hidden>
+            <header class="event-detail-head">
+              <h2 id="event-detail-title" class="member-name"></h2>
+              <p class="event-detail-line">
+                <span id="event-detail-meta" class="muted small"></span>
+                <span id="event-detail-status" class="event-status"></span>
+              </p>
+              <div id="event-detail-chips" class="chip-row"></div>
+              <p id="event-detail-window" class="muted small"></p>
+            </header>
+
+            <div id="event-detail-stats" class="event-stats"></div>
+            <p id="event-detail-sources" class="muted small" hidden></p>
+
+            <section class="member-block" aria-labelledby="attendee-title">
+              <div class="toolbar">
+                <h3 id="attendee-title" class="zone-title">Attendance</h3>
+                <button id="attendee-approve-all" type="button" class="button button-primary" hidden></button>
+                <button id="attendee-add" type="button" class="button">Add members</button>
+                <button id="attendee-export" type="button" class="button" hidden>Export CSV</button>
+              </div>
+
+              <p id="empty-attendees" class="muted" hidden>Nobody has checked in yet.</p>
+
+              <!-- Six columns and a row of buttons do not fit a phone, so the
+                   table scrolls sideways inside its own box rather than being
+                   cut off at the Actions column or taking the page with it. -->
+              <div class="attendee-scroll">
+                <table id="attendee-table" class="board board-plain" hidden>
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Source</th>
+                      <th scope="col">Time</th>
+                      <th id="attendee-value-head" scope="col" hidden>Typed</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="attendee-rows"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
 
         <div id="event-form-view" hidden>
           <form id="event-form" novalidate>
@@ -793,9 +886,79 @@
       <p id="qr-copy-status" class="muted small" aria-live="polite"></p>
       <div class="dialog-actions">
         <button type="button" class="button" data-close>Close</button>
+        <button id="qr-preview" type="button" class="button">Preview check-in</button>
         <button id="qr-copy" type="button" class="button">Copy link</button>
         <button id="qr-download" type="button" class="button button-primary">Download PNG</button>
       </div>
+    </dialog>
+
+    <!--
+      Filing the paper sign-in sheet. Everybody ticked is inserted pending and
+      the batch is approved in one review_records() call, which is the same
+      path the review queue and the member screen take. Members who already
+      hold a live record for this event are not offered: the database allows
+      exactly one (one_live_record_per_member_event).
+    -->
+    <dialog id="attendee-add-dialog" class="dialog dialog-wide">
+      <form id="attendee-add-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Add members</h2>
+        <label class="label" for="attendee-add-search">Search</label>
+        <input
+          id="attendee-add-search"
+          class="input"
+          type="search"
+          autocomplete="off"
+          placeholder="Name"
+        />
+        <div id="attendee-add-list" class="attendee-picker"></div>
+        <div id="attendee-add-value-field" hidden>
+          <label class="label" for="attendee-add-value"><span id="attendee-add-value-label"></span></label>
+          <input
+            id="attendee-add-value"
+            class="input"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="0.5"
+            autocomplete="off"
+          />
+        </div>
+        <p id="attendee-add-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <p id="attendee-add-count" class="muted small" aria-live="polite"></p>
+          <button type="button" class="button" data-close>Cancel</button>
+          <button id="attendee-add-submit" type="submit" class="button button-primary" disabled>
+            Add
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Removing a record deletes it. Decline is the one that keeps history,
+         which is what the note under the name says. -->
+    <dialog id="attendee-remove-dialog" class="dialog">
+      <form id="attendee-remove-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Remove record</h2>
+        <p id="attendee-remove-who" class="muted small"></p>
+        <p id="attendee-remove-note" class="muted small"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-danger">Remove</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Only offered on an event nobody has checked in to: every attendance
+         record points at the event with `on delete restrict`. -->
+    <dialog id="event-delete-dialog" class="dialog">
+      <form id="event-delete-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Delete event</h2>
+        <p id="event-delete-what" class="muted small"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-danger">Delete</button>
+        </div>
+      </form>
     </dialog>
 
     <!-- Retiring a category a rule still measures needs the officer to see it. -->

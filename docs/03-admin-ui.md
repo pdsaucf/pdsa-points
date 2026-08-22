@@ -117,17 +117,132 @@ visible:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Events   [+ New event]        Search […]   Term [ Spring 2026 ▾ ]        │
+│ Events   Search […]   Show [ Any status ▾ ]  Order [ Newest ▾ ] [+ New]  │
+│ (All 36)(GBMs 14)(Volunteering 3)(Socials 11)(Tabling 4)(No category 1)  │
 │ ──────────────────────────────────────────────────────────────────────── │
-│ Mar 12  Zumba Night          Socials                     18  ● open  ⋯   │
-│ Mar 10  Tabling              Tabling                      7  closed  ⋯   │
-│ Mar 05  Soap Carving         Clinical Workshop, Social   69  closed  ⋯   │
-│ Feb 26  Nothing Bundt Cakes  Partial Proceeds            31  closed  ⋯   │
+│ Mar 12  Zumba Night          Socials · 1              18 · 0  ● open  ⋯  │
+│ Mar 10  Tabling              Tabling · 1               7 · 0  closed  ⋯  │
+│ Mar 05  Soap Carving         Clinical Workshop, Social 69 · 2  closed  ⋯ │
+│ Feb 26  Nothing Bundt Cakes  Partial Proceeds · 1     31 · 0  closed  ⋯  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 Note row 3: **two categories on one event**, visible and obvious. That single line is
 what replaces hand-copying 69 names into two tabs.
+
+**The tabs are built from the events, not from the category table.** A category
+nothing this year is filed under gets no tab, because a tab that filters to an empty
+list teaches an officer nothing. A retired category still gets one while last year's
+events point at it, which is invariant 4 working: the history goes on resolving.
+
+Search, Show and Order all run on the list already loaded. None of the three sends a
+request, so a filter can never disagree with the row underneath it.
+
+### 3.1 · One event, in full
+
+The title in a list row opens the event. Every other control on the row does one
+narrow thing (print the code, change the fields); this is where the attendees are.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ [Back]  56 records   [QR] [Preview check-in] [Edit] [Duplicate] [Delete] │
+│                                                                          │
+│ Spring GBM 5                                                             │
+│ Aug 11 · HPA-1 205   ● Open    ⟨GBMs · 1⟩                                │
+│ Check-in has no close time                                               │
+│                                                                          │
+│ ┌────────┐┌────────┐┌────────┐┌─────────────┐┌───────────────┐           │
+│ │ 43     ││ 11     ││ 1      ││ 8           ││ 12%           │           │
+│ │Approved││Waiting ││Declined││ Not matched ││ Of the roster │           │
+│ └────────┘└────────┘└────────┘└─────────────┘└───────────────┘           │
+│ Scanned 54 · Added by an officer 2 · 2:00 PM to 2:40 PM                  │
+│                                                                          │
+│ Attendance  [Approve 11 waiting] [Add members] [Export CSV]              │
+│ ──────────────────────────────────────────────────────────────────────── │
+│ Aaron Ozan          Waiting   Scanned  2:40 PM  [Approve][Decline][Remove]│
+│ "Abby Cato"         Waiting   Scanned  2:01 PM  [Review] [Decline][Remove]│
+│  Member not matched                                                      │
+│ Abby Catto          Approved  Scanned  2:07 PM           [Decline][Remove]│
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**The numbers are counts of rows, never a point total.** Approved, waiting, declined,
+how many names nobody has matched, where the check-ins came from, and the first and
+last one. Nothing on this screen sums a credit or decides whether anybody passed
+anything: that is `v_member_status` and `fn_member_requirement_status`, and invariant
+2 says so.
+
+**A record with no member offers Review, not Approve.** `attendance_records` carries
+`check (status <> 'approved' or member_id is not null)` and `review_records()` raises
+PDS06, so approving one is refused by the database. Review opens the queue already
+narrowed to this event, where the roster suggestions are.
+
+**Approve and Decline go through `review_records()`.** Nothing here writes `status`,
+for the same reason the queue does not: that function is what stamps the reviewer,
+writes the audit row, and refuses the approvals that have to be refused.
+
+**Adding members goes through `add_officer_attendance()`, in one transaction**, which
+inserts the rows and hands their ids to `review_records()`. Invariant 6 still holds:
+the officer pressing Add is the person approving. Two calls from the client were wrong
+for two reasons, and neither could be fixed in the client:
+
+- The insert commits, the approval fails, and records nobody was told about sit in the
+  queue while the screen reports a failure.
+- Whether the event wants a typed number is `event_categories.credit_mode`, which the
+  screen reads when it opens. Change it from another laptop and the old client goes on
+  filing `null` against a `from_submission` link. That is an approved record worth
+  zero: nothing raises, nothing is violated, and the officer is told it worked. The
+  function reads the event itself, under a lock, and refuses.
+
+**Approve N waiting counts only what it can send.** An unmatched record is waiting too,
+and is exactly what the button cannot approve, so it is not in the number.
+
+**Decline keeps the record, Remove deletes it.** `attendance_records` is one table
+with a status precisely so un-approving is symmetric with approving and a rejection
+keeps its reason. Remove is for a row that should never have existed.
+
+**Remove goes through `remove_attendance_record()`, and writes the intent down before
+anything is deleted.** Storage and Postgres are two systems with no transaction across
+them, and no ordering the client can pick is safe. Object first is *photo destroyed,
+record kept*: irreversible, and the record left behind still claims evidence. Record
+first is *record gone, bytes left*, which looks recoverable and is not:
+`purge_orphaned_uploads()` only considers grants with `consumed_at IS NULL`, and
+`submit_checkin()` stamps `consumed_at` the moment a check-in is filed, so a real
+submitted photo is invisible to it, and `purge_evidence()` cannot see it either once the
+cascade has taken the `attendance_evidence` row.
+
+So the RPC deletes the record and writes a `purge_runs` row naming its objects, in one
+transaction, before the bucket is touched. The screen then does the same two-step
+handoff every other purge does: delete the objects, call `finish_purge_run()`. A browser
+that dies in between leaves an outstanding run, which the Storage screen already lists
+and already knows how to finish, and the officer is told the photo is waiting on Storage
+rather than being left to assume it went.
+
+**Add members is the paper sign-in sheet.** As many as an officer ticks, in one pass.
+Anybody who already holds a live record for the event is left off the list, because
+`one_live_record_per_member_event` allows exactly one.
+
+**Delete is offered only on an event nobody checked in to.** `attendance_records.event_id`
+is `on delete restrict`, so Postgres refuses the rest, and a button that comes back as
+a refusal is not a button worth offering. If somebody checks in between this screen
+loading and the button being pressed, the refusal re-reads the event, which is what
+makes Delete go disabled instead of staying live over an event that can no longer be
+deleted.
+
+**Duplicate writes nothing.** It opens the New event form filled in from this one, on
+today's date, so the copy is created by the ordinary Save path and gets its own
+check-in token.
+
+**The year selector closes this screen and the form.** Both belong to the year they
+were opened in. An event left open under a different year lets an officer approve last
+year's records while the top bar says otherwise, and a form saved after the switch
+writes the event into the year they are no longer looking at, because
+`academic_year_id` is read at Save. Both close, and a form that had been filled in says
+so rather than vanishing.
+
+**Preview check-in opens the same URL the QR code encodes**, in its own tab. Anything
+else would be a second implementation of the page this screen exists to hand out. It
+is the real check-in page, so a check-in made from it is a real check-in.
 
 ### Event editor
 

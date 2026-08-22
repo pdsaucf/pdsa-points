@@ -29,10 +29,17 @@ import { select, insert, patch, remove } from './rest.js';
 import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
 import { encodeQR, qrToSvgElement, qrDrawToCanvas } from './qr.js';
+import { createEventDetail } from './event-detail.js';
 import {
+  EVENT_SORTS,
+  EVENT_STATUS_FILTERS,
   EVIDENCE_KINDS,
+  categoryTabs,
   defaultPromptFor,
   defaultCloseTime,
+  duplicateDraft,
+  filterEvents,
+  sortEvents,
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
   eventStatus,
@@ -71,9 +78,16 @@ export function createEvents(ctx) {
     toolbar: $('events-toolbar'),
     count: $('events-count'),
     newButton: $('event-new'),
+    search: $('events-search'),
+    status: $('events-status'),
+    sort: $('events-sort'),
+    tabs: $('event-category-tabs'),
     loading: $('loading-events'),
     empty: $('empty-events'),
+    emptyTitle: $('empty-events-title'),
+    emptyBody: $('empty-events-body'),
     list: $('event-list'),
+    detailView: $('event-detail-view'),
 
     formView: $('event-form-view'),
     form: $('event-form'),
@@ -111,6 +125,7 @@ export function createEvents(ctx) {
     qrCopy: $('qr-copy'),
     qrCopyStatus: $('qr-copy-status'),
     qrDownload: $('qr-download'),
+    qrPreview: $('qr-preview'),
   };
 
   const state = {
@@ -120,8 +135,32 @@ export function createEvents(ctx) {
     loaded: false,
     busy: false,
 
-    view: 'list', // 'list' | 'form'
+    view: 'list', // 'list' | 'detail' | 'form'
+    // The year the screen on display was built for. A load that comes back
+    // for a different one is a year change, not a refresh, and everything
+    // open has to close. Null until the first load, so opening the screen is
+    // never mistaken for a change.
+    viewYearId: null,
+    // Bumped by every load(). A response whose token is no longer current is
+    // dropped rather than written to state: the detail screen's afterChange
+    // fires a quiet reload for the year it is on, and the year selector fires
+    // a loud one for the year just picked, and those two can land in either
+    // order. Without this, the slower older one wins and the list ends up
+    // showing one year's events under the other year's selector.
+    loadToken: 0,
+    // The three list controls. Held here rather than read off the DOM so that
+    // a reload after a save lands on the same tab, search and order the
+    // officer was looking at rather than resetting the screen under them.
+    tab: 'all',
+    query: '',
+    status: 'all',
+    sort: 'date_desc',
     editingEvent: null, // the row being edited, or the row Save just created
+    formReturn: 'list', // where Cancel and Save go back to: 'list' or 'detail'
+    // Set only by Duplicate: the fields a new event opens with, copied from
+    // an existing one. Cleared the moment the form reads it, so the next New
+    // event is blank.
+    draft: null,
     categoryRows: [], // [{ key, category_id, credit_mode, fixed_credit }]
     evidence: null, // { kind, prompt } or null for "not required"
     closesAutoLinked: true, // whether the close time still tracks the date field
@@ -133,14 +172,46 @@ export function createEvents(ctx) {
 
   const activeCategories = () => state.categories.filter((row) => !row.archived_at);
 
+  // One event's own screen. It owns the attendee list and every write against
+  // attendance_records; what it borrows from here is the four things that are
+  // this screen's to decide: the form, the QR code, the preview and the copy.
+  const detail = createEventDetail(ctx, {
+    openForm: (event) => openForm(event),
+    openQr: (event) => openQr(event),
+    previewCheckin: (event) => previewCheckin(event),
+    duplicate: (event) => duplicate(event),
+    backToList: () => showList(),
+    // An approve, a decline, a removal or an added member all move the counts
+    // on the row behind this screen, and the review queue's badge with them.
+    afterChange: async () => {
+      await load({ quiet: true });
+      ctx.onEventsChanged?.();
+    },
+  });
+
   // -------------------------------------------------------------------------
   // Reading
   // -------------------------------------------------------------------------
 
-  async function load() {
-    setHidden(el.loading, false);
-    setHidden(el.empty, true);
-    setHidden(el.list, true);
+  /**
+   * @param {{quiet?: boolean}} options quiet re-reads without putting the
+   *   loading state up, for a refresh that happens underneath a screen the
+   *   officer is still working on.
+   */
+  async function load({ quiet = false } = {}) {
+    state.loadToken += 1;
+    const token = state.loadToken;
+    // The year this request is FOR, captured now. ctx.year is the shell's
+    // live value and may have moved on by the time the response lands.
+    const yearId = ctx.year.id;
+
+    // The loading state belongs to the list. Putting it up over the form or
+    // an open event replaces what the officer is working on with a spinner.
+    if (!quiet && state.view === 'list') {
+      setHidden(el.loading, false);
+      setHidden(el.empty, true);
+      setHidden(el.list, true);
+    }
     try {
       const [events, categories, terms] = await Promise.all([
         select('events', {
@@ -158,17 +229,57 @@ export function createEvents(ctx) {
 
       const counts = await loadCounts(events.map((row) => row.id));
 
+      // Superseded while it was in flight. Nothing is written and nothing is
+      // drawn: a later load is already on its way or already landed, and the
+      // rows in hand may be from a year nobody is looking at any more.
+      if (token !== state.loadToken) return;
+
       state.events = events.map((row) => ({ ...row, counts: counts.get(row.id) ?? { approved: 0, pending: 0 } }));
       state.categories = categories;
       state.terms = terms;
       state.loaded = true;
 
+      // THE YEAR SELECTOR IS GLOBAL, AND THIS SCREEN IS NOT EXEMPT FROM IT.
+      // An open event belongs to the year it was opened in, and so does a
+      // half-filled form: saving one after the switch would write the event
+      // into the year the officer is no longer looking at, because
+      // academic_year_id is read at Save and not at New. So both close, and
+      // the officer lands on the list for the year they just picked.
+      // The backstop. yearChanged() above already took the screen down when
+      // the officer used the selector; this catches a year that moved by any
+      // other route, and a load that raced one. The note is not repeated here:
+      // the caller that knows a form was open is the one that says so.
+      const movedYear = state.viewYearId !== null && state.viewYearId !== yearId;
+      state.viewYearId = yearId;
+      if (movedYear && state.view !== 'list') {
+        detail.dismiss();
+        hideForm();
+        state.view = 'list';
+      }
+
       setHidden(el.loading, true);
-      showList();
+      paint();
     } catch (err) {
+      if (token !== state.loadToken) return;
       setHidden(el.loading, true);
-      ctx.fail(err, load);
+      ctx.fail(err, () => load());
     }
+  }
+
+  /**
+   * Redraw whatever is on screen, without changing which of the three states
+   * that is.
+   *
+   * load() is called after a save, after an approve on the detail screen, and
+   * whenever the year changes, and only the last of those means "go back to
+   * the list". A load that called showList() unconditionally used to close
+   * the event an officer was working through the moment they approved
+   * somebody on it.
+   */
+  function paint() {
+    if (state.view === 'list') showList();
+    // The detail screen and the form each own the screen while they are up,
+    // and each one decides for itself when it is finished with it.
   }
 
   /** One follow-up read for every event's counts, never one request per row. */
@@ -197,11 +308,29 @@ export function createEvents(ctx) {
   function showList() {
     state.view = 'list';
     setHidden(el.formView, true);
+    setHidden(el.toolbar, false);
     setHidden(el.newButton, false);
+    setHidden(el.detailView, true);
 
-    el.count.textContent = state.events.length ? plural(state.events.length, 'event') : '';
+    renderTabs();
 
-    if (!state.events.length) {
+    const shown = sortEvents(
+      filterEvents(state.events, { tab: state.tab, query: state.query, status: state.status }),
+      state.sort,
+    );
+
+    el.count.textContent = shown.length ? plural(shown.length, 'event') : '';
+
+    if (!shown.length) {
+      // Two different empty states, because they need two different next
+      // steps: an officer with no events at all is being asked to make one,
+      // and an officer whose filter matched nothing is being told the filter
+      // did that rather than the year being empty.
+      const filtered = state.events.length > 0;
+      el.emptyTitle.textContent = filtered ? 'No events match' : 'No events yet';
+      el.emptyBody.textContent = filtered
+        ? 'Clear the search, or pick another tab.'
+        : 'Create the first event for this year.';
       setHidden(el.empty, false);
       setHidden(el.list, true);
       return;
@@ -209,7 +338,38 @@ export function createEvents(ctx) {
 
     setHidden(el.empty, true);
     setHidden(el.list, false);
-    el.list.replaceChildren(...state.events.map(renderRow));
+    el.list.replaceChildren(...shown.map(renderRow));
+  }
+
+  /**
+   * The tabs above the list: All, then every category this year's events
+   * actually use. A tab whose category disappears from the year (the last
+   * event on it was retagged, or deleted) takes the selection back to All
+   * rather than leaving the list filtered by something no longer offered.
+   */
+  function renderTabs() {
+    const tabs = categoryTabs(state.events, state.categories);
+    if (!tabs.some((tab) => tab.id === state.tab)) state.tab = 'all';
+
+    el.tabs.replaceChildren(
+      ...tabs.map((tab) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'filter-tab',
+            'aria-selected': String(tab.id === state.tab),
+            onClick: () => {
+              state.tab = tab.id;
+              showList();
+            },
+          },
+          tab.name,
+          h('span', { class: 'pill', dataset: { zero: String(tab.count === 0) } }, String(tab.count)),
+        ),
+      ),
+    );
+    setHidden(el.tabs, tabs.length <= 1);
   }
 
   function renderRow(event) {
@@ -263,11 +423,23 @@ export function createEvents(ctx) {
       'div',
       { class: 'event-row', dataset: { id: event.id } },
       h('span', { class: 'event-date' }, shortDate(event.occurred_on)),
-      h('span', { class: 'event-title-cell' }, event.title, evidence ? h('span', { class: 'muted small' }, ' · photo required') : null),
+      h(
+        'span',
+        { class: 'event-title-cell' },
+        // The title is the way in. Every other control on the row does one
+        // narrow thing (print the code, change the fields); this opens the
+        // event itself, which is where the attendees are.
+        h(
+          'button',
+          { type: 'button', class: 'event-open', onClick: () => openDetail(event) },
+          event.title,
+        ),
+        evidence ? h('span', { class: 'muted small' }, 'photo required') : null,
+      ),
       chips,
       h(
         'span',
-        { class: 'muted small' },
+        { class: 'event-counts muted small' },
         `${event.counts.approved} approved · ${event.counts.pending} pending`,
       ),
       h('span', { class: 'event-status', dataset: { status: status.toLowerCase() } }, status),
@@ -281,6 +453,53 @@ export function createEvents(ctx) {
   }
 
   // -------------------------------------------------------------------------
+  // One event, in full
+  // -------------------------------------------------------------------------
+
+  function openDetail(event) {
+    state.view = 'detail';
+    ctx.clearMessage();
+    setHidden(el.formView, true);
+    setHidden(el.toolbar, true);
+    setHidden(el.tabs, true);
+    setHidden(el.list, true);
+    setHidden(el.empty, true);
+    return detail.open(event);
+  }
+
+  /**
+   * The check-in page, exactly as it reaches a member's phone.
+   *
+   * Same URL the QR code encodes, so what is previewed is what is printed:
+   * anything else would be a second implementation of the thing this screen
+   * exists to hand out. Opened in its own tab rather than in a frame, because
+   * the check-in page is a separate document with its own session storage and
+   * its own camera prompt, and an officer who checks in from the preview has
+   * filed a real check-in, which is worth being obvious about.
+   */
+  function previewCheckin(event) {
+    if (!event) return;
+    const url = buildCheckinUrl(window.location.href, event.checkin_token);
+    window.open?.(url, '_blank', 'noopener,noreferrer');
+  }
+
+  /**
+   * The same event again, on today's date. Nothing is written: this opens the
+   * New event form filled in, so the copy is created by the ordinary Save
+   * path and gets its own check-in token from the database.
+   */
+  function duplicate(event) {
+    state.draft = duplicateDraft(event, todayIsoDate());
+    const from = state.view;
+    openForm(null);
+    // Duplicate is pressed from the event being copied, so Cancel goes back to
+    // it: the officer has not finished with it, they were making a second one.
+    // Save is different, and stays on the list, because what they now want to
+    // see is the copy they just made rather than the original.
+    if (from === 'detail') state.formReturn = 'detail';
+  }
+
+  // -------------------------------------------------------------------------
   // The form: create and edit share every field below
   // -------------------------------------------------------------------------
 
@@ -291,15 +510,24 @@ export function createEvents(ctx) {
   }
 
   function openForm(event = null) {
+    // Read once and cleared, so Duplicate fills this form in and the next New
+    // event opens blank. Ignored entirely when an event is being edited.
+    const draft = event ? null : state.draft;
+    state.draft = null;
+
+    // Edit pressed on the detail screen goes back to it, not to the list:
+    // Cancel should return an officer to where they were, and after a save
+    // they are still working through that event's attendees.
+    state.formReturn = state.view === 'detail' && event ? 'detail' : 'list';
     state.view = 'form';
     state.editingEvent = event;
     setHidden(el.error, true);
     el.error.textContent = '';
 
     el.formTitle.textContent = event ? 'Edit event' : 'New event';
-    el.title.value = event?.title ?? '';
-    el.date.value = event?.occurred_on ?? todayIsoDate();
-    el.location.value = event?.location ?? '';
+    el.title.value = event?.title ?? draft?.title ?? '';
+    el.date.value = event?.occurred_on ?? draft?.occurred_on ?? todayIsoDate();
+    el.location.value = event?.location ?? draft?.location ?? '';
 
     state.closesAutoLinked = !event;
     if (event?.checkin_closes_at) {
@@ -323,9 +551,9 @@ export function createEvents(ctx) {
       h('option', { value: '' }, 'No term'),
       ...state.terms.map((term) => h('option', { value: term.id }, term.label)),
     );
-    el.term.value = event?.term_id ?? '';
+    el.term.value = event?.term_id ?? draft?.term_id ?? '';
 
-    const links = event?.event_categories ?? [];
+    const links = event?.event_categories ?? draft?.categories ?? [];
     state.categoryRows = links.length
       ? links.map((link) => ({
           key: rowKey(),
@@ -334,14 +562,20 @@ export function createEvents(ctx) {
           fixed_credit: link.fixed_credit ?? 1,
         }))
       : [{ key: rowKey(), category_id: '', credit_mode: 'fixed', fixed_credit: 1 }];
-    state.existingCategoryLinks = links.map((link) => ({
-      category_id: link.category_id,
-      credit_mode: link.credit_mode,
-      fixed_credit: link.fixed_credit,
-    }));
+    // What is already WRITTEN, which for a duplicate is nothing: the copy is
+    // a new event, so every category row on it is an insert.
+    state.existingCategoryLinks = event
+      ? links.map((link) => ({
+          category_id: link.category_id,
+          credit_mode: link.credit_mode,
+          fixed_credit: link.fixed_credit,
+        }))
+      : [];
 
     const evidenceRow = event?.event_evidence_requirements?.[0] ?? null;
-    state.evidence = evidenceRow ? { kind: evidenceRow.kind, prompt: evidenceRow.prompt } : null;
+    state.evidence = evidenceRow
+      ? { kind: evidenceRow.kind, prompt: evidenceRow.prompt }
+      : draft?.evidence ?? null;
     state.existingEvidence = evidenceRow ? { id: evidenceRow.id, kind: evidenceRow.kind, prompt: evidenceRow.prompt } : null;
 
     renderCategoryRows();
@@ -349,7 +583,9 @@ export function createEvents(ctx) {
 
     setHidden(el.list, true);
     setHidden(el.empty, true);
+    setHidden(el.tabs, true);
     setHidden(el.toolbar, true);
+    setHidden(el.detailView, true);
     setHidden(el.formView, false);
     el.title.focus();
   }
@@ -366,13 +602,29 @@ export function createEvents(ctx) {
   function hideForm() {
     state.editingEvent = null;
     setHidden(el.formView, true);
-    setHidden(el.toolbar, false);
+    // Always the list, whatever the form was opened from: a save reloads, and
+    // paint() has to have somewhere to draw. An edit that came from an event's
+    // own screen is put back on it by returnAfterSave(), after the reload.
+    state.view = 'list';
   }
 
-  /** Cancel: back to the list as it already was, with nothing to reload. */
+  /** Cancel: back where the form was opened from, with nothing to reload. */
   function closeForm() {
+    const wasOn = state.formReturn === 'detail' ? detail.currentId() : null;
     hideForm();
-    showList();
+    const event = wasOn ? state.events.find((row) => row.id === wasOn) : null;
+    if (event) openDetail(event);
+    else showList();
+  }
+
+  /**
+   * After a save that reloaded the list: an edit opened from an event's own
+   * screen puts the officer back on it, now showing what they just saved.
+   */
+  function returnAfterSave() {
+    if (state.formReturn !== 'detail') return;
+    const event = state.events.find((row) => row.id === detail.currentId());
+    if (event) openDetail(event);
   }
 
   // -- categories -------------------------------------------------------
@@ -834,6 +1086,7 @@ export function createEvents(ctx) {
     hideForm();
     await load();
     ctx.onEventsChanged?.();
+    returnAfterSave();
   }
 
   // -------------------------------------------------------------------------
@@ -852,6 +1105,7 @@ export function createEvents(ctx) {
 
     el.qrDownload.onclick = () => downloadQr(qr, event);
     el.qrCopy.onclick = () => copyLink(url);
+    el.qrPreview.onclick = () => previewCheckin(event);
 
     el.qrDialog.showModal();
   }
@@ -905,6 +1159,28 @@ export function createEvents(ctx) {
   function wire() {
     el.newButton.addEventListener('click', () => openForm(null));
     el.cancel.addEventListener('click', closeForm);
+
+    el.search.addEventListener('input', () => {
+      state.query = el.search.value;
+      showList();
+    });
+    el.status.replaceChildren(
+      ...EVENT_STATUS_FILTERS.map((option) => h('option', { value: option.value }, option.label)),
+    );
+    el.status.value = state.status;
+    el.status.addEventListener('change', () => {
+      state.status = el.status.value;
+      showList();
+    });
+    el.sort.replaceChildren(
+      ...EVENT_SORTS.map((option) => h('option', { value: option.value }, option.label)),
+    );
+    el.sort.value = state.sort;
+    el.sort.addEventListener('change', () => {
+      state.sort = el.sort.value;
+      showList();
+    });
+
     el.form.addEventListener('submit', onSubmit);
     el.categoryAdd.addEventListener('click', addCategoryRow);
     el.date.addEventListener('change', onDateChange);
@@ -918,12 +1194,44 @@ export function createEvents(ctx) {
     el.qrDialog.querySelector('[data-close]')?.addEventListener('click', () => el.qrDialog.close());
   }
 
+  /**
+   * The year in the top bar just changed.
+   *
+   * Called BEFORE the reload, and synchronously, which is the whole point. The
+   * post-load check below is still there as a backstop, but it lands only when
+   * the requests come back: on a slow connection that leaves the old event, or
+   * a filled-in form, on screen and pressable under a selector that already
+   * names the new year, and a Save in that gap writes the event into the new
+   * year with the old year's fields. If the load fails outright, the backstop
+   * never runs at all.
+   *
+   * So the screen is taken down the moment the officer picks a year, and the
+   * reload paints the list for the year they picked.
+   */
+  function yearChanged() {
+    const wasEditing = state.view === 'form';
+    detail.dismiss();
+    hideForm();
+    state.view = 'list';
+    // Nothing on screen belongs to the new year yet, so the list is emptied
+    // rather than left showing the old year's rows while the read is in
+    // flight. showList() is what fills it, once load() lands.
+    state.events = [];
+    setHidden(el.list, true);
+    setHidden(el.empty, true);
+    setHidden(el.detailView, true);
+    setHidden(el.toolbar, false);
+    if (wasEditing) ctx.note('Not saved. The year changed.', 'warn');
+  }
+
   return {
     mount() {
       wire();
+      detail.mount();
       return load();
     },
-    reload: load,
+    reload: () => load(),
+    yearChanged,
     hasLoaded: () => state.loaded,
   };
 }

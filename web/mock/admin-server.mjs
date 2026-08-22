@@ -1522,6 +1522,30 @@ function runDelete(table, params, auth) {
     }
   }
 
+  // Real Postgres behaviour for `events`: attendance_records.event_id is `on
+  // delete restrict`, so an event anybody checked in to is refused, including
+  // by a declined check-in. event_categories and event_evidence_requirements
+  // are `on delete cascade` and go with it; they are removed below.
+  if (table === 'events') {
+    const held = targets.some((row) =>
+      db.attendance_records.some((entry) => entry.event_id === row.id),
+    );
+    if (held) {
+      record({ fn: `delete.${table}`, actor: auth.userId, outcome: 'refused by fk', matched: 0 });
+      return {
+        error: {
+          status: 409,
+          body: {
+            code: '23503',
+            message: 'update or delete on table "events" violates foreign key constraint',
+            details: null,
+            hint: null,
+          },
+        },
+      };
+    }
+  }
+
   const removed = targets.map((row) => ({ ...row }));
   const gone = new Set(targets);
 
@@ -1546,6 +1570,26 @@ function runDelete(table, params, auth) {
     }
   } else {
     db[table] = db[table].filter((row) => !gone.has(row));
+  }
+
+  // The two `on delete cascade` children of events. Left behind, they would
+  // be rows pointing at an event id that no longer exists, which is a state
+  // the real database cannot be in and a state a check could then pass in.
+  if (table === 'events') {
+    const ids = new Set(removed.map((row) => row.id));
+    db.event_categories = db.event_categories.filter((link) => !ids.has(link.event_id));
+    db.event_evidence_requirements = db.event_evidence_requirements.filter(
+      (row) => !ids.has(row.event_id),
+    );
+  }
+
+  // attendance_evidence is `on delete cascade` from attendance_records, and
+  // an evidence row outliving its record is the same kind of impossible.
+  if (table === 'attendance_records') {
+    const ids = new Set(removed.map((row) => row.id));
+    db.attendance_evidence = db.attendance_evidence.filter(
+      (row) => !ids.has(row.attendance_record_id),
+    );
   }
 
   record({ fn: `delete.${table}`, actor: auth.userId, matched: removed.length });
@@ -1892,6 +1936,194 @@ export const ADMIN_RPC = {
     });
 
     json(res, 200, targets.length);
+  },
+
+  /**
+   * add_officer_attendance(p_event_id uuid, p_member_ids uuid[], p_submitted_value numeric)
+   * returns uuid[]
+   *
+   * The paper sign-in sheet, in one transaction. What this mock has to
+   * reproduce is not the happy path, it is the two refusals the real function
+   * exists for: a credit mode the caller did not know about, and a batch that
+   * must not half-land. See
+   * supabase/migrations/20260822100000_officer_attendance_entry.sql.
+   */
+  add_officer_attendance(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'add_officer_attendance', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const memberIds = Array.isArray(body.p_member_ids) ? body.p_member_ids : [];
+    if (!memberIds.length) {
+      pds(res, 'PDS03', 'Pick at least one member.');
+      return;
+    }
+
+    const event = db.events.find((row) => row.id === body.p_event_id);
+    if (!event) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+
+    // Read off event_categories as it stands, never off the request. This is
+    // the whole reason the decision moved into the database.
+    const wantsValue = db.event_categories.some(
+      (link) => link.event_id === event.id && link.credit_mode === 'from_submission',
+    );
+    const value = body.p_submitted_value ?? null;
+    if (wantsValue && value === null) {
+      record({ fn: 'add_officer_attendance', outcome: 'PDS03 needs a value' });
+      pds(res, 'PDS03', 'This event asks the member for a number, so one is required.');
+      return;
+    }
+    if (!wantsValue && value !== null) {
+      pds(res, 'PDS03', 'This event does not collect a number.');
+      return;
+    }
+
+    const missing = memberIds.filter(
+      (id) => !db.members.some((m) => m.id === id && !m.archived_at && !m.merged_into_id),
+    );
+    if (missing.length) {
+      pds(res, 'PDS03', 'One of those members cannot be given credit.');
+      return;
+    }
+
+    // one_live_record_per_member_event, checked before anything is written so
+    // a refused batch leaves nothing behind.
+    const clash = memberIds.find((id) =>
+      db.attendance_records.some(
+        (row) => row.event_id === event.id && row.member_id === id && row.status !== 'rejected',
+      ),
+    );
+    if (clash) {
+      record({ fn: 'add_officer_attendance', outcome: 'PDS05' });
+      pds(res, 'PDS05', 'One of those members already has a record for this event.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const ids = [];
+    for (const memberId of memberIds) {
+      const row = {
+        id: uuid('r8000000-0000-4000-a000-'),
+        event_id: event.id,
+        member_id: memberId,
+        claimed_name: null,
+        claimed_email: null,
+        // Filed pending and approved inside the same call, exactly as the
+        // real function does by handing the ids to review_records().
+        status: 'approved',
+        source: 'officer_entry',
+        submitted_value: value,
+        flags: [],
+        submitted_at: now,
+        reviewed_by: auth.userId,
+        reviewed_at: now,
+        review_note: null,
+        created_at: now,
+      };
+      db.attendance_records.push(row);
+      ids.push(row.id);
+    }
+
+    audit(auth, 'add_officer_attendance', 'attendance_record', null, {
+      event_id: event.id,
+      member_ids: memberIds,
+      submitted_value: value,
+      count: ids.length,
+    });
+    record({
+      fn: 'add_officer_attendance',
+      actor: auth.userId,
+      eventId: event.id,
+      count: ids.length,
+      submittedValue: value,
+    });
+
+    json(res, 200, ids);
+  },
+
+  /**
+   * remove_attendance_record(p_record_id uuid) returns jsonb
+   *
+   * Deletes one record and writes down the intent to delete its photos, in the
+   * same call. The purge run is the half worth reproducing here: it is what
+   * makes a browser that dies before the bucket call recoverable, and a mock
+   * that skipped it would let a check pass against a client that strands bytes.
+   */
+  remove_attendance_record(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'remove_attendance_record', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const target = db.attendance_records.find((row) => row.id === body.p_record_id);
+    if (!target) {
+      pds(res, 'PDS03', 'Unknown attendance record.');
+      return;
+    }
+
+    const evidence = db.attendance_evidence.filter(
+      (row) => row.attendance_record_id === target.id && row.object_path && !row.purged_at,
+    );
+    const paths = evidence.map((row) => row.object_path);
+
+    let runId = null;
+    if (paths.length) {
+      runId = uuid('p9000000-0000-4000-a000-');
+      db.purge_runs.push({
+        id: runId,
+        performed_by: auth.userId,
+        performed_at: new Date().toISOString(),
+        kind: 'record_removed',
+        retention_months: null,
+        evidence_count: paths.length,
+        bytes_freed: evidence.reduce((sum, row) => sum + Number(row.byte_size ?? 0), 0),
+        event_ids: [target.event_id],
+      });
+      for (const path of paths) {
+        db.purge_run_objects.push({
+          id: uuid('q9000000-0000-4000-a000-'),
+          purge_run_id: runId,
+          bucket: 'evidence',
+          object_path: path,
+          deleted_at: null,
+        });
+      }
+    }
+
+    // attendance_evidence is `on delete cascade` from attendance_records.
+    db.attendance_records = db.attendance_records.filter((row) => row.id !== target.id);
+    db.attendance_evidence = db.attendance_evidence.filter(
+      (row) => row.attendance_record_id !== target.id,
+    );
+
+    audit(auth, 'remove_attendance_record', 'attendance_record', target.id, {
+      event_id: target.event_id,
+      member_id: target.member_id,
+      status: target.status,
+      purge_run_id: runId,
+      object_paths: paths,
+    });
+    record({
+      fn: 'remove_attendance_record',
+      actor: auth.userId,
+      recordId: target.id,
+      purgeRunId: runId,
+      objectPaths: paths.length,
+    });
+
+    json(res, 200, { purge_run_id: runId, object_paths: paths });
   },
 
   /** resolve_unmatched(p_record_id uuid, p_member_id uuid, p_new_member jsonb) returns uuid */

@@ -479,6 +479,26 @@ export function installDom(html) {
   globalThis.Event = ShimEvent;
   globalThis.Node = ShimBase;
 
+  // CSS.escape is a browser global, and four call sites under src/ build a
+  // [data-id="..."] selector with it (requirements.js and review.js). Without
+  // it those screens throw ReferenceError the moment they paint, which they
+  // then catch as an ordinary failure and report to the officer as "That did
+  // not go through". That is a harness gap presenting as a product fault, and
+  // it hid itself: the screens that hit it caught their own error, so nothing
+  // failed loudly, and it only surfaced when a check read the error banner
+  // and found somebody else's message in it.
+  //
+  // The ids in this product are uuids, so the real function has nothing to do
+  // here. It is implemented properly anyway rather than as identity, because a
+  // shim that is wrong only for inputs the fixtures happen not to contain is
+  // the kind of thing that comes back later.
+  globalThis.CSS = {
+    escape: (value) =>
+      String(value).replace(/[^a-zA-Z0-9_-]/g, (char) =>
+        char === '\0' ? '\uFFFD' : `\\${char}`,
+      ),
+  };
+
   const fire = (node, type) => {
     if (!node) throw new Error(`nothing to fire ${type} at`);
     node.dispatchEvent(new ShimEvent(type, node));

@@ -1213,5 +1213,24 @@ export function createReview(ctx) {
     },
     reload: load,
     hasLoaded: () => state.loaded,
+    /**
+     * Open the queue on one event.
+     *
+     * The events screen sends an officer here when a record on it has no
+     * member linked: that record cannot be approved (PDS06), and the roster
+     * suggestions that fix it are on this screen. Narrowing to the event is
+     * what stops the officer landing in a queue of two hundred and having to
+     * find it again.
+     */
+    focusEvent(eventId) {
+      state.eventFilter = eventId ?? 'all';
+      state.showAllRoutine = false;
+      state.cursorId = null;
+      // Set on state first, so a queue still loading renders straight onto
+      // this event when it arrives. render() is what puts the value on the
+      // picker, and what falls back to all events when this one has nothing
+      // waiting on it any more.
+      if (state.loaded) render();
+    },
   };
 }

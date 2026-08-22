@@ -29,6 +29,9 @@ web/
   src/admin.js               sign-in, the role guard, the tabs
   src/auth.js                the session: passcode, refresh, sign out
   src/rest.js                authenticated PostgREST reads and writes
+  src/events.js              the events list: tabs, search, order, the form
+  src/event-detail.js        one event: the numbers, and every attendance record
+  src/events-model.js        events as data, with no DOM in it
   src/review.js              the review queue
   src/claims.js              account claims
   src/requirements.js        the rule editor, with the live preview
@@ -152,11 +155,14 @@ npm run verify:requirements  # the rule editor checks
 npm run verify:board         # the board, member, roster and merge checks
 npm run verify:portal        # the member portal: four screens, claims, missing credit
 npm run verify:storage       # the storage screen: usage, the purge dialog, roles
-npm run check                # em dash gate, then all six suites
+npm run verify:events        # the events screen, the event detail, and the QR encoder
+npm run verify:categories    # the category manager
+npm run check                # em dash gate, then all eight suites
 ```
 
-`verify:board`, `verify:portal` and `verify:storage` are the three suites that mount
-the shipped page rather than only the modules. `mock/dom.mjs` parses
+`verify:board`, `verify:portal`, `verify:storage` and the second half of
+`verify:events` are the suites that mount the shipped page rather than only the
+modules. `mock/dom.mjs` parses
 `admin/index.html` or `me/index.html`, the page's own `start()` runs against it, and
 what is asserted is the rendered DOM, so an id that stops matching between the
 markup and a module fails there rather than in front of somebody. It is a
@@ -179,6 +185,12 @@ event:
 | `empty` | an empty roster, which is the state the system ships in |
 | `oddstatus` | a `PDS01` arriving as an HTTP 500, which PostgREST may well do |
 | anything else | `PDS01`, unknown or rotated token |
+
+`gbm`, `vol` and `shirt` are also the check-in tokens the admin fixtures give
+Spring GBM 5, Give Kids A Smile and Soap Carving, which is what makes **Preview
+check-in** on the events screen open the real check-in page for that event locally
+instead of "this link is not valid". The two halves of the mock describe the same
+three events and only ever disagreed about what the QR code says.
 
 The mock serves `web/` as static files, so the page under test is the page that
 ships. The single exception is `config.js`, where the two constants are rewritten
@@ -294,6 +306,54 @@ reject go through `review_records()` anyway, and linking goes through
 write the `audit_log` row, and refuse the approvals that have to be refused. The
 absence of a direct write is asserted against the source, since nothing else
 would notice it coming back.
+
+The events screen is the third place this rule has to hold, and the one where it
+would be easiest to break: `/admin/` opens an event, lists every record on it, and
+offers Approve, Decline and Remove on each. `mock/verify-events.mjs` asserts both
+halves, against the source and against the wire: no `status:` literal and no
+`patch('attendance_records')` under `src/`, and a run of the real screen in which
+Approve produces a `review_records` call and no `attendance_records` PATCH.
+
+### Adding attendance is one call, not two
+
+Filing the paper sign-in sheet used to be an INSERT followed by `review_records()`.
+Two calls are two transactions, and the gap between them held two bugs. The insert
+commits and the approval fails, leaving records nobody was told about sitting pending
+while the screen reports a failure. Worse, the CLIENT decided whether the event wants
+a typed number, from an event row read when the screen opened: change
+`credit_mode` to `from_submission` from another laptop and the old client goes on
+filing `null` against it, which is an approved record worth zero that raises nothing
+and is only noticed weeks later by the member whose hours are missing.
+
+`add_officer_attendance()` reads `event_categories` itself, under a row lock, and
+refuses. `test/officer_attendance.test.mjs` runs that race against real Postgres, and
+`mock/verify-events.mjs` runs it against the real screen.
+
+### Removing a record spans two systems, so the intent is written down first
+
+`Remove` deletes an attendance record and its photo. Those live in Postgres and in
+Storage, and there is no transaction across them, so no ordering the client picks is
+safe. Deleting the object first destroys a photo irreversibly when the row delete then
+fails. Deleting the row first looked recoverable and was not:
+`purge_orphaned_uploads()` only considers grants with `consumed_at IS NULL`, and
+`submit_checkin()` stamps that the moment a check-in is filed, so the bytes of a real
+photo are invisible to it, and `purge_evidence()` cannot see them either once the
+cascade has removed the `attendance_evidence` row.
+
+`remove_attendance_record()` deletes the row and writes a `purge_runs` row naming the
+objects in one transaction. The screen then does the same two-step handoff every other
+purge does. A browser that dies in between leaves an outstanding run the Storage screen
+already knows how to finish, which is what `mock/verify-events.mjs` asserts by refusing
+the bucket call and then looking for the run.
+
+### The events screen belongs to the year in the top bar
+
+An open event and a half-filled form both close when the year changes. Leaving them up
+lets an officer approve last year's records under this year's label, and a form saved
+after the switch writes the event into the year they are no longer looking at, because
+`academic_year_id` is read at Save rather than at New. `load()` also carries a token
+and the year it was issued for, so a quiet reload from the event screen cannot land
+after a year change and put the old year's list back.
 
 ### The board never does its own arithmetic
 

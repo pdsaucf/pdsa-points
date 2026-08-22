@@ -238,6 +238,14 @@ function context() {
     setReviewCount: (count) => setCount(el.tabReviewCount, count),
     openMember,
     closeMember,
+    // An event's own screen sends an officer here for the one record it
+    // cannot decide: a check-in with no member linked. The queue is where the
+    // roster suggestions are, so this opens it already narrowed to that event
+    // rather than leaving them to find it among the year's.
+    openReview: (eventId) => {
+      selectTab('review');
+      app.review?.focusEvent(eventId);
+    },
     // A record added by hand, or a name edited, changes a number the board and
     // the roster are both showing. They reload rather than being patched in
     // place, because the point total and the honorary star are the database's
@@ -391,6 +399,11 @@ function wire() {
     if (!year) return;
     app.year = year;
     clearMessage();
+    // Synchronously, before any request goes out: an event or a form left up
+    // through a slow reload is pressable under a selector that already names
+    // the new year, and saving in that gap writes into the year the officer
+    // is no longer looking at.
+    app.events?.yearChanged();
     app.events?.reload();
     app.review?.reload();
     // Requirements are scoped to the year in the top bar, so this is the one

@@ -231,3 +231,324 @@ export function qrFileName(title, occurredOn) {
   const date = String(occurredOn ?? '').slice(0, 10) || 'undated';
   return `${slug}-${date}.png`;
 }
+
+// ---------------------------------------------------------------------------
+// The list: category tabs, search, status, sort
+// ---------------------------------------------------------------------------
+//
+// All of it is client side and deliberately so. The whole year is at most a
+// few hundred events, they are already loaded for the list, and a round trip
+// per keystroke would make the search worse rather than better. Nothing here
+// re-reads the server, so a filter can never disagree with the row under it.
+
+/** The tab for events that carry no category at all. Not a category id. */
+export const NO_CATEGORY_TAB = 'none';
+
+export const EVENT_SORTS = [
+  { value: 'date_desc', label: 'Newest first' },
+  { value: 'date_asc', label: 'Oldest first' },
+  { value: 'title', label: 'Title' },
+  { value: 'attendance', label: 'Most check-ins' },
+];
+
+export const EVENT_STATUS_FILTERS = [
+  { value: 'all', label: 'Any status' },
+  { value: 'open', label: 'Open' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'pending', label: 'Waiting on review' },
+];
+
+/** The category ids one event counts toward. */
+const categoryIdsOf = (event) =>
+  (event.event_categories ?? []).map((link) => link.category_id).filter(Boolean);
+
+/**
+ * The tabs above the list: All, then every category some event this year
+ * actually uses, then "No category" when at least one event has none.
+ *
+ * Driven by the events on screen rather than by the category table, because a
+ * tab for a category nothing is filed under filters to an empty list and
+ * teaches the officer nothing. Retired categories therefore still get a tab
+ * while last year's events point at them, which is invariant 4 working as
+ * intended: the history goes on resolving.
+ *
+ * @param {Array} events the year's events, with event_categories embedded
+ * @param {Array<{id: string, name: string, sort_order: number}>} categories
+ * @returns {Array<{id: string, name: string, count: number}>}
+ */
+export function categoryTabs(events, categories) {
+  const counts = new Map();
+  let uncategorised = 0;
+
+  for (const event of events ?? []) {
+    const ids = categoryIdsOf(event);
+    if (!ids.length) {
+      uncategorised += 1;
+      continue;
+    }
+    for (const id of new Set(ids)) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+
+  const order = new Map((categories ?? []).map((row, index) => [row.id, index]));
+  const named = [...counts.entries()]
+    .map(([id, count]) => ({
+      id,
+      name: (categories ?? []).find((row) => row.id === id)?.name ?? 'Unknown category',
+      count,
+    }))
+    .sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+
+  const tabs = [{ id: 'all', name: 'All', count: (events ?? []).length }, ...named];
+  if (uncategorised) tabs.push({ id: NO_CATEGORY_TAB, name: 'No category', count: uncategorised });
+  return tabs;
+}
+
+/**
+ * The list, narrowed by the tab, the search box and the status picker. Every
+ * one of the three is applied, so a search inside a category stays inside it.
+ *
+ * @param {Array} events
+ * @param {{tab?: string, query?: string, status?: string}} filters
+ * @param {Date} now what "Open" is measured against
+ */
+export function filterEvents(events, { tab = 'all', query = '', status = 'all' } = {}, now = new Date()) {
+  const needle = String(query ?? '').trim().toLowerCase();
+
+  return (events ?? []).filter((event) => {
+    if (tab === NO_CATEGORY_TAB) {
+      if (categoryIdsOf(event).length) return false;
+    } else if (tab !== 'all') {
+      if (!categoryIdsOf(event).includes(tab)) return false;
+    }
+
+    if (needle) {
+      const haystack = `${event.title ?? ''} ${event.location ?? ''}`.toLowerCase();
+      if (!haystack.includes(needle)) return false;
+    }
+
+    if (status === 'open' && eventStatus(event.checkin_closes_at, now) !== 'Open') return false;
+    if (status === 'closed' && eventStatus(event.checkin_closes_at, now) !== 'Closed') return false;
+    if (status === 'pending' && !(event.counts?.pending > 0)) return false;
+
+    return true;
+  });
+}
+
+/**
+ * A copy of the list in the chosen order. Never sorts in place: the caller's
+ * array is the year as loaded, and the order on screen is a view of it.
+ */
+export function sortEvents(events, sort = 'date_desc') {
+  const rows = [...(events ?? [])];
+  const byDate = (a, b) => String(a.occurred_on ?? '').localeCompare(String(b.occurred_on ?? ''));
+
+  switch (sort) {
+    case 'date_asc':
+      return rows.sort(byDate);
+    case 'title':
+      return rows.sort(
+        (a, b) => String(a.title ?? '').localeCompare(String(b.title ?? '')) || byDate(a, b),
+      );
+    case 'attendance': {
+      // Approved plus waiting, not approved alone: an event whose queue has
+      // not been worked yet is the busiest event there is, and an order that
+      // sorted it to the bottom would hide exactly the one an officer is
+      // looking for.
+      const live = (row) => Number(row.counts?.approved ?? 0) + Number(row.counts?.pending ?? 0);
+      return rows.sort((a, b) => live(b) - live(a) || byDate(b, a));
+    }
+    default:
+      return rows.sort((a, b) => byDate(b, a));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// One event: who came, and what the numbers say
+// ---------------------------------------------------------------------------
+//
+// WHAT IS COUNTED HERE, AND WHAT IS NOT. These are counts of rows on one
+// event: approved, waiting, declined, where each came from, and when the
+// first and last check-in arrived. They are not point totals and not the
+// honorary verdict, which are the database's answers (invariant 2) and are
+// read from v_member_status wherever they appear. Nothing below sums a
+// credit, and nothing below decides whether anybody passed anything.
+
+export const ATTENDANCE_SOURCES = [
+  { value: 'self_checkin', label: 'Scanned' },
+  { value: 'officer_entry', label: 'Added by an officer' },
+  { value: 'import', label: 'Imported' },
+  { value: 'member_request', label: 'Member portal' },
+];
+
+export const ATTENDANCE_STATUS = {
+  approved: 'Approved',
+  pending: 'Waiting',
+  rejected: 'Declined',
+};
+
+/**
+ * @param {Array<{status: string, source: string, member_id: string|null,
+ *   submitted_at: string|null}>} records every record on the event, any status
+ */
+export function eventStats(records) {
+  const rows = records ?? [];
+  const sources = new Map();
+  let approved = 0;
+  let pending = 0;
+  let declined = 0;
+  let unmatched = 0;
+  let firstAt = null;
+  let lastAt = null;
+
+  for (const row of rows) {
+    if (row.status === 'approved') approved += 1;
+    else if (row.status === 'pending') pending += 1;
+    else if (row.status === 'rejected') declined += 1;
+
+    // Counted across every status: a name nobody has matched is work
+    // outstanding whether or not it has been declined yet.
+    if (!row.member_id) unmatched += 1;
+
+    sources.set(row.source, (sources.get(row.source) ?? 0) + 1);
+
+    const at = row.submitted_at ? new Date(row.submitted_at) : null;
+    if (at && !Number.isNaN(at.getTime())) {
+      if (!firstAt || at < firstAt) firstAt = at;
+      if (!lastAt || at > lastAt) lastAt = at;
+    }
+  }
+
+  return {
+    total: rows.length,
+    approved,
+    pending,
+    declined,
+    unmatched,
+    sources: ATTENDANCE_SOURCES.filter((source) => sources.has(source.value)).map((source) => ({
+      ...source,
+      count: sources.get(source.value),
+    })),
+    firstAt: firstAt ? firstAt.toISOString() : null,
+    lastAt: lastAt ? lastAt.toISOString() : null,
+  };
+}
+
+/** What to call somebody on the attendee list: their name, or what they typed. */
+export function attendeeName(record) {
+  const known = record?.members?.display_name;
+  if (known) return known;
+  const claimed = String(record?.claimed_name ?? '').trim();
+  return claimed || 'No name';
+}
+
+// Waiting first, because those are the rows an officer opened this screen to
+// deal with. Declined last, since they are history rather than work.
+const STATUS_RANK = { pending: 0, approved: 1, rejected: 2 };
+
+export function sortAttendees(records) {
+  return [...(records ?? [])].sort(
+    (a, b) =>
+      (STATUS_RANK[a.status] ?? 3) - (STATUS_RANK[b.status] ?? 3) ||
+      attendeeName(a).localeCompare(attendeeName(b)),
+  );
+}
+
+/**
+ * Members who may still be added to this event by hand.
+ *
+ * one_live_record_per_member_event allows exactly one non-declined record per
+ * member per event, so anybody already holding one is left off the list
+ * rather than offered and then refused. A member whose only record here was
+ * declined is offered again, which is the same rule the index states.
+ */
+export function addableMembers(members, records) {
+  const taken = new Set(
+    (records ?? [])
+      .filter((row) => row.member_id && row.status !== 'rejected')
+      .map((row) => row.member_id),
+  );
+  return (members ?? []).filter((member) => !taken.has(member.id));
+}
+
+/**
+ * Whether the event itself can be deleted.
+ *
+ * attendance_records.event_id is `on delete restrict`, so Postgres refuses to
+ * drop an event anybody checked in to, including declined check-ins. Asked
+ * here so the screen says why rather than offering a button that comes back
+ * as a foreign key error.
+ */
+export function canDeleteEvent(records) {
+  return (records ?? []).length === 0;
+}
+
+/**
+ * The form fields for "Duplicate": the same event on today's date, with its
+ * own title, categories and photo requirement, and none of its identity.
+ *
+ * Nothing is written. This produces what the New event form opens with, so
+ * the copy is created by the same Save path as any other event and gets its
+ * own check-in token from the database.
+ */
+export function duplicateDraft(event, today) {
+  return {
+    title: event?.title ?? '',
+    occurred_on: today,
+    location: event?.location ?? null,
+    term_id: event?.term_id ?? null,
+    categories: (event?.event_categories ?? []).map((link) => ({
+      category_id: link.category_id,
+      credit_mode: link.credit_mode,
+      fixed_credit: link.fixed_credit ?? 1,
+    })),
+    evidence: event?.event_evidence_requirements?.[0]
+      ? {
+          kind: event.event_evidence_requirements[0].kind,
+          prompt: event.event_evidence_requirements[0].prompt ?? null,
+        }
+      : null,
+  };
+}
+
+/**
+ * The attendee list as CSV rows, header included, in the order it is on
+ * screen. The point of the export is a file somebody can hand to a chapter
+ * advisor or paste into last year's spreadsheet, so it carries the words the
+ * screen carries and not the enum values underneath them.
+ *
+ * `Value` is filled only for an event that asks the member to type a number.
+ *
+ * @param {Array} records already sorted, as sortAttendees() leaves them
+ * @param {{typed?: boolean}} options whether the event collects a number
+ */
+export function attendeeCsvRows(records, { typed = false } = {}) {
+  const header = ['Name', 'Status', 'Source', 'Checked in', ...(typed ? ['Value'] : []), 'Note'];
+  const label = Object.fromEntries(ATTENDANCE_SOURCES.map((row) => [row.value, row.label]));
+
+  const rows = (records ?? []).map((record) => [
+    attendeeName(record),
+    ATTENDANCE_STATUS[record.status] ?? record.status,
+    label[record.source] ?? record.source,
+    record.submitted_at ?? '',
+    ...(typed ? [record.submitted_value ?? ''] : []),
+    record.review_note ?? '',
+  ]);
+
+  return [header, ...rows];
+}
+
+/** 'soap-carving-2026-03-05-attendance.csv'. */
+export function attendeeCsvFilename(title, occurredOn) {
+  return qrFileName(title, occurredOn).replace(/\.png$/, '-attendance.csv');
+}
+
+/** Whether this event asks the member to type a number at check-in. */
+export function collectsTypedValue(event) {
+  return (event?.event_categories ?? []).some((link) => link.credit_mode === 'from_submission');
+}
+
+/** The category whose number the member types, for the label on the box. */
+export function typedValueCategory(event) {
+  const link = (event?.event_categories ?? []).find((row) => row.credit_mode === 'from_submission');
+  return link?.categories?.name ?? null;
+}

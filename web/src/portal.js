@@ -269,6 +269,8 @@ function cacheElements() {
 export function start() {
   cacheElements();
 
+  $('footer-year').textContent = new Date().getFullYear();
+
   const ctx = { fail, clearMessage };
   app.scorecard = createScorecard(ctx);
   app.history = createHistory();

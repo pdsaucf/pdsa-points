@@ -126,6 +126,18 @@ const EVENTS = [
   },
 ];
 
+// The three events this fixture set shares with the anonymous check-in mock,
+// which keys its scenarios by token (mock/fixtures.mjs). Giving them the
+// scenario's own token is what makes Preview check-in, pressed on the events
+// screen, actually open the check-in page for that event locally rather than
+// "this link is not valid": the two halves of the mock describe the same three
+// events and only ever disagreed about what the QR code says.
+const CHECKIN_TOKENS = {
+  'e0000000-0000-4000-a000-000000000001': 'gbm',    // Spring GBM 5
+  'e0000000-0000-4000-a000-000000000002': 'vol',    // Give Kids A Smile
+  'e0000000-0000-4000-a000-000000000003': 'shirt',  // Soap Carving
+};
+
 const EVENT_CATEGORIES = [
   { event_id: EVENTS[0].id, category_id: CATEGORIES[0].id, credit_mode: 'fixed', fixed_credit: 1 },
   { event_id: EVENTS[1].id, category_id: CATEGORIES[2].id, credit_mode: 'fixed', fixed_credit: 1 },
@@ -1343,7 +1355,7 @@ export function buildDatabase() {
       created_by: null,
       created_at: '2026-08-01T12:00:00.000Z',
       ...event,
-      checkin_token: event.checkin_token ?? `tok-${event.id.slice(-12)}`,
+      checkin_token: event.checkin_token ?? CHECKIN_TOKENS[event.id] ?? `tok-${event.id.slice(-12)}`,
     })),
     event_categories: [
       ...EVENT_CATEGORIES.map((ec) => ({ ...ec })),
