@@ -29,7 +29,7 @@ const { document, $ } = installDom(`
   </body>
 `);
 
-const { decorateButtonIcons } = await import('../src/icons.js');
+const { decorateButtonIcons, icon } = await import('../src/icons.js');
 
 let failures = 0;
 async function check(name, fn) {
@@ -105,6 +105,21 @@ await check('tabs and exceptional text-only actions are not decorated', () => {
 await check('decorating twice does not duplicate icons', () => {
   decorateButtonIcons(document);
   assert.equal($('event-detail-edit').querySelectorAll('.button-label-icon').length, 1);
+});
+
+await check('the footer symbols are part of the local icon vocabulary', () => {
+  const tiktok = icon('tiktok');
+  const instagram = icon('instagram');
+  const globe = icon('globe');
+  const mail = icon('mail');
+
+  assert.ok(tiktok.querySelector('path').getAttribute('d').startsWith('M12.525.02'));
+  assert.equal(tiktok.querySelector('path').getAttribute('fill'), 'currentColor');
+  assert.equal(instagram.querySelector('rect').getAttribute('rx'), '5');
+  assert.ok(
+    globe.querySelectorAll('path').some((path) => path.getAttribute('d') === 'M2 12h20'),
+  );
+  assert.equal(mail.querySelector('rect').getAttribute('width'), '18');
 });
 
 process.stdout.write('\nshared styling\n');

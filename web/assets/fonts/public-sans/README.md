@@ -1,35 +1,35 @@
-# Public Sans goes here
+# Public Sans
 
-**These files are not in the repo yet.** The `@font-face` rule in
-`web/assets/css/checkin.css` and `web/assets/css/admin.css` already points at
-them, and until they exist the pages fall back to
-`ui-sans-serif, system-ui, sans-serif`. That fallback is deliberate, not a bug:
-`font-display: swap` means the text is readable from the first paint either
-way, and nothing on the page moves when the font finally arrives.
+The self-hosted Public Sans variable Roman font and its license are in this
+directory. The `@font-face` rules in `web/assets/css/checkin.css`,
+`web/assets/css/admin.css`, and `web/assets/css/portal.css` load the WOFF2 file
+with `font-display: swap` and retain the
+`ui-sans-serif, system-ui, sans-serif` fallback.
 
-## What to add
+## Included files
 
-One file, the variable weight axis:
+- `PublicSans-VariableFont.woff2`: variable Roman, weight axis 100 through 900
+- `OFL.txt`: the SIL Open Font License 1.1 distributed with Public Sans v2.001
 
-```
-web/assets/fonts/public-sans/PublicSans-VariableFont.woff2
-```
-
-That single file covers every weight the pages use (400, 500, 600, 700), which
+The variable font covers every weight the pages use (400, 500, 600, 700), which
 is why the rule declares `font-weight: 100 900` rather than shipping four
 static cuts. If a later screen needs italics, add
 `PublicSans-Italic-VariableFont.woff2` and a second `@font-face` block with
 `font-style: italic`.
 
-## Where to get it
+## Source
 
-From the Public Sans release on GitHub: `uswds/public-sans`, Releases page,
-the `fonts/webfonts/PublicSans-VariableFont.woff2` file in the release zip (or
-build the variable woff2 from source with the repo's own build script if a
-prebuilt one is not offered in the release you pick). Public Sans is licensed
-under the SIL Open Font License 1.1, the same terms as Inter, so self-hosting
-and redistribution in this repo are both fine. Put the license text next to
-the font as `OFL.txt` when you add it.
+This is Public Sans v2.001 from the official `uswds/public-sans` repository.
+The release does not include a variable WOFF2, so the WOFF2 here is a lossless
+web repackaging of the release's variable Roman TTF:
+
+`https://raw.githubusercontent.com/uswds/public-sans/v2.001/fonts/variable/PublicSans%5Bwght%5D.ttf`
+
+The license is the release's `OFL.txt`, with trailing whitespace normalized:
+
+`https://raw.githubusercontent.com/uswds/public-sans/v2.001/OFL.txt`
+
+The font metadata reports `Version 2.001` and a `wght` axis from 100 to 900.
 
 ## Why Public Sans, not Inter
 
@@ -43,5 +43,3 @@ not associated with any product demo aesthetic.
 
 - Do not link Google Fonts or any CDN. The site is static on GitHub Pages and
   carries no external dependency, which is a house rule in `CLAUDE.md`.
-- Do not add a `<link rel="preload">` for a file that is not committed yet: it
-  costs a 404 on every page load at an event.

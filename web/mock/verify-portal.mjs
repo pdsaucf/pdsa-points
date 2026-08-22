@@ -194,6 +194,77 @@ await check('Public Sans is self hosted with font-display: swap and a real fallb
   assert.match(portalCss, /--font:\s*'Public Sans',\s*ui-sans-serif,\s*system-ui,\s*sans-serif/);
 });
 
+await check('footer links are icon-only and carry exact accessible names', () => {
+  const expected = [
+    ['TikTok', 'https://www.tiktok.com/@ucf_pdsa', 'tiktok'],
+    ['Instagram', 'https://www.instagram.com/ucf_pdsa/', 'instagram'],
+    ['Main Website', 'https://pdsaucf.com', 'globe'],
+    ['Contact', 'mailto:pdsa.ucf@gmail.com', 'mail'],
+  ];
+  const links = dom.document.querySelectorAll('.footer-link');
+  assert.equal(links.length, expected.length);
+
+  for (const [index, [label, href, iconName]] of expected.entries()) {
+    const link = links[index];
+    assert.equal(link.getAttribute('aria-label'), label);
+    assert.equal(link.getAttribute('title'), label);
+    assert.equal(link.getAttribute('href'), href);
+    assert.equal(link.getAttribute('data-icon'), iconName);
+    assert.equal(link.textContent.trim(), '', `${label} still has visible link text`);
+
+    const svg = link.querySelector('.footer-icon');
+    assert.ok(svg, `${label} has no icon in the shipped markup`);
+    assert.equal(svg.getAttribute('aria-hidden'), 'true');
+    assert.equal(svg.getAttribute('focusable'), 'false');
+    assert.equal(svg.getAttribute('width'), '24');
+    assert.equal(svg.getAttribute('height'), '24');
+  }
+});
+
+await check('the footer uses the content container and can wrap without overflow', () => {
+  const appLayout = declarations(rule(portalCss, '.app'));
+  const footer = declarations(rule(portalCss, '.site-footer'));
+  const inner = declarations(rule(portalCss, '.footer-inner'));
+  const links = declarations(rule(portalCss, '.footer-links'));
+  const link = declarations(rule(portalCss, '.footer-link'));
+  const icon = declarations(rule(portalCss, '.footer-icon'));
+  const meta = declarations(rule(portalCss, '.footer-meta'));
+
+  assert.equal(footer.get('width'), '100%');
+  assert.equal(inner.get('width'), '100%');
+  assert.equal(inner.get('max-width'), appLayout.get('max-width'));
+  assert.equal(inner.get('margin'), '0 auto');
+  assert.match(inner.get('padding') ?? '', /env\(safe-area-inset-bottom\)/);
+  assert.equal(links.get('display'), 'flex');
+  assert.equal(links.get('flex-wrap'), 'wrap');
+  assert.equal(links.get('justify-content'), 'center');
+  assert.ok(Number.parseFloat(link.get('min-width')) * 16 >= 44);
+  assert.ok(Number.parseFloat(link.get('min-height')) * 16 >= 44);
+  assert.equal(icon.get('width'), '1.5rem');
+  assert.equal(icon.get('height'), '1.5rem');
+  assert.equal(meta.get('text-align'), 'center');
+  assert.equal(meta.get('overflow-wrap'), 'anywhere');
+
+  const desktop = portalCss.slice(portalCss.lastIndexOf('@media (min-width: 40rem)'));
+  const desktopInner = declarations(rule(portalCss, '.footer-inner', { scope: desktop }));
+  const desktopLinks = declarations(rule(portalCss, '.footer-links', { scope: desktop }));
+  const desktopMeta = declarations(rule(portalCss, '.footer-meta', { scope: desktop }));
+  assert.equal(desktopInner.get('max-width'), '36rem');
+  assert.equal(desktopLinks.get('justify-content'), 'flex-start');
+  assert.equal(desktopMeta.get('text-align'), 'left');
+});
+
+await check('footer links have distinct hover, keyboard focus and active states', () => {
+  for (const selector of ['.footer-link:hover', '.footer-link:focus-visible', '.footer-link:active']) {
+    const state = declarations(rule(portalCss, selector));
+    assert.ok(state.has('color'), `${selector} does not change the icon color`);
+    assert.ok(state.has('background'), `${selector} does not change the target background`);
+  }
+  const active = declarations(rule(portalCss, '.footer-link:active'));
+  assert.equal(active.get('color'), 'var(--accent-ink)');
+  assert.equal(active.get('background'), 'var(--accent)');
+});
+
 await check('every column of digits on this screen is tabular', () => {
   // A member reads three columns of figures here: their own requirement list,
   // what the requirements ask for, and the leaderboard. A proportional 1 among
