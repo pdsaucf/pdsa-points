@@ -17,7 +17,8 @@
     "verify:storage": "node mock/verify-storage.mjs",
     "verify:events": "node mock/verify-events.mjs",
     "verify:categories": "node mock/verify-categories.mjs",
+    "verify:icons": "node mock/verify-icons.mjs",
     "lint:no-em-dash": "bash -c 'grep -rn $'\\''\\xe2\\x80\\x94'\\'' . --exclude-dir=node_modules && { echo \"em dash found\"; exit 1; } || echo \"no em dashes\"'",
-    "check": "npm run lint:no-em-dash && npm run verify && npm run verify:admin && npm run verify:requirements && npm run verify:board && npm run verify:portal && npm run verify:storage && npm run verify:events && npm run verify:categories"
+    "check": "npm run lint:no-em-dash && npm run verify && npm run verify:admin && npm run verify:requirements && npm run verify:board && npm run verify:portal && npm run verify:storage && npm run verify:events && npm run verify:categories && npm run verify:icons"
   }
 }

@@ -15,6 +15,7 @@ import { IS_CONFIGURED, EVIDENCE_BUCKET } from '../config.js';
 import { rpc, uploadEvidence, RpcError } from './api.js';
 import { describe, NOT_CONFIGURED, NO_TOKEN } from './errors.js';
 import { compressPhoto, ImageTooLargeError, MAX_INPUT_BYTES } from './image.js';
+import { installButtonIcons } from './icons.js';
 import {
   formatEventDate,
   formatCloseTime,
@@ -756,6 +757,7 @@ function wire() {
 }
 
 export function start() {
+  installButtonIcons();
   cacheElements();
   wire();
 

@@ -18,6 +18,7 @@ import { createRoster } from './roster.js';
 import { createMember } from './member.js';
 import { createStorage } from './storage.js';
 import { $, h, announce, setHidden } from './ui.js';
+import { installButtonIcons } from './icons.js';
 
 // The six panels, in tab order. Each one is mounted once and reloaded when
 // the year changes, so switching tabs costs nothing. Events is first: it is
@@ -423,6 +424,7 @@ function wire() {
 }
 
 export function start() {
+  installButtonIcons();
   cacheElements();
   wire();
   selectTab('events');

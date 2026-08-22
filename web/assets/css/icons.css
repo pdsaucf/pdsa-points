@@ -1,0 +1,20 @@
+/* Shared treatment for decorative icons beside button labels. The SVGs use
+   currentColor, so primary, neutral, quiet and destructive buttons keep their
+   existing hierarchy without icon-specific colour rules. */
+
+.button > .button-label-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 1.125rem;
+  height: 1.125rem;
+  pointer-events: none;
+}
+
+.button.button-small > .button-label-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.button > .button-label-icon + * {
+  min-width: 0;
+}

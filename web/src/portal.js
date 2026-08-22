@@ -36,6 +36,7 @@ import { createScorecard } from './portal-scorecard.js';
 import { createLeaderboard } from './portal-leaderboard.js';
 import { createHistory } from './portal-history.js';
 import { $, h, announce, setHidden } from './ui.js';
+import { installButtonIcons } from './icons.js';
 
 const el = {};
 const app = {
@@ -267,6 +268,7 @@ function cacheElements() {
 }
 
 export function start() {
+  installButtonIcons();
   cacheElements();
 
   $('footer-year').textContent = new Date().getFullYear();

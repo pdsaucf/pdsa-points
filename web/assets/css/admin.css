@@ -1503,6 +1503,36 @@ kbd {
 }
 
 @media (max-width: 46rem) {
+  .topbar {
+    gap: 0.5rem 0.75rem;
+    padding-inline: 1rem;
+  }
+
+  .topbar-left,
+  .topbar-right {
+    min-width: 0;
+  }
+
+  .tabs {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.125rem;
+    scrollbar-width: thin;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+  }
+
+  #roster-table,
+  .member-block > .board-plain {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
   .card {
     grid-template-columns: 1fr;
   }
