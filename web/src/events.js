@@ -26,6 +26,7 @@
 // bouncing to the list and claiming success.
 
 import { select, insert, patch, remove } from './rest.js';
+import { eventsStartupOptions } from './events-contract.js';
 import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
 import { encodeQR, qrToSvgElement, qrDrawToCanvas } from './qr.js';
@@ -53,12 +54,6 @@ import {
   qrFileName,
 } from './events-model.js';
 import { $, h, announce, setHidden, shortDate, plural } from './ui.js';
-
-const EVENT_SELECT = [
-  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at',
-  'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
-  'event_evidence_requirements(id,kind,is_required,prompt)',
-].join(',');
 
 const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
@@ -221,11 +216,7 @@ export function createEvents(ctx) {
     }
     try {
       const [events, categories, terms] = await Promise.all([
-        select('events', {
-          select: EVENT_SELECT,
-          filters: { academic_year_id: `eq.${ctx.year.id}` },
-          order: 'occurred_on.desc',
-        }),
+        select('events', eventsStartupOptions(ctx.year.id)),
         select('categories', { select: 'id,slug,name,sort_order,archived_at', order: 'sort_order.asc' }),
         select('terms', {
           select: 'id,label',

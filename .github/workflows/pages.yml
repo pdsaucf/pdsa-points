@@ -45,12 +45,11 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # The page and the database deploy separately. Probe every admin RPC
-      # introduced with the event attendance workflow before publishing a page
-      # that calls it. The public key can only prove that PostgREST resolves the
-      # function and then refuses the anonymous caller, so this check cannot
-      # mutate attendance or expose an officer session.
-      - name: Verify deployed admin RPCs
+      # The page and the database deploy separately. Probe the admin RPCs and
+      # the Events startup read before publishing a page that calls them. The
+      # public key can only prove that PostgREST resolves each contract and then
+      # refuses the anonymous caller, so this check cannot read or mutate data.
+      - name: Verify deployed admin contracts
         run: node scripts/check_deployed_admin_rpcs.mjs
 
       # NOTE: this workflow deliberately runs NO tests.

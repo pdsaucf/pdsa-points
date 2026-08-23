@@ -249,6 +249,8 @@ export class ShimNode extends ShimBase {
   dispatchEvent(event) {
     event.currentTarget = this;
     for (const handler of [...(this.listeners.get(event.type) ?? [])]) handler(event);
+    const propertyHandler = this[`on${event.type}`];
+    if (typeof propertyHandler === 'function') propertyHandler.call(this, event);
     return !event.defaultPrevented;
   }
 

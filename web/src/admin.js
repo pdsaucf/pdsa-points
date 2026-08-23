@@ -31,6 +31,17 @@ const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'storage
 // clicking a name never loses the officer's place.
 const PANELS = [...TABS, 'member'];
 
+const PANEL_RECOVERY = {
+  events: 'Events',
+  review: 'Review',
+  requirements: 'Requirements',
+  categories: 'Categories',
+  progress: 'Progress',
+  roster: 'Roster',
+  member: 'Member',
+  storage: 'Storage',
+};
+
 const el = {};
 const app = {
   session: null,
@@ -124,7 +135,7 @@ function note(text, tone = 'ok') {
  * a given failure is worth retrying.
  *
  */
-function fail(err, retry, context = null) {
+function fail(err, retry, context = null, refresh = null) {
   const copy = describeOfficer(err, context);
 
   if (copy.recover === 'signin') {
@@ -144,10 +155,10 @@ function fail(err, retry, context = null) {
   el.screenMessageBody.textContent = copy.body;
 
   if (copy.recover === 'refresh') {
-    el.screenMessageAction.textContent = 'Reload the queue';
+    el.screenMessageAction.textContent = refresh?.label ?? 'Reload';
     el.screenMessageAction.onclick = () => {
       clearMessage();
-      app.review?.reload();
+      (refresh?.run ?? retry)?.();
     };
     setHidden(el.screenMessageAction, false);
   } else if (copy.recover === 'retry' && retry) {
@@ -240,7 +251,8 @@ async function guard() {
 // The product
 // ---------------------------------------------------------------------------
 
-function context() {
+function context(panelName) {
+  const panel = PANEL_RECOVERY[panelName];
   return {
     get year() {
       return app.year;
@@ -251,7 +263,19 @@ function context() {
       return app.years;
     },
     userId: app.session.user.id,
-    fail,
+    // Pass the original error through unchanged so describeOfficer can still
+    // distinguish RpcError, NetworkError and an expired session. A refresh is
+    // always the panel's read-only reload, never a mutation retry callback.
+    fail: (err, retry, copyContext = null) =>
+      fail(
+        err,
+        retry,
+        { panel, ...(copyContext ?? {}) },
+        {
+          label: `Reload ${panel}`,
+          run: () => app[panelName]?.reload(),
+        },
+      ),
     note,
     clearMessage,
     quietRefresh,
@@ -343,15 +367,14 @@ function startApp() {
   );
   el.yearSelect.value = app.year.id;
 
-  const ctx = context();
-  app.events = createEvents(ctx);
-  app.review = createReview(ctx);
-  app.requirements = createRequirements(ctx);
-  app.categories = createCategories(ctx);
-  app.progress = createProgress(ctx);
-  app.roster = createRoster(ctx);
-  app.member = createMember(ctx);
-  app.storage = createStorage(ctx);
+  app.events = createEvents(context('events'));
+  app.review = createReview(context('review'));
+  app.requirements = createRequirements(context('requirements'));
+  app.categories = createCategories(context('categories'));
+  app.progress = createProgress(context('progress'));
+  app.roster = createRoster(context('roster'));
+  app.member = createMember(context('member'));
+  app.storage = createStorage(context('storage'));
 
   app.events.mount();
   app.review.mount();

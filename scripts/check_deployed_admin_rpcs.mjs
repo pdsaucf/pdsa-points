@@ -1,11 +1,10 @@
 // Stops the static admin UI from getting ahead of the linked Supabase schema.
 //
-// GitHub Pages deploys web/ independently from the database. An admin-only
-// function that exists is resolved by PostgREST before the anonymous caller is
-// refused with 42501 or PDS07. A function that is absent, or whose parameter
-// names do not match the client, is refused earlier with PGRST202. That makes a
-// read-only deployment check possible without storing an officer credential in
-// GitHub Actions.
+// GitHub Pages deploys web/ independently from the database. PostgREST resolves
+// requested functions, columns and embedded relationships before refusing the
+// anonymous caller. That makes a deployment check possible without storing an
+// officer credential in GitHub Actions or allowing the guard to read or write
+// any row.
 
 import { pathToFileURL } from 'node:url';
 
@@ -14,6 +13,7 @@ import {
   SUPABASE_ANON_KEY,
   SUPABASE_URL,
 } from '../web/config.js';
+import { eventsStartupQuery } from '../web/src/events-contract.js';
 
 const PROBES = [
   {
@@ -31,6 +31,23 @@ const PROBES = [
 ];
 
 const EXPECTED_DENIALS = new Set(['42501', 'PDS07']);
+const EXPECTED_TABLE_DENIALS = new Set(['42501']);
+const SCHEMA_MISMATCH_CODES = new Set([
+  '42703',
+  'PGRST200',
+  'PGRST201',
+  'PGRST202',
+  'PGRST204',
+  'PGRST205',
+]);
+
+const PROBE_YEAR_ID = 'a0000000-0000-4000-a000-000000000001';
+
+export const EVENTS_STARTUP_PROBE = {
+  name: 'Events startup GET',
+  path: '/rest/v1/events',
+  query: eventsStartupQuery(PROBE_YEAR_ID),
+};
 
 async function responseBody(response) {
   const text = await response.text();
@@ -42,14 +59,15 @@ async function responseBody(response) {
 }
 
 /**
- * Verifies that each RPC resolves with the parameter names used by the page.
- * The anonymous caller must then be denied, so this never reaches a mutation.
+ * Verifies the RPC signatures and Events startup read used by the page. The
+ * anonymous caller must be denied after each contract resolves.
  */
 export async function checkDeployedAdminRpcs({
   baseUrl = SUPABASE_URL,
   anonKey = SUPABASE_ANON_KEY,
   fetchImpl = globalThis.fetch,
   probes = PROBES,
+  eventsProbe = EVENTS_STARTUP_PROBE,
 } = {}) {
   const base = String(baseUrl).replace(/\/+$/, '');
   const checked = [];
@@ -96,6 +114,54 @@ export async function checkDeployedAdminRpcs({
     checked.push(probe.name);
   }
 
+  if (eventsProbe) {
+    let response;
+    try {
+      response = await fetchImpl(`${base}${eventsProbe.path}?${eventsProbe.query}`, {
+        method: 'GET',
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (err) {
+      failures.push(
+        `Could not verify ${eventsProbe.name}: ${err?.message ?? 'request failed'}`,
+      );
+      response = null;
+    }
+
+    if (response) {
+      let body;
+      try {
+        body = await responseBody(response);
+      } catch (err) {
+        failures.push(
+          `Could not verify ${eventsProbe.name}: ${err?.message ?? 'response failed'}`,
+        );
+        body = null;
+        response = null;
+      }
+
+      if (response) {
+        if (SCHEMA_MISMATCH_CODES.has(body?.code)) {
+          failures.push(
+            `${eventsProbe.name} does not match the deployed schema: ${body.code}`,
+          );
+        } else if (response.ok) {
+          failures.push(`${eventsProbe.name} exposed data to an anonymous request`);
+        } else if (!EXPECTED_TABLE_DENIALS.has(body?.code)) {
+          failures.push(
+            `Could not verify ${eventsProbe.name}: expected an authorization refusal, got ${body?.code ?? `HTTP ${response.status}`}`,
+          );
+        } else {
+          checked.push(eventsProbe.name);
+        }
+      }
+    }
+  }
+
   if (failures.length) throw new Error(failures.join('\n'));
   return checked;
 }
@@ -103,7 +169,7 @@ export async function checkDeployedAdminRpcs({
 async function main() {
   if (!IS_CONFIGURED) throw new Error('web/config.js does not name a Supabase project');
   const checked = await checkDeployedAdminRpcs();
-  process.stdout.write(`Verified deployed admin RPCs: ${checked.join(', ')}\n`);
+  process.stdout.write(`Verified deployed admin contracts: ${checked.join(', ')}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

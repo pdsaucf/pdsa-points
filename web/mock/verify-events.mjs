@@ -116,6 +116,7 @@ URL.revokeObjectURL = () => {};
 const auth = await import('../src/auth.js');
 const { select, insert, patch, remove, callRpc } = await import('../src/rest.js');
 const { RpcError } = await import('../src/errors.js');
+const { eventsStartupQuery } = await import('../src/events-contract.js');
 const {
   validateCategoryRows,
   diffCategoryRows,
@@ -702,12 +703,113 @@ function holdNextRestResponse(table) {
   };
 }
 
+function failInitialEventsStartupOnce() {
+  const originalFetch = globalThis.fetch;
+  const expectedUrl = `http://localhost:${PORT}/rest/v1/events?${eventsStartupQuery(IDS.YEAR_CURRENT)}`;
+  let request = null;
+
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (!request && url === expectedUrl && (init.method ?? 'GET') === 'GET') {
+      request = { url, init };
+      globalThis.fetch = originalFetch;
+      // Let the mock record the request, then replace only what the shipped
+      // page receives with the production schema-drift response.
+      await originalFetch(input, init);
+      return new Response(
+        JSON.stringify({
+          code: '42703',
+          details: null,
+          hint: null,
+          message: 'column events.starts_at does not exist',
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return originalFetch(input, init);
+  };
+
+  return {
+    expectedUrl,
+    request: () => request,
+    restore() {
+      globalThis.fetch = originalFetch;
+    },
+  };
+}
+
+function captureRequests() {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    requests.push({ url, init });
+    return originalFetch(input, init);
+  };
+  return {
+    requests,
+    restore() {
+      globalThis.fetch = originalFetch;
+    },
+  };
+}
+
 const initialStorageLoad = holdNextRestResponse('v_purge_runs_outstanding');
+const initialEventsFailure = failInitialEventsStartupOnce();
 start();
 dom.$('signin-passcode').value = 'mock-passcode';
 dom.fire(dom.$('signin-form'), 'submit');
 await until(() => !dom.$('view-app').hidden, 'the app never opened');
-await until(() => !dom.$('event-list').hidden, 'the events list never rendered');
+await until(
+  () => dom.$('screen-message-title').textContent === 'Events unavailable',
+  'the Events startup failure never reached the shared banner',
+);
+await until(
+  () =>
+    dom.$('loading-review').hidden &&
+    dom.$('loading-progress').hidden &&
+    dom.$('loading-roster').hidden &&
+    dom.$('loading-requirements').hidden,
+  'the other startup panels did not continue after Events failed',
+);
+
+await check('an Events schema drift banner reloads Events without reloading Review', async () => {
+  const failed = initialEventsFailure.request();
+  assert.ok(failed, 'the initial Events request was not intercepted');
+  assert.equal(failed.url, initialEventsFailure.expectedUrl);
+  assert.equal(failed.init.method, 'GET');
+  assert.equal(dom.$('tab-events').getAttribute('aria-selected'), 'true');
+  assert.equal(dom.$('panel-events').hidden, false);
+  assert.equal(dom.$('screen-message').hidden, false);
+  assert.equal(dom.$('screen-message-title').textContent, 'Events unavailable');
+  assert.equal(dom.$('screen-message-body').textContent, 'Try again.');
+  assert.equal(dom.$('screen-message-action').textContent, 'Reload Events');
+
+  const captured = captureRequests();
+  try {
+    dom.click(dom.$('screen-message-action'));
+    await until(() => !dom.$('event-list').hidden, 'Reload Events did not recover the list');
+  } finally {
+    captured.restore();
+  }
+
+  const eventReads = captured.requests.filter(
+    ({ url, init }) => url === initialEventsFailure.expectedUrl && init.method === 'GET',
+  );
+  const reviewReads = captured.requests.filter(({ url, init }) => {
+    const parsed = new URL(url);
+    return (
+      parsed.pathname === '/rest/v1/attendance_records' &&
+      parsed.searchParams.get('status') === 'eq.pending' &&
+      init.method === 'GET'
+    );
+  });
+  assert.equal(eventReads.length, 1, 'the recovery action did not retry the Events startup GET');
+  assert.equal(reviewReads.length, 0, 'the Events recovery action reloaded Review');
+});
+
+initialEventsFailure.restore();
+await until(() => !dom.$('event-list').hidden, 'the events list never rendered after recovery');
 
 await check('a read-only RPC retries when its response body is lost', async () => {
   const restoreFetch = dropRpcBodyOnce('fn_storage_usage');

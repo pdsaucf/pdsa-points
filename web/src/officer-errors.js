@@ -91,12 +91,12 @@ const HTTP_FALLBACK = {
  *
  * `recover` is what the button under the message should do:
  *   'signin'   the session is finished, go back to the sign-in screen
- *   'refresh'  the screen is out of date, reload the queue
+ *   'refresh'  the screen is out of date, reload its panel
  *   'retry'    worth pressing again as is
  *   'none'     nothing here will help, so no button
  *
  * @param {unknown} err
- * @param {{title?: string}|null} context mutation-specific heading, when useful
+ * @param {{title?: string, panel?: string}|null} context mutation heading or panel name
  * @returns {{title: string, body: string, recover: 'signin'|'refresh'|'retry'|'none'}}
  */
 export function describeOfficer(err, context = null) {
@@ -136,8 +136,8 @@ export function describeOfficer(err, context = null) {
   }
 
   return {
-    title: 'That did not go through',
-    body: 'Reload the queue, then try again.',
+    title: context?.panel ? `${context.panel} unavailable` : 'That did not go through',
+    body: 'Try again.',
     recover: 'refresh',
   };
 }
