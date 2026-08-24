@@ -2,9 +2,10 @@
 // migrations actually produce, not the shape the design docs describe.
 //
 // Sized from docs/00-spreadsheet-findings.md rather than from convenience. The
-// routine zone holds 43 records because that is the number in the wireframe and
-// because a grid that is comfortable with four tiles and unusable with forty is
-// a grid that passes review and fails at a GBM. Every triage flag in the check
+// queue holds 43 cleanly flagged records because that is the scale in the
+// wireframe and because a grid that is comfortable with four tiles and unusable
+// with forty is a grid that passes review and fails at a GBM. One of those rows
+// carries a member-entered value and must stay out of Routine. Every triage flag in the check
 // constraint on attendance_records has at least one record carrying it, so no
 // branch of the card renderer is unexercised.
 //
@@ -889,14 +890,18 @@ export function buildDatabase() {
   });
 
   // ---- the routine zone ---------------------------------------------------
-  // 43 roster-matched members, inside the window, photo attached, no flags.
+  // 42 roster-matched members, inside the window, photo attached, no flags.
+  // The first apparent routine record instead carries 99 member-entered
+  // points. Its stored flags are still empty, proving the review client uses
+  // the durable value and source rather than trusting flags for this decision.
 
   const routineMembers = members.filter((m) => m.id.startsWith('m1000000'));
   routineMembers.forEach((member, index) => {
     const record = add({
       id: `r1000000-0000-4000-a000-${String(index + 1).padStart(12, '0')}`,
-      event_id: GBM,
+      event_id: index === 0 ? GKAS : GBM,
       member_id: member.id,
+      submitted_value: index === 0 ? 99 : null,
       submitted_at: new Date(Date.parse('2026-08-11T18:10:00.000Z') + index * 9000).toISOString(),
     });
     addEvidence(record.id, 'shirt_photo');
@@ -1355,6 +1360,7 @@ export function buildDatabase() {
       ...portalEvents.map(({ category_id, ...event }) => event),
       ...storageEvents,
     ].map((event) => ({
+      config_version: 1,
       term_id: null,
       notes: null,
       review_policy: 'manual_review',
@@ -1440,6 +1446,7 @@ export const IDS = {
   RECORD_MISSING_EVIDENCE: 'r0000000-0000-4000-a000-000000000005',
   RECORD_NOT_ENROLLED: 'r0000000-0000-4000-a000-000000000006',
   RECORD_PREVIOUSLY_REJECTED: 'r0000000-0000-4000-a000-000000000008',
+  RECORD_MEMBER_ENTERED_99: 'r1000000-0000-4000-a000-000000000001',
   CLAIM_WITH_NAME: 'k0000000-0000-4000-a000-000000000001',
   CLAIM_WITHOUT_NAME: 'k0000000-0000-4000-a000-000000000002',
 

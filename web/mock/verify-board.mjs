@@ -271,10 +271,11 @@ await check('no module on these screens writes a record status directly', () => 
       `${label} writes an approved status of its own`,
     );
   }
-  // A record filed by hand is filed pending and approved through the RPC, so
-  // the reviewer and the audit row are stamped exactly as a scanned one.
-  assert.match(sources['src/member.js'], /callRpc\(\s*'review_records'/);
-  assert.match(sources['src/member.js'], /source:\s*'officer_entry'/);
+  // Filing and approval are one transaction. The RPC itself delegates the
+  // approval to review_records(), so the reviewer and audit stamp still use
+  // the same server path as a scanned record.
+  assert.match(sources['src/member.js'], /callRpc\(\s*'add_officer_attendance'/);
+  assert.doesNotMatch(sources['src/member.js'], /insert\(\s*['"]attendance_records['"]/);
 });
 
 // ---------------------------------------------------------------------------
@@ -835,11 +836,15 @@ await check('an officer adds a record by hand, and it goes through the same appr
   assert.equal(after, before + 1, `points went from ${before} to ${after}`);
 
   const calls = (await adminAudit()).calls.slice(callsBefore);
-  const inserted = calls.find((call) => call.fn === 'insert.attendance_records');
-  const reviewed = calls.find((call) => call.fn === 'review_records');
-  assert.ok(inserted, 'no record was filed');
-  assert.ok(reviewed, 'the record was never put through review_records()');
-  assert.equal(reviewed.decision, 'approve');
+  const added = calls.find((call) => call.fn === 'add_officer_attendance');
+  assert.ok(added, 'the record was not filed through add_officer_attendance()');
+  assert.equal(added.eventId, IDS.EVENT_SOAP);
+  assert.equal(added.count, 1);
+  assert.equal(
+    calls.some((call) => call.fn === 'insert.attendance_records'),
+    false,
+    'the screen restored the partial-write window with a direct insert',
+  );
   assert.equal(
     calls.some((call) => call.fn === 'patch.attendance_records'),
     false,

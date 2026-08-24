@@ -41,19 +41,22 @@ test('a valid shared session reads the complete admin surface', async () => {
   assert.equal(status, 10);
 });
 
-test('a valid shared session can create an event without a profile row', async () => {
+test('a valid shared session can create an event through the configuration RPC', async () => {
+  const eventId = '22222222-0000-4000-a000-0000000000e1';
   await db.as('authenticated', USERS.officer);
-  const rows = await db.q(
-    `insert into events (academic_year_id, title, occurred_on)
-     values ($1, 'Shared session regression', date '2026-08-19')
-     returning id, checkin_token`,
-    [YEAR_2026],
+  const saved = await db.val(
+    `select save_event_config($1, $2, $3::jsonb, '[]'::jsonb, null, null, true)`,
+    [
+      eventId,
+      YEAR_2026,
+      JSON.stringify({ title: 'Shared session regression', occurred_on: '2026-08-19' }),
+    ],
   );
   await db.asOwner();
 
-  assert.equal(rows.length, 1);
-  assert.ok(rows[0].checkin_token);
-  await db.q(`delete from events where id = $1`, [rows[0].id]);
+  assert.equal(saved.id, eventId);
+  assert.ok(saved.checkin_token);
+  await db.q(`delete from events where id = $1`, [eventId]);
 });
 
 test('another authenticated Auth user is not an administrator', async () => {

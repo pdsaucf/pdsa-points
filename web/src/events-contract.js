@@ -3,7 +3,7 @@
 // without the anonymous guard probing the same PostgREST contract.
 
 export const EVENT_SELECT = [
-  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at,config_version',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');

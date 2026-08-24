@@ -48,6 +48,7 @@ import {
   typedValueCategory,
 } from './events-model.js';
 import { $, h, announce, setHidden, plural, shortDate, clockTime } from './ui.js';
+import { isMemberEnteredValue } from './flags.js';
 
 const RECORD_SELECT = [
   'id',
@@ -66,7 +67,7 @@ const RECORD_SELECT = [
 // The same shape the list reads, because this screen re-reads the event for
 // itself rather than trusting the copy it was handed. See open().
 const EVENT_SELECT = [
-  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at,config_version',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');
@@ -563,10 +564,15 @@ export function createEventDetail(ctx, host) {
     }
   }
 
-  /** Waiting, and linked to a member, which is what review_records() will take. */
+  /** Waiting, linked, and safe for one bulk decision. */
   const approvableIds = () =>
     (state.records ?? [])
-      .filter((record) => record.status === 'pending' && record.member_id)
+      .filter(
+        (record) =>
+          record.status === 'pending' &&
+          record.member_id &&
+          !isMemberEnteredValue(record),
+      )
       .map((record) => record.id);
 
   function approveAllWaiting() {

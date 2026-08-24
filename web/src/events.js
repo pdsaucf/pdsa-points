@@ -17,15 +17,11 @@
 // off is not a decision this form offers. is_published keeps its default of
 // true.
 //
-// CREATING IS THREE REQUESTS WITH NO TRANSACTION ACROSS THEM. PostgREST
-// cannot wrap an insert into events, event_categories and
-// event_evidence_requirements in one transaction, so a failure partway
-// through leaves a real, incomplete event behind. save() below is honest
-// about that: it says exactly what was written and what was not, and leaves
-// the officer on the form, now editing the event that exists, rather than
-// bouncing to the list and claiming success.
+// Event fields, category links and the photo requirement are saved by one RPC.
+// They commit together because changing a category link immediately changes
+// the derived points for approved attendance.
 
-import { select, insert, patch, remove } from './rest.js';
+import { select, insert, remove, callRpc } from './rest.js';
 import { eventsStartupOptions } from './events-contract.js';
 import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
@@ -48,21 +44,17 @@ import {
   eventStatus,
   parseCredit,
   validateCategoryRows,
-  diffCategoryRows,
-  diffEvidenceRow,
   buildCheckinUrl,
   qrFileName,
 } from './events-model.js';
 import { $, h, announce, setHidden, shortDate, plural } from './ui.js';
 
-const NOT_CHANGED = 'Nothing was changed. Reload the page.';
 
 // Thrown when a write comes back refused. PostgREST answers a write the
 // policy turns down with HTTP 200 and an empty array rather than an error, so
 // every insert here counts the rows it got back: a screen that does not is
 // free to report a category link, or a photo requirement, that the event does
 // not actually have.
-const NOT_WRITTEN = 'The change was refused. Reload the page and try again.';
 
 let rowKeySeq = 0;
 const rowKey = () => {
@@ -130,7 +122,11 @@ export function createEvents(ctx) {
   const state = {
     events: [],
     categories: [],
+    categoryLoad: 'loading', // 'loading' | 'ready' | 'error'
+    categoryError: null,
     terms: [],
+    termLoad: 'loading', // 'loading' | 'ready' | 'error'
+    termError: null,
     loaded: false,
     busy: false,
 
@@ -163,16 +159,24 @@ export function createEvents(ctx) {
     categoryRows: [], // [{ key, category_id, credit_mode, fixed_credit }]
     evidence: null, // { kind, prompt } or null for "not required"
     closesAutoLinked: true, // whether the close time still tracks the date field
-    // What is actually written, once a create has partially landed: used so
-    // a retry diffs against what exists rather than trying to insert twice.
-    existingCategoryLinks: [],
-    existingEvidence: null,
+    saveEventId: null, // stable across a failed create, so retry cannot duplicate it
     // Only a deliberate trip from a card into its detail gets a return
     // target. Quiet reloads repaint the list too, but must not move focus.
     detailOriginEventId: null,
   };
 
-  const activeCategories = () => state.categories.filter((row) => !row.archived_at);
+  function syncFormAvailability() {
+    const unavailable = state.categoryLoad !== 'ready' || state.termLoad !== 'ready';
+    el.newButton.disabled = unavailable;
+    el.categoryAdd.disabled = unavailable;
+    let label = '';
+    if (state.categoryLoad === 'loading') label = 'Categories loading';
+    else if (state.categoryLoad === 'error') label = 'Categories unavailable';
+    else if (state.termLoad === 'loading') label = 'Terms loading';
+    else if (state.termLoad === 'error') label = 'Terms unavailable';
+    el.newButton.title = unavailable ? label : '';
+    el.categoryAdd.title = unavailable ? label : '';
+  }
 
   // One event's own screen. It owns the attendee list and every write against
   // attendance_records; what it borrows from here is the four things that are
@@ -206,6 +210,11 @@ export function createEvents(ctx) {
     // The year this request is FOR, captured now. ctx.year is the shell's
     // live value and may have moved on by the time the response lands.
     const yearId = ctx.year.id;
+    state.categoryLoad = 'loading';
+    state.categoryError = null;
+    state.termLoad = 'loading';
+    state.termError = null;
+    syncFormAvailability();
 
     // The loading state belongs to the list. Putting it up over the form or
     // an open event replaces what the officer is working on with a spinner.
@@ -215,27 +224,77 @@ export function createEvents(ctx) {
       setHidden(el.list, true);
     }
     try {
-      const [events, categories, terms] = await Promise.all([
+      const categoriesRequest = select('categories', {
+        select: 'id,slug,name,sort_order,archived_at',
+        order: 'sort_order.asc',
+      }).then(
+        (categories) => {
+          if (token === state.loadToken) {
+            state.categories = categories;
+            state.categoryLoad = 'ready';
+            syncFormAvailability();
+          }
+          return categories;
+        },
+        (err) => {
+          if (token === state.loadToken) {
+            state.categories = [];
+            state.categoryLoad = 'error';
+            state.categoryError = err;
+            syncFormAvailability();
+          }
+          throw err;
+        },
+      );
+      const termsRequest = select('terms', {
+        select: 'id,label',
+        filters: { academic_year_id: `eq.${ctx.year.id}` },
+        order: 'starts_on.asc',
+      }).then(
+        (terms) => {
+          if (token === state.loadToken) {
+            state.terms = terms;
+            state.termLoad = 'ready';
+            syncFormAvailability();
+          }
+          return terms;
+        },
+        (err) => {
+          if (token === state.loadToken) {
+            state.terms = [];
+            state.termLoad = 'error';
+            state.termError = err;
+            syncFormAvailability();
+          }
+          throw err;
+        },
+      );
+      const [eventsResult, categoriesResult, termsResult] = await Promise.allSettled([
         select('events', eventsStartupOptions(ctx.year.id)),
-        select('categories', { select: 'id,slug,name,sort_order,archived_at', order: 'sort_order.asc' }),
-        select('terms', {
-          select: 'id,label',
-          filters: { academic_year_id: `eq.${ctx.year.id}` },
-          order: 'starts_on.asc',
-        }),
+        categoriesRequest,
+        termsRequest,
       ]);
-
-      const counts = await loadCounts(events.map((row) => row.id));
 
       // Superseded while it was in flight. Nothing is written and nothing is
       // drawn: a later load is already on its way or already landed, and the
       // rows in hand may be from a year nobody is looking at any more.
       if (token !== state.loadToken) return;
 
-      state.events = events.map((row) => ({ ...row, counts: counts.get(row.id) ?? { approved: 0, pending: 0 } }));
-      state.categories = categories;
-      state.terms = terms;
-      state.loaded = true;
+      let eventsError = eventsResult.status === 'rejected' ? eventsResult.reason : null;
+      if (!eventsError) {
+        try {
+          const events = eventsResult.value;
+          const counts = await loadCounts(events.map((row) => row.id));
+          if (token !== state.loadToken) return;
+          state.events = events.map((row) => ({ ...row, counts: counts.get(row.id) ?? { approved: 0, pending: 0 } }));
+        } catch (err) {
+          eventsError = err;
+        }
+      }
+      if (token !== state.loadToken) return;
+
+      const startupError = eventsError ?? state.categoryError ?? state.termError;
+      state.loaded = !startupError;
 
       // THE YEAR SELECTOR IS GLOBAL, AND THIS SCREEN IS NOT EXEMPT FROM IT.
       // An open event belongs to the year it was opened in, and so does a
@@ -256,7 +315,11 @@ export function createEvents(ctx) {
       }
 
       setHidden(el.loading, true);
-      paint();
+      if (!eventsError) paint();
+      if (startupError) {
+        ctx.fail(startupError, () => load());
+        return;
+      }
     } catch (err) {
       if (token !== state.loadToken) return;
       setHidden(el.loading, true);
@@ -533,6 +596,11 @@ export function createEvents(ctx) {
   }
 
   function openForm(event = null) {
+    if (state.categoryLoad !== 'ready' || state.termLoad !== 'ready') {
+      const formError = state.categoryError ?? state.termError;
+      if (formError) ctx.fail(formError, () => load());
+      return;
+    }
     // Read once and cleared, so Duplicate fills this form in and the next New
     // event opens blank. Ignored entirely when an event is being edited.
     const draft = event ? null : state.draft;
@@ -544,6 +612,7 @@ export function createEvents(ctx) {
     state.formReturn = state.view === 'detail' && event ? 'detail' : 'list';
     state.view = 'form';
     state.editingEvent = event;
+    state.saveEventId = event?.id ?? crypto.randomUUID();
     setHidden(el.error, true);
     el.error.textContent = '';
 
@@ -586,21 +655,10 @@ export function createEvents(ctx) {
           fixed_credit: link.fixed_credit ?? 1,
         }))
       : [{ key: rowKey(), category_id: '', credit_mode: 'fixed', fixed_credit: 1 }];
-    // What is already WRITTEN, which for a duplicate is nothing: the copy is
-    // a new event, so every category row on it is an insert.
-    state.existingCategoryLinks = event
-      ? links.map((link) => ({
-          category_id: link.category_id,
-          credit_mode: link.credit_mode,
-          fixed_credit: link.fixed_credit,
-        }))
-      : [];
-
     const evidenceRow = event?.event_evidence_requirements?.[0] ?? null;
     state.evidence = evidenceRow
       ? { kind: evidenceRow.kind, prompt: evidenceRow.prompt }
       : draft?.evidence ?? null;
-    state.existingEvidence = evidenceRow ? { id: evidenceRow.id, kind: evidenceRow.kind, prompt: evidenceRow.prompt } : null;
 
     renderCategoryRows();
     renderEvidenceFields();
@@ -661,8 +719,10 @@ export function createEvents(ctx) {
     const usedElsewhere = new Set(
       state.categoryRows.filter((other) => other.key !== row.key).map((other) => other.category_id),
     );
-    const available = activeCategories().filter(
-      (category) => category.id === row.category_id || !usedElsewhere.has(category.id),
+    const available = state.categories.filter(
+      (category) =>
+        (!category.archived_at || category.id === row.category_id) &&
+        (category.id === row.category_id || !usedElsewhere.has(category.id)),
     );
 
     const categoryPicker = h(
@@ -678,6 +738,7 @@ export function createEvents(ctx) {
             return;
           }
           row.category_id = value;
+          renderCategoryRows();
         },
       },
       h('option', { value: '' }, 'Choose a category'),
@@ -954,184 +1015,44 @@ export function createEvents(ctx) {
     ctx.clearMessage();
     setBusy(true);
 
-    if (state.editingEvent) {
-      await saveEdit(fields, desiredCategories);
-    } else {
-      await saveCreate(fields, desiredCategories);
-    }
+    await saveEvent(fields, desiredCategories);
 
     setBusy(false);
   }
 
-  async function saveCreate(fields, desiredCategories) {
-    let created;
+  async function saveEvent(fields, desiredCategories) {
+    const wasEdit = Boolean(state.editingEvent);
     try {
-      // attempts: 1 turns OFF the transport retry every other call in this
-      // codebase wants. A create carries no idempotency key, so a request
-      // that Postgres COMMITTED and whose response was then lost would be
-      // sent again and make a SECOND event, with its own id and its own
-      // check-in token, published and missing its categories. An officer
-      // pressing Save again after a visible failure is a decision; a retry
-      // they never saw is not, and duplicate events are not something this
-      // screen offers any way to clean up.
-      const rows = await insert(
-        'events',
-        [{ ...fields, academic_year_id: ctx.year.id }],
-        { attempts: 1 },
-      );
-      created = rows?.[0];
-      if (!created) throw new Error('nothing came back');
+      await callRpc('save_event_config', {
+        p_event_id: state.saveEventId,
+        p_academic_year_id: ctx.year.id,
+        p_event: fields,
+        p_categories: desiredCategories,
+        p_evidence: state.evidence
+          ? { kind: state.evidence.kind, prompt: state.evidence.prompt }
+          : null,
+        p_expected_config_version: wasEdit ? state.editingEvent.config_version : null,
+        p_create: !wasEdit,
+      });
     } catch (err) {
-      ctx.fail(err, () => onSubmit({ preventDefault() {} }));
+      if (err?.code === 'PDS15') {
+        // The form is a stale snapshot. Close it and reload the authoritative
+        // event before showing the conflict, so Reload cannot resubmit stale
+        // categories or evidence.
+        hideForm();
+        await load();
+      }
+      ctx.fail(err, null);
       return;
     }
 
-    // From here the event exists. Anything that fails below is reported
-    // honestly, and the form stays open, now editing this event, so retrying
-    // does not attempt to create a second one.
-    state.editingEvent = created;
-    state.existingCategoryLinks = [];
-    state.existingEvidence = null;
-
-    if (desiredCategories.length) {
-      try {
-        const rows = await insert(
-          'event_categories',
-          desiredCategories.map((row) => ({ event_id: created.id, ...row })),
-        );
-        // PostgREST answers a refused write with 200 and an empty array.
-        // Reading that as success reports categories the event does not have.
-        if (rows.length !== desiredCategories.length) throw new Error(NOT_WRITTEN);
-        state.existingCategoryLinks = rows.map((row) => ({
-          category_id: row.category_id,
-          credit_mode: row.credit_mode,
-          fixed_credit: row.fixed_credit,
-        }));
-      } catch (err) {
-        ctx.fail(err, null);
-        showFormError(`${fields.title} was created. Categories were not saved. Try Save again.`);
-        return;
-      }
-    }
-
-    if (state.evidence) {
-      try {
-        const rows = await insert('event_evidence_requirements', [
-          { event_id: created.id, kind: state.evidence.kind, is_required: true, prompt: state.evidence.prompt },
-        ]);
-        const row = rows?.[0];
-        if (!row) throw new Error(NOT_WRITTEN);
-        state.existingEvidence = { id: row.id, kind: row.kind, prompt: row.prompt };
-      } catch (err) {
-        ctx.fail(err, null);
-        showFormError(`${fields.title} was created. The photo requirement was not saved. Try Save again.`);
-        return;
-      }
-    }
-
-    const said = `${fields.title} created.`;
+    const said = wasEdit ? `${fields.title} saved.` : `${fields.title} created.`;
     ctx.note(said);
     announce(said);
     hideForm();
     await load();
     ctx.onEventsChanged?.();
-  }
-
-  async function saveEdit(fields, desiredCategories) {
-    const eventId = state.editingEvent.id;
-    try {
-      const rows = await patch('events', { id: `eq.${eventId}` }, fields);
-      if (!rows.length) {
-        ctx.note(NOT_CHANGED, 'warn');
-        return;
-      }
-    } catch (err) {
-      ctx.fail(err, null);
-      return;
-    }
-
-    const { toInsert, toUpdate, toRemove } = diffCategoryRows(state.existingCategoryLinks, desiredCategories);
-    try {
-      if (toRemove.length) {
-        const ids = toRemove.map((row) => row.category_id);
-        const removed = await remove('event_categories', {
-          event_id: `eq.${eventId}`,
-          category_id: `in.(${ids.join(',')})`,
-        });
-        if (!removed.length) {
-          ctx.note(NOT_CHANGED, 'warn');
-          return;
-        }
-      }
-      for (const row of toUpdate) {
-        const updated = await patch(
-          'event_categories',
-          { event_id: `eq.${eventId}`, category_id: `eq.${row.category_id}` },
-          { credit_mode: row.credit_mode, fixed_credit: row.fixed_credit },
-        );
-        if (!updated.length) {
-          ctx.note(NOT_CHANGED, 'warn');
-          return;
-        }
-      }
-      if (toInsert.length) {
-        const added = await insert(
-          'event_categories',
-          toInsert.map((row) => ({ event_id: eventId, ...row })),
-        );
-        if (added.length !== toInsert.length) throw new Error(NOT_WRITTEN);
-      }
-    } catch (err) {
-      ctx.fail(err, null);
-      // What is on screen no longer describes what is stored, and the next
-      // Save would diff against a picture that includes links this one did
-      // not write. Re-read rather than guess.
-      await load();
-      return;
-    }
-    state.existingCategoryLinks = desiredCategories;
-
-    const desiredEvidence = state.evidence
-      ? { kind: state.evidence.kind, prompt: state.evidence.prompt, is_required: true }
-      : null;
-    const evidenceDiff = diffEvidenceRow(state.existingEvidence, desiredEvidence);
-    try {
-      if (evidenceDiff.action === 'insert') {
-        const rows = await insert('event_evidence_requirements', [{ event_id: eventId, ...evidenceDiff.payload }]);
-        const row = rows?.[0];
-        if (!row) throw new Error(NOT_WRITTEN);
-        state.existingEvidence = { id: row.id, kind: row.kind, prompt: row.prompt };
-      } else if (evidenceDiff.action === 'patch') {
-        const rows = await patch(
-          'event_evidence_requirements',
-          { id: `eq.${evidenceDiff.id}` },
-          evidenceDiff.payload,
-        );
-        if (!rows.length) {
-          ctx.note(NOT_CHANGED, 'warn');
-          return;
-        }
-        state.existingEvidence = { id: rows[0].id, kind: rows[0].kind, prompt: rows[0].prompt };
-      } else if (evidenceDiff.action === 'remove') {
-        const rows = await remove('event_evidence_requirements', { id: `eq.${evidenceDiff.id}` });
-        if (!rows.length) {
-          ctx.note(NOT_CHANGED, 'warn');
-          return;
-        }
-        state.existingEvidence = null;
-      }
-    } catch (err) {
-      ctx.fail(err, null);
-      return;
-    }
-
-    const said = `${fields.title} saved.`;
-    ctx.note(said);
-    announce(said);
-    hideForm();
-    await load();
-    ctx.onEventsChanged?.();
-    returnAfterSave();
+    if (wasEdit) returnAfterSave();
   }
 
   // -------------------------------------------------------------------------
@@ -1202,6 +1123,7 @@ export function createEvents(ctx) {
   // -------------------------------------------------------------------------
 
   function wire() {
+    syncFormAvailability();
     el.newButton.addEventListener('click', () => openForm(null));
     el.cancel.addEventListener('click', closeForm);
 

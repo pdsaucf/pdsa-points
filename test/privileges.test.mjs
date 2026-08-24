@@ -92,6 +92,8 @@ const ANON_MAY_EXECUTE = [
 ];
 
 const SHARED_ADMIN = '99999999-0000-4000-a000-0000000000f9';
+const DELETE_EVENT = '22222222-0000-4000-a000-00000000de1e';
+const CATEGORY_GBMS = 'c0000000-0000-4000-a000-000000000001';
 
 // Extension-owned objects are not ours to grant or revoke. citext, pg_trgm and
 // pgcrypto all install functions into public with their own ACLs.
@@ -195,6 +197,94 @@ test('anon holds no privilege on any table, view or sequence', async () => {
     relations,
     [],
     `anon was granted: ${relations.map((r) => `${r.relname}.${r.privilege_type}`).join(', ')}`,
+  );
+});
+
+test('authenticated event configuration writes exist only behind the RPC', async () => {
+  const privileges = await db.q(`
+    select c.relname,
+           has_table_privilege('authenticated', c.oid, 'SELECT') as can_select,
+           has_table_privilege('authenticated', c.oid, 'INSERT') as can_insert,
+           has_table_privilege('authenticated', c.oid, 'UPDATE') as can_update,
+           has_table_privilege('authenticated', c.oid, 'DELETE') as can_delete
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname in ('events', 'event_categories', 'event_evidence_requirements')
+    order by c.relname
+  `);
+
+  assert.deepEqual(privileges, [
+    {
+      relname: 'event_categories',
+      can_select: true,
+      can_insert: false,
+      can_update: false,
+      can_delete: false,
+    },
+    {
+      relname: 'event_evidence_requirements',
+      can_select: true,
+      can_insert: false,
+      can_update: false,
+      can_delete: false,
+    },
+    {
+      relname: 'events',
+      can_select: true,
+      can_insert: false,
+      can_update: false,
+      can_delete: true,
+    },
+  ]);
+
+  await db.exec(`
+    insert into events (id, academic_year_id, title, occurred_on, checkin_token)
+    values ('${DELETE_EVENT}', 'a0000000-0000-4000-a000-000000000001',
+            'Delete Through Narrow Grant', current_date, 'tok-delete-narrow');
+    insert into event_categories (event_id, category_id, credit_mode, fixed_credit)
+    values ('${DELETE_EVENT}', '${CATEGORY_GBMS}', 'fixed', 1);
+    insert into event_evidence_requirements (event_id, kind, is_required)
+    values ('${DELETE_EVENT}', 'shirt_photo', true);
+  `);
+
+  await db.as('authenticated', SHARED_ADMIN);
+  const insertError = await db.expectError(
+    `insert into events (academic_year_id, title, occurred_on)
+     values ('a0000000-0000-4000-a000-000000000001', 'Direct Refused', current_date)`,
+  );
+  const updateError = await db.expectError(
+    `update events set title = 'Direct Refused' where id = $1`,
+    [DELETE_EVENT],
+  );
+  const childError = await db.expectError(
+    `update event_categories set fixed_credit = 9 where event_id = $1`,
+    [DELETE_EVENT],
+  );
+  assert.equal(insertError.code, '42501');
+  assert.equal(updateError.code, '42501');
+  assert.equal(childError.code, '42501');
+
+  assert.equal(
+    (await db.q(`delete from events where id = $1 returning id`, [DELETE_EVENT])).length,
+    1,
+    'the event detail delete path lost its narrow grant',
+  );
+  await db.asOwner();
+  assert.equal(
+    Number(await db.val(`select count(*) from event_categories where event_id = $1`, [DELETE_EVENT])),
+    0,
+    'the retained event delete did not cascade to category links',
+  );
+  assert.equal(
+    Number(
+      await db.val(
+        `select count(*) from event_evidence_requirements where event_id = $1`,
+        [DELETE_EVENT],
+      ),
+    ),
+    0,
+    'the retained event delete did not cascade to evidence requirements',
   );
 });
 

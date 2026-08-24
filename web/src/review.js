@@ -26,7 +26,14 @@
 
 import { select, insert, callRpc, signPhotoUrls, RpcError } from './rest.js';
 import { describeOfficer } from './officer-errors.js';
-import { FLAG_COPY, actionsFor, approveLabel, knownFlags, primaryFlag } from './flags.js';
+import {
+  FLAG_COPY,
+  actionsFor,
+  approveLabel,
+  isMemberEnteredValue,
+  knownFlags,
+  primaryFlag,
+} from './flags.js';
 import { rankMembers, splitName } from './match.js';
 import { $, h, announce, setHidden, plural, shortDate, clockTime } from './ui.js';
 
@@ -70,6 +77,22 @@ const SOURCE_NOTE = {
 // A card whose flags have all been dealt with, which is what a resolved
 // unmatched card becomes without leaving the screen.
 const SETTLED_HEADLINE = 'Ready to approve';
+
+/**
+ * The triage facts a review decision must use.
+ *
+ * A value supplied by a member is deliberately derived from the durable
+ * attendance row instead of copied into attendance_records.flags. That makes
+ * existing pending records safe immediately and keeps a later flag rewrite
+ * from turning an entered value into a routine bulk approval.
+ */
+export function reviewFlagsFor(record) {
+  const flags = Array.isArray(record?.flags) ? [...record.flags] : [];
+  if (isMemberEnteredValue(record) && !flags.includes('member_entered_value')) {
+    flags.push('member_entered_value');
+  }
+  return flags;
+}
 
 /**
  * Members who already hold a live record for the same event.
@@ -259,8 +282,8 @@ export function createReview(ctx) {
     state.eventFilter === 'all' || record.event_id === state.eventFilter;
 
   const visible = () => state.records.filter(inFilter);
-  const flagged = () => visible().filter((r) => knownFlags(r.flags).length > 0);
-  const routine = () => visible().filter((r) => knownFlags(r.flags).length === 0);
+  const flagged = () => visible().filter((r) => knownFlags(reviewFlagsFor(r)).length > 0);
+  const routine = () => visible().filter((r) => knownFlags(reviewFlagsFor(r)).length === 0);
 
   const nameOf = (record) =>
     record.members?.display_name ?? record.claimed_name ?? 'No name on file';
@@ -388,10 +411,11 @@ export function createReview(ctx) {
   // ---- flagged cards ------------------------------------------------------
 
   function renderCard(record) {
-    const flags = knownFlags(record.flags);
-    const lead = primaryFlag(record.flags);
+    const reviewFlags = reviewFlagsFor(record);
+    const flags = knownFlags(reviewFlags);
+    const lead = primaryFlag(reviewFlags);
     const copy = lead ? FLAG_COPY[lead] : null;
-    const actions = actionsFor(record.flags);
+    const actions = actionsFor(reviewFlags);
 
     const card = h('article', {
       class: 'card',
@@ -605,7 +629,7 @@ export function createReview(ctx) {
         );
       } else if (action === 'approve') {
         row.append(
-          button(approveLabel(record.flags), 'button-primary', () =>
+          button(approveLabel(reviewFlagsFor(record)), 'button-primary', () =>
             decide([record.id], 'approve', null),
           ),
         );

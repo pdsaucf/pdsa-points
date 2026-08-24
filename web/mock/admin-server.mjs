@@ -1152,6 +1152,7 @@ const INSERT_DEFAULTS = {
   // masking a client bug.
   events: (row, auth) => ({
     id: uuid('e9000000-0000-4000-a000-'),
+    config_version: 1,
     term_id: null,
     starts_at: null,
     ends_at: null,
@@ -1926,6 +1927,158 @@ function orphanedUploadRows() {
 }
 
 export const ADMIN_RPC = {
+  /**
+   * save_event_config(event, year, fields, categories, evidence, expected version, create)
+   * replaces the full event configuration in one transaction.
+   */
+  save_event_config(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      record({ fn: 'save_event_config', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const eventId = body.p_event_id;
+    const yearId = body.p_academic_year_id;
+    const fields = body.p_event ?? {};
+    const categories = Array.isArray(body.p_categories) ? body.p_categories : null;
+    const evidence = body.p_evidence ?? null;
+    const expectedVersion = body.p_expected_config_version ?? null;
+    const creating = body.p_create === true;
+
+    if (!eventId || !yearId || !String(fields.title ?? '').trim() || !fields.occurred_on) {
+      pds(res, 'PDS03', 'The event fields are not valid.');
+      return;
+    }
+    if (!categories || (evidence !== null && typeof evidence !== 'object')) {
+      pds(res, 'PDS03', 'The event configuration is not valid.');
+      return;
+    }
+
+    let event = db.events.find((row) => row.id === eventId) ?? null;
+    if (!event && !creating) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+    if (event && event.academic_year_id !== yearId) {
+      pds(res, 'PDS03', 'That event belongs to another academic year.');
+      return;
+    }
+    if (creating && event) {
+      json(res, 200, {
+        id: event.id,
+        checkin_token: event.checkin_token,
+        config_version: event.config_version ?? 1,
+        created: true,
+      });
+      return;
+    }
+    if (!creating && Number(expectedVersion) !== Number(event.config_version ?? 1)) {
+      record({ fn: 'save_event_config', outcome: 'PDS15', eventId });
+      pds(res, 'PDS15', 'This event changed after you opened it. Reload it before saving.');
+      return;
+    }
+    const term = fields.term_id
+      ? db.terms.find((row) => row.id === fields.term_id && row.academic_year_id === yearId)
+      : null;
+    if (fields.term_id && !term) {
+      pds(res, 'PDS03', 'That term does not belong to this academic year.');
+      return;
+    }
+    const ids = categories.map((row) => row.category_id);
+    const validCategories = categories.every((row) => {
+      const category = db.categories.find((one) => one.id === row.category_id);
+      const preservedRetired = category?.archived_at && db.event_categories.some(
+        (old) => old.event_id === eventId && old.category_id === row.category_id &&
+          old.credit_mode === row.credit_mode && Number(old.fixed_credit) === Number(row.fixed_credit),
+      );
+      return Boolean(category) && (!category.archived_at || preservedRetired) &&
+        ['fixed', 'from_submission'].includes(row.credit_mode) &&
+        Number.isFinite(Number(row.fixed_credit));
+    });
+    if (new Set(ids).size !== ids.length || !validCategories ||
+        categories.filter((row) => row.credit_mode === 'from_submission').length > 1) {
+      pds(res, 'PDS03', 'One of those categories cannot be used.');
+      return;
+    }
+    if (evidence && !['shirt_photo', 'receipt_photo', 'other_photo'].includes(evidence.kind)) {
+      pds(res, 'PDS03', 'The photo requirement is not valid.');
+      return;
+    }
+
+    if (!creating && db.attendance_records.some((row) => row.event_id === eventId)) {
+      const oldValueSet = db.event_categories
+        .filter((row) => row.event_id === eventId && row.credit_mode === 'from_submission')
+        .map((row) => row.category_id).sort();
+      const newValueSet = categories
+        .filter((row) => row.credit_mode === 'from_submission')
+        .map((row) => row.category_id).sort();
+      if (JSON.stringify(oldValueSet) !== JSON.stringify(newValueSet)) {
+        pds(res, 'PDS03', 'Member-entered points cannot be changed after check-ins exist.');
+        return;
+      }
+    }
+
+    if (!event) {
+      event = INSERT_DEFAULTS.events(
+        { id: eventId, academic_year_id: yearId, created_by: auth.userId },
+        auth,
+      );
+      db.events.push(event);
+    } else {
+      event.config_version = Number(event.config_version ?? 1) + 1;
+    }
+    Object.assign(event, {
+      title: String(fields.title).trim(),
+      occurred_on: fields.occurred_on,
+      starts_at: fields.starts_at ?? null,
+      ends_at: fields.ends_at ?? null,
+      term_id: fields.term_id ?? null,
+      checkin_closes_at: fields.checkin_closes_at ?? null,
+    });
+
+    db.event_categories = db.event_categories.filter((row) => row.event_id !== eventId);
+    db.event_categories.push(
+      ...categories.map((row) => INSERT_DEFAULTS.event_categories({ event_id: eventId, ...row })),
+    );
+    db.event_evidence_requirements = db.event_evidence_requirements.filter(
+      (row) => row.event_id !== eventId,
+    );
+    if (evidence) {
+      db.event_evidence_requirements.push(
+        INSERT_DEFAULTS.event_evidence_requirements({
+          event_id: eventId,
+          kind: evidence.kind,
+          is_required: true,
+          prompt: evidence.prompt ?? null,
+        }),
+      );
+    }
+
+    audit(auth, creating ? 'create_event' : 'save_event', 'event', eventId, {
+      category_count: categories.length,
+      has_evidence: Boolean(evidence),
+    });
+    record({
+      fn: 'save_event_config',
+      actor: auth.userId,
+      eventId,
+      creating,
+      categoryCount: categories.length,
+      hasEvidence: Boolean(evidence),
+    });
+
+    if (dropCommittedResponse(res, 'save_event_config')) return;
+    json(res, 200, {
+      id: event.id,
+      checkin_token: event.checkin_token,
+      config_version: event.config_version,
+      created: creating,
+    });
+  },
+
   /** review_records(p_ids uuid[], p_decision text, p_note text) returns int */
   review_records(res, body, req, helpers, anonKey) {
     const { json, pds } = helpers;
@@ -1957,6 +2110,18 @@ export const ADMIN_RPC = {
           'PDS06',
           `Cannot approve ${unmatched.length} record(s) that are not linked to a member. Resolve the unmatched name first.`,
         );
+        return;
+      }
+
+      const memberEntered = targets.filter(
+        (row) =>
+          row.submitted_value !== null &&
+          row.submitted_value !== undefined &&
+          (row.source === 'self_checkin' || row.source === 'member_request'),
+      );
+      if (ids.length > 1 && memberEntered.length) {
+        record({ fn: 'review_records', outcome: 'PDS03', ids, actor: auth.userId });
+        pds(res, 'PDS03', 'Member-entered points must be reviewed one at a time.');
         return;
       }
 

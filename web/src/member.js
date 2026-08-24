@@ -16,14 +16,13 @@
 //
 // AND ONE WRITE. An officer can add a record by hand, because that is how the
 // spreadsheet workflow actually operated: somebody says "I was there, I signed
-// the sheet", and an officer puts it in. It is filed as source = officer_entry
-// and it is NOT written as approved. It goes in pending and then through
-// review_records(), for the same reason the review queue does: that function is
-// what stamps the reviewer, writes the audit row, and refuses the approvals
-// that have to be refused. Nothing here writes `status` directly, and invariant
-// 6 holds, because the officer pressing the button IS the person approving it.
+// the sheet", and an officer puts it in. add_officer_attendance() files the row
+// pending and passes it through review_records() in the same database
+// transaction. The reviewer stamp, audit row and approval refusal cannot be
+// separated by a dropped connection. Invariant 6 holds because the officer
+// pressing Add is the person approving it.
 
-import { select, insert, patch, callRpc } from './rest.js';
+import { select, patch, callRpc } from './rest.js';
 import { buildTree, flatten } from './requirement-model.js';
 import { firstJoinedOn } from './joined.js';
 import { createCandidatePicker } from './retro.js';
@@ -489,24 +488,12 @@ export function createMember(ctx) {
 
     setBusy(true);
     try {
-      // Filed pending, then approved through the RPC. Two calls on purpose:
-      // see the note at the top of this file.
-      const created = await insert('attendance_records', [
-        {
-          event_id: eventId,
-          member_id: state.memberId,
-          source: 'officer_entry',
-          submitted_value: needsValue ? value : null,
-        },
-      ]);
-      const record = created?.[0];
-      if (!record) throw new Error('nothing came back');
-
-      await callRpc('review_records', {
-        p_ids: [record.id],
-        p_decision: 'approve',
-        p_note: null,
+      const created = await callRpc('add_officer_attendance', {
+        p_event_id: eventId,
+        p_member_ids: [state.memberId],
+        p_submitted_value: needsValue ? value : null,
       });
+      if (!Array.isArray(created) || created.length !== 1) throw new Error('nothing came back');
 
       const said = 'Record added.';
       ctx.note(said);

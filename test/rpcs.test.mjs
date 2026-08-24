@@ -192,6 +192,74 @@ test('submit_checkin forces pending status and self_checkin source', async () =>
   await db.q(`delete from attendance_records where id = $1`, [res.record_id]);
 });
 
+test('member-entered 99 earns nothing pending, cannot join a batch, and needs individual approval', async () => {
+  const memberId = '11111111-0000-4000-a000-000000000099';
+  const fixedRecordId = '33333333-0000-4000-a000-000000000099';
+
+  await db.exec(`
+    insert into members (id, first_name, last_name)
+    values ('${memberId}', 'Ninety', 'Nine');
+
+    insert into member_enrollments (member_id, academic_year_id, status)
+    values ('${memberId}', '${YEAR_2026}', 'active');
+
+    update events set checkin_opens_at = now() - interval '1 hour',
+                      checkin_closes_at = now() + interval '1 hour'
+     where checkin_token = 'tok-vol-social';
+  `);
+
+  await db.as('anon');
+  const submitted = await db.val(
+    `select submit_checkin('tok-vol-social', $1, null, null, 99, '[]'::jsonb)`,
+    [memberId],
+  );
+  await db.asOwner();
+
+  assert.equal(submitted.status, 'pending');
+  assert.equal(
+    Number(await db.val(`select count(*) from v_attendance_credit where attendance_id = $1`, [submitted.record_id])),
+    0,
+    '99 member-entered points scored before review',
+  );
+
+  await db.exec(`
+    insert into attendance_records (id, event_id, member_id, status, source)
+    values ('${fixedRecordId}', '${EVENTS.gbmSingle}', '${memberId}', 'pending', 'self_checkin');
+  `);
+
+  await db.as('authenticated', USERS.officer);
+  const batchError = await db.expectError(
+    `select review_records($1::uuid[], 'approve', null)`,
+    [[submitted.record_id, fixedRecordId]],
+  );
+  assert.equal(batchError.code, 'PDS03');
+
+  const approved = await db.val(
+    `select review_records(array[$1]::uuid[], 'approve', null)`,
+    [submitted.record_id],
+  );
+  await db.asOwner();
+  assert.equal(Number(approved), 1);
+
+  const credits = await db.q(
+    `select c.slug, v.credit
+       from v_attendance_credit v
+       join categories c on c.id = v.category_id
+      where v.attendance_id = $1
+      order by c.slug`,
+    [submitted.record_id],
+  );
+  assert.deepEqual(
+    Object.fromEntries(credits.map((row) => [row.slug, Number(row.credit)])),
+    { socials: 1, volunteering: 99 },
+  );
+
+  await db.exec(`
+    delete from attendance_records where id in ('${submitted.record_id}', '${fixedRecordId}');
+    delete from members where id = '${memberId}';
+  `);
+});
+
 test('there is no argument by which an anonymous caller can choose a status', async () => {
   // submit_checkin takes six arguments and none of them is a status or a
   // source. This is the structural reason the anonymous page cannot grant

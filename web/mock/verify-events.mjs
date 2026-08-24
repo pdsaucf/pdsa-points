@@ -2,10 +2,9 @@
 //
 // Same rule as verify-admin.mjs: assert the things that fail SILENTLY.
 //
-//   1. Creating an event is three requests with no transaction across them,
-//      so what has to be proven is that all three actually landed, and that
-//      the row that comes back carries a checkin_token: without one the QR
-//      code has nothing to encode.
+//   1. Creating an event is one transactional RPC. The lower-level table
+//      fixture still proves that an event row gets its database-generated
+//      checkin_token, because without one the QR code has nothing to encode.
 //   2. checkin_opens_at is never written, because check-in has to work the
 //      moment an event exists. This is a client discipline, not a database
 //      one (the column is nullable either way), so the only way to catch a
@@ -150,7 +149,7 @@ const signInAs = (email) => signInAsAccount(email, PORT);
 const server = await startMock(PORT);
 
 const EVENT_SELECT = [
-  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_opens_at,checkin_closes_at,',
+  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_opens_at,checkin_closes_at,config_version,',
   'review_policy,is_published,',
   'event_categories(category_id,credit_mode,fixed_credit),',
   'event_evidence_requirements(id,kind,is_required,prompt)',
@@ -670,6 +669,27 @@ function failRestReadOnce(table) {
   };
 }
 
+function answerRestReadOnce(table, rows) {
+  const originalFetch = globalThis.fetch;
+  let seen;
+  const captured = new Promise((resolve) => {
+    seen = resolve;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (new URL(url).pathname === `/rest/v1/${table}`) {
+      globalThis.fetch = originalFetch;
+      seen();
+      return new Response(JSON.stringify(rows), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return originalFetch(input, init);
+  };
+  return captured;
+}
+
 function holdNextRestResponse(table) {
   const originalFetch = globalThis.fetch;
   let release;
@@ -773,6 +793,23 @@ await until(
   'the other startup panels did not continue after Events failed',
 );
 
+await check('an Events query failure does not erase categories from New event', async () => {
+  assert.equal(dom.$('event-new').disabled, false, 'New event stayed disabled after categories loaded');
+  dom.click(dom.$('event-new'));
+  const picker = dom.$('event-categories').querySelector('select');
+  const offered = picker
+    .querySelectorAll('option')
+    .map((option) => option.textContent.trim())
+    .filter((label) => !['Choose a category', 'New event category…'].includes(label));
+  const expected = (await adminAudit()).categories
+    .filter((category) => !category.archived_at)
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((category) => category.name);
+  assert.deepEqual(offered, expected, 'New event did not offer every active category');
+  assert.ok(!offered.includes('President Workshops'), 'New event offered a retired category');
+  dom.click(dom.$('event-cancel'));
+});
+
 await check('an Events schema drift banner reloads Events without reloading Review', async () => {
   const failed = initialEventsFailure.request();
   assert.ok(failed, 'the initial Events request was not intercepted');
@@ -810,6 +847,244 @@ await check('an Events schema drift banner reloads Events without reloading Revi
 
 initialEventsFailure.restore();
 await until(() => !dom.$('event-list').hidden, 'the events list never rendered after recovery');
+
+await check('category rows filter duplicates and an inline category appears immediately', async () => {
+  dom.click(dom.$('event-new'));
+  let pickers = dom.$('event-categories').querySelectorAll('select');
+  pickers[0].value = IDS.CATEGORY_GBMS;
+  dom.fire(pickers[0], 'change');
+
+  dom.click(dom.$('event-category-add'));
+  pickers = dom.$('event-categories').querySelectorAll('select');
+  assert.equal(pickers.length, 2);
+  assert.ok(
+    !pickers[1].querySelectorAll('option').some((option) => option.getAttribute('value') === IDS.CATEGORY_GBMS),
+    'a selected category was still offered in another row',
+  );
+
+  pickers[1].value = 'new';
+  dom.fire(pickers[1], 'change');
+  dom.$('event-new-category-name').value = 'Immediate Category';
+  dom.fire(dom.$('event-new-category-form'), 'submit');
+  await until(
+    () =>
+      dom.$('event-categories').querySelectorAll('select')[1]?.querySelectorAll('option')
+        .some((option) => option.textContent.trim() === 'Immediate Category' && option.selected),
+    'the inline category did not become the selected option',
+  );
+  assert.ok(
+    (await adminAudit()).categories.some((category) => category.name === 'Immediate Category'),
+    'the inline category was not written',
+  );
+  dom.click(dom.$('event-cancel'));
+});
+
+await check('Edit saves a retired link unchanged and reloads after a stale conflict', async () => {
+  const [event] = await insert('events', [
+    {
+      academic_year_id: IDS.YEAR_CURRENT,
+      title: 'Retired Category History',
+      occurred_on: '2026-08-01',
+    },
+  ]);
+  await insert('event_categories', [
+    {
+      event_id: event.id,
+      category_id: IDS.CATEGORY_RETIRED,
+      credit_mode: 'fixed',
+      fixed_credit: 1,
+    },
+  ]);
+  const [approved] = await insert('attendance_records', [
+    {
+      event_id: event.id,
+      member_id: IDS.MEMBER_ABIGAIL,
+      status: 'approved',
+      source: 'officer_entry',
+    },
+  ]);
+  await callRpc('review_records', {
+    p_ids: [approved.id],
+    p_decision: 'approve',
+    p_note: null,
+  });
+  dom.fire(dom.$('year-select'), 'change');
+  await until(() => rowTitles().includes('Retired Category History'), 'the historical event did not load');
+
+  const historicalRow = eventRowFor('Retired Category History');
+  dom.click(dom.buttonNamed(historicalRow, 'View event'));
+  await until(() => !dom.$('event-detail-body').hidden, 'the historical event did not open');
+  dom.click(dom.$('event-detail-edit'));
+  let pickers = dom.$('event-categories').querySelectorAll('select');
+  assert.ok(
+    pickers[0].querySelectorAll('option').some(
+      (option) => option.getAttribute('value') === IDS.CATEGORY_RETIRED && option.selected,
+    ),
+    'Edit did not display the retired category it already references',
+  );
+
+  dom.click(dom.$('event-category-add'));
+  pickers = dom.$('event-categories').querySelectorAll('select');
+  assert.ok(
+    !pickers[1].querySelectorAll('option').some(
+      (option) => option.getAttribute('value') === IDS.CATEGORY_RETIRED,
+    ),
+    'a retired category was offered on a new row',
+  );
+
+  dom.$('event-title').value = 'Retired Category Saved';
+  dom.$('event-starts').value = '2026-08-01T18:00';
+  dom.$('event-ends').value = '2026-08-01T19:00';
+  dom.fire(dom.$('event-form'), 'submit');
+  await until(
+    async () => (await adminAudit()).calls.some(
+      (call) => call.fn === 'save_event_config' && call.eventId === event.id,
+    ),
+    'the retired-link form did not call save_event_config',
+  );
+  await until(() => !dom.$('event-save').disabled, 'the retired-link save never settled');
+  assert.ok(dom.$('event-error').hidden, dom.$('event-error').textContent || 'the retired-link save failed');
+  const [savedTitle] = await select('events', { select: 'title', filters: { id: `eq.${event.id}` } });
+  assert.equal(
+    savedTitle?.title,
+    'Retired Category Saved',
+    `the retired-link edit did not save (${dom.$('screen-message-title').textContent})`,
+  );
+
+  let [savedEvent] = await select('events', {
+    select: EVENT_SELECT,
+    filters: { id: `eq.${event.id}` },
+  });
+  let savedLink = savedEvent.event_categories.find(
+    (row) => row.category_id === IDS.CATEGORY_RETIRED,
+  );
+  assert.equal(savedLink?.credit_mode, 'fixed', 'the retired link mode changed');
+  assert.equal(Number(savedLink?.fixed_credit), 1, 'the retired link credit changed');
+  assert.ok(
+    (await adminAudit()).attendance.some(
+      (row) => row.event_id === event.id && row.member_id === IDS.MEMBER_ABIGAIL && row.status === 'approved',
+    ),
+    'the approved attendance changed during the edit',
+  );
+
+  await until(() => !dom.$('event-detail-body').hidden, 'the saved event did not reopen');
+  dom.click(dom.$('event-detail-edit'));
+  const [snapshot] = await select('events', {
+    select: EVENT_SELECT,
+    filters: { id: `eq.${event.id}` },
+  });
+  await callRpc('save_event_config', {
+    p_event_id: event.id,
+    p_academic_year_id: IDS.YEAR_CURRENT,
+    p_event: {
+      title: 'Retired Category Concurrent',
+      occurred_on: snapshot.occurred_on,
+      starts_at: snapshot.starts_at,
+      ends_at: snapshot.ends_at,
+      term_id: snapshot.term_id,
+      checkin_closes_at: snapshot.checkin_closes_at,
+    },
+    p_categories: snapshot.event_categories.map((row) => ({
+      category_id: row.category_id,
+      credit_mode: row.credit_mode,
+      fixed_credit: row.fixed_credit,
+    })),
+    p_evidence: null,
+    p_expected_config_version: snapshot.config_version,
+    p_create: false,
+  });
+  dom.$('event-title').value = 'Retired Category Stale';
+  dom.fire(dom.$('event-form'), 'submit');
+  await until(
+    () => dom.$('screen-message-title').textContent === 'Event changed',
+    'the stale save did not show the conflict',
+  );
+  assert.ok(dom.$('event-form-view').hidden, 'the stale form stayed open');
+  assert.ok(rowTitles().includes('Retired Category Concurrent'), 'the authoritative event was not reloaded');
+  assert.ok(!rowTitles().includes('Retired Category Stale'), 'the stale edit overwrote the event');
+
+  [savedEvent] = await select('events', {
+    select: EVENT_SELECT,
+    filters: { id: `eq.${event.id}` },
+  });
+  savedLink = savedEvent.event_categories.find((row) => row.category_id === IDS.CATEGORY_RETIRED);
+  assert.equal(Number(savedLink?.fixed_credit), 1, 'the conflict changed retired credit');
+  await remove('attendance_records', { id: `eq.${approved.id}` });
+  await remove('events', { id: `eq.${event.id}` });
+  dom.fire(dom.$('year-select'), 'change');
+  await until(() => !rowTitles().includes('Retired Category History'), 'the test event stayed on screen');
+});
+
+await check('category loading and failure cannot look like an empty picker', async () => {
+  const held = holdNextRestResponse('categories');
+  dom.fire(dom.$('year-select'), 'change');
+  await held.captured;
+  assert.equal(dom.$('event-new').disabled, true);
+  assert.equal(dom.$('event-new').title, 'Categories loading');
+  held.release();
+  await until(() => dom.$('event-new').disabled === false, 'New event did not recover after categories loaded');
+
+  const restore = failRestReadOnce('categories');
+  dom.fire(dom.$('year-select'), 'change');
+  await until(
+    () => dom.$('event-new').title === 'Categories unavailable',
+    'a category read failure did not disable New event',
+  );
+  restore();
+  assert.ok(dom.$('event-form-view').hidden, 'a failed category read opened an empty form');
+
+  dom.fire(dom.$('year-select'), 'change');
+  await until(() => dom.$('event-new').disabled === false, 'New event did not recover after retry');
+
+  const emptyRead = answerRestReadOnce('categories', []);
+  dom.fire(dom.$('year-select'), 'change');
+  await emptyRead;
+  await until(() => dom.$('event-new').disabled === false, 'an empty category read did not settle');
+  dom.click(dom.$('event-new'));
+  assert.deepEqual(
+    dom.$('event-categories').querySelectorAll('option').map((option) => option.textContent.trim()),
+    ['Choose a category', 'New event category…'],
+    'the real empty state did not keep inline category creation available',
+  );
+  dom.click(dom.$('event-cancel'));
+
+  dom.fire(dom.$('year-select'), 'change');
+  await until(
+    () => dom.$('event-categories').hidden || dom.$('event-new').disabled === false,
+    'categories did not recover after the empty-state check',
+  );
+});
+
+await check('term loading and failure block the form without retaining another year', async () => {
+  const held = holdNextRestResponse('terms');
+  dom.fire(dom.$('year-select'), 'change');
+  await held.captured;
+  assert.equal(dom.$('event-new').disabled, true);
+  assert.equal(dom.$('event-new').title, 'Terms loading');
+  held.release();
+  await until(() => dom.$('event-new').disabled === false, 'New event did not recover after terms loaded');
+
+  const past = dom.$('year-select').querySelectorAll('option').find(
+    (option) => option.textContent.trim() === '2025-2026',
+  );
+  const current = dom.$('year-select').querySelectorAll('option').find(
+    (option) => option.textContent.trim() === '2026-2027',
+  );
+  const restore = failRestReadOnce('terms');
+  dom.$('year-select').value = past.getAttribute('value');
+  dom.fire(dom.$('year-select'), 'change');
+  await until(
+    () => dom.$('event-new').title === 'Terms unavailable',
+    'a term read failure did not disable New event',
+  );
+  restore();
+  assert.equal(dom.$('event-new').disabled, true);
+  assert.ok(dom.$('event-form-view').hidden, 'a failed term read opened a form with stale terms');
+
+  dom.$('year-select').value = current.getAttribute('value');
+  dom.fire(dom.$('year-select'), 'change');
+  await until(() => dom.$('event-new').disabled === false, 'New event did not recover after terms retry');
+});
 
 await check('a read-only RPC retries when its response body is lost', async () => {
   const restoreFetch = dropRpcBodyOnce('fn_storage_usage');
@@ -1421,6 +1696,55 @@ process.stdout.write('\nfiling the paper sign-in sheet\n');
 
 await backToList();
 await openEvent('Give Kids A Smile');
+
+await check('event bulk approval excludes member-entered points', async () => {
+  const [enteredMember, routineMember] = await insert('members', [
+    { first_name: 'Entered', last_name: 'Control' },
+    { first_name: 'Routine', last_name: 'Event Control' },
+  ]);
+  await insert('member_enrollments', [
+    { member_id: enteredMember.id, academic_year_id: IDS.YEAR_CURRENT, status: 'active' },
+    { member_id: routineMember.id, academic_year_id: IDS.YEAR_CURRENT, status: 'active' },
+  ]);
+  const [entered, routine] = await insert('attendance_records', [
+    {
+      event_id: IDS.EVENT_GKAS,
+      member_id: enteredMember.id,
+      source: 'self_checkin',
+      submitted_value: 77,
+      flags: [],
+    },
+    {
+      event_id: IDS.EVENT_GKAS,
+      member_id: routineMember.id,
+      source: 'self_checkin',
+      submitted_value: null,
+      flags: [],
+    },
+  ]);
+
+  await backToList();
+  await openEvent('Give Kids A Smile');
+  const bulk = dom.$('attendee-approve-all');
+  assert.equal(bulk.textContent.trim(), 'Approve 1 waiting');
+  dom.click(bulk);
+  await until(async () => {
+    const rows = (await adminAudit()).attendance;
+    return rows.find((row) => row.id === routine.id)?.status === 'approved';
+  }, 'the event bulk action did not approve the routine control');
+  let rows = (await adminAudit()).attendance;
+  assert.equal(rows.find((row) => row.id === entered.id)?.status, 'pending');
+
+  await settle();
+  const enteredRow = rowForRecord(entered.id);
+  dom.click(dom.buttonNamed(enteredRow, 'Approve'));
+  await until(async () => {
+    const currentRows = (await adminAudit()).attendance;
+    return currentRows.find((row) => row.id === entered.id)?.status === 'approved';
+  }, 'the individual member-entered approval did not commit');
+  rows = (await adminAudit()).attendance;
+  assert.equal(rows.find((row) => row.id === entered.id)?.status, 'approved');
+});
 
 const pickerNames = () =>
   dom.$('attendee-add-list').querySelectorAll('.attendee-pick').map((row) => row.textContent.trim());
@@ -2258,6 +2582,61 @@ await check('changing the year abandons a half-filled form rather than writing i
   dom.click(dom.$('event-cancel'));
 });
 
+await check('Approve all excludes 99 member-entered points until an individual approval', async () => {
+  const [member] = await insert('members', [
+    { first_name: 'Routine', last_name: 'Control' },
+  ]);
+  await insert('member_enrollments', [
+    { member_id: member.id, academic_year_id: IDS.YEAR_CURRENT, status: 'active' },
+  ]);
+  const [routineControl] = await insert('attendance_records', [
+    {
+      event_id: IDS.EVENT_GBM,
+      member_id: member.id,
+      source: 'self_checkin',
+      submitted_value: null,
+      flags: [],
+    },
+  ]);
+
+  dom.click(dom.$('tab-review'));
+  dom.click(dom.$('refresh'));
+  await until(
+    () => !dom.$('zone-flagged').hidden && !dom.$('zone-routine').hidden,
+    'the review queue did not open',
+  );
+
+  const enteredId = IDS.RECORD_MEMBER_ENTERED_99;
+  const card = dom.$('flagged-list').querySelector(`[data-id="${enteredId}"]`);
+  assert.ok(card, '99 member-entered points were shown as Routine');
+  assert.equal(card.querySelector('.card-headline').textContent.trim(), 'Member-entered points');
+  assert.match(card.textContent, /Volunteering:\s*99/);
+  assert.equal(
+    dom.$('routine-grid').querySelector(`[data-id="${enteredId}"]`),
+    null,
+    'the member-entered value was included in the Routine grid',
+  );
+
+  dom.click(dom.$('approve-all'));
+  await until(async () => {
+    const rows = (await adminAudit()).attendance;
+    return rows.find((record) => record.id === routineControl.id)?.status === 'approved';
+  }, 'Approve all did not approve the routine control');
+  const afterBatch = (await adminAudit()).attendance;
+  assert.equal(
+    afterBatch.find((record) => record.id === enteredId)?.status,
+    'pending',
+    'Approve all changed the member-entered record',
+  );
+
+  dom.click(dom.buttonNamed(card, 'Approve'));
+  await until(
+    async () =>
+      (await adminAudit()).attendance.find((record) => record.id === enteredId)?.status === 'approved',
+    'the explicit individual approval did not commit',
+  );
+});
+
 // ---------------------------------------------------------------------------
 process.stdout.write('\nhouse rules\n');
 // ---------------------------------------------------------------------------
@@ -2267,6 +2646,30 @@ const eventSources = {
   'src/event-detail.js': await readFile(`${WEB_ROOT}src/event-detail.js`, 'utf8'),
   'src/events-model.js': await readFile(`${WEB_ROOT}src/events-model.js`, 'utf8'),
 };
+
+await check('event configuration saves through one transactional RPC', () => {
+  const source = eventSources['src/events.js'];
+  assert.match(source, /callRpc\(\s*'save_event_config'/);
+  for (const [label, moduleSource] of Object.entries(eventSources)) {
+    assert.doesNotMatch(moduleSource, /insert\(\s*'events'/, `${label} inserts events directly`);
+    assert.doesNotMatch(moduleSource, /patch\(\s*'events'/, `${label} updates events directly`);
+    for (const child of ['event_categories', 'event_evidence_requirements']) {
+      assert.doesNotMatch(
+        moduleSource,
+        new RegExp(`(?:insert|patch|remove)\\(\\s*'${child}'`),
+        `${label} mutates ${child} directly`,
+      );
+    }
+    if (label !== 'src/event-detail.js') {
+      assert.doesNotMatch(moduleSource, /remove\(\s*'events'/, `${label} deletes events directly`);
+    }
+  }
+  assert.match(
+    eventSources['src/event-detail.js'],
+    /remove\(\s*'events'/,
+    'the retained direct DELETE grant has no product caller',
+  );
+});
 
 await check('nothing on these screens writes attendance_records.status', () => {
   // RLS would allow it: attendance_write_officer is FOR ALL. Approve and

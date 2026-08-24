@@ -17,6 +17,18 @@ import { eventsStartupQuery } from '../web/src/events-contract.js';
 
 const PROBES = [
   {
+    name: 'save_event_config',
+    args: {
+      p_event_id: '00000000-0000-4000-a000-000000000001',
+      p_academic_year_id: '00000000-0000-4000-a000-000000000001',
+      p_event: {},
+      p_categories: [],
+      p_evidence: null,
+      p_expected_config_version: null,
+      p_create: false,
+    },
+  },
+  {
     name: 'add_officer_attendance',
     args: {
       p_event_id: '00000000-0000-4000-a000-000000000001',

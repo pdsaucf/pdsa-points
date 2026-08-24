@@ -59,6 +59,12 @@ const BY_CODE = {
     recover: 'retry',
   }),
 
+  PDS15: () => ({
+    title: 'Event changed',
+    body: 'Another officer saved this event. Review the latest version before editing it again.',
+    recover: 'none',
+  }),
+
   // PostgREST raises PGRST202 when an RPC is absent from its schema cache or
   // when the request's parameter names do not match any installed signature.
   // The database answered, so calling this a connection failure sends an

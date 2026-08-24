@@ -10,9 +10,8 @@
 //      constraint is the entire reason the unmatched-name flow exists, and a
 //      client that quietly stopped honouring it would look fine until somebody
 //      audited the points.
-//   3. That "Approve all 43" is ONE call carrying 43 ids. Forty-three calls
-//      would also clear the screen, and would also pass any test that only
-//      counted approved rows.
+//   3. That Approve all is one call carrying only routine ids. Member-entered
+//      points stay out of that batch and require an individual decision.
 //   4. That a rejection stores its reason. The reason is the whole value of the
 //      record six months later.
 //   5. That a member has no email address anywhere in this screen. The column
@@ -61,8 +60,8 @@ globalThis.localStorage = {
 const auth = await import('../src/auth.js');
 const { select, patch, callRpc, signPhotoUrls } = await import('../src/rest.js');
 const { rankMembers, splitName, similarity, normaliseName } = await import('../src/match.js');
-const { actionsFor, FLAG_COPY, primaryFlag } = await import('../src/flags.js');
-const { membersAlreadyOnEvent } = await import('../src/review.js');
+const { actionsFor, FLAG_COPY, knownFlags, primaryFlag } = await import('../src/flags.js');
+const { membersAlreadyOnEvent, reviewFlagsFor } = await import('../src/review.js');
 const { describeOfficer, describeSignIn } = await import('../src/officer-errors.js');
 const { OFFICER_ACCOUNT_EMAIL } = await import('../config.js');
 const { RpcError } = await import('../src/errors.js');
@@ -89,7 +88,7 @@ const reset = async () => {
 const signInAs = (email) => signInAsAccount(email, PORT);
 
 const QUEUE_SELECT = [
-  'id,event_id,member_id,claimed_name,status,flags,submitted_at',
+  'id,event_id,member_id,claimed_name,status,source,submitted_value,flags,submitted_at',
   'members(id,display_name)',
   'events!inner(id,title,occurred_on,academic_year_id)',
   'attendance_evidence(id,kind,object_path,sha256)',
@@ -558,12 +557,17 @@ await signInAs('officers@pdsaucf.com');
 
 await check('the queue is this year only, split into flagged and routine', async () => {
   const rows = await loadQueue();
-  const flagged = rows.filter((row) => row.flags.length);
-  const routine = rows.filter((row) => !row.flags.length);
-  assert.equal(routine.length, 43, `expected 43 routine records, got ${routine.length}`);
+  const flagged = rows.filter((row) => knownFlags(reviewFlagsFor(row)).length);
+  const routine = rows.filter((row) => !knownFlags(reviewFlagsFor(row)).length);
+  assert.equal(routine.length, 42, `expected 42 routine records, got ${routine.length}`);
   // 8 base fixture flags, plus 15 unmatched_name records from the
-  // retroactive-matching fixtures (see the note above).
-  assert.equal(flagged.length, 23, `expected 23 flagged records, got ${flagged.length}`);
+  // retroactive-matching fixtures (see the note above), plus one clean
+  // record whose member-entered value makes individual review mandatory.
+  assert.equal(flagged.length, 24, `expected 24 flagged records, got ${flagged.length}`);
+  const entered = rows.find((row) => row.id === IDS.RECORD_MEMBER_ENTERED_99);
+  assert.deepEqual(entered.flags, [], 'the fixture no longer proves the durable value is checked');
+  assert.equal(Number(entered.submitted_value), 99);
+  assert.ok(reviewFlagsFor(entered).includes('member_entered_value'));
   for (const row of rows) {
     assert.equal(row.events.academic_year_id, IDS.YEAR_CURRENT, 'last year leaked into the queue');
   }
@@ -748,9 +752,22 @@ process.stdout.write('\nclearing the routine zone\n');
 await reset();
 await signInAs('officers@pdsaucf.com');
 
-await check('43 routine records are approved by ONE call carrying 43 ids', async () => {
-  const routine = (await loadQueue()).filter((row) => !row.flags.length);
-  assert.equal(routine.length, 43);
+await check('42 routine records are approved by ONE call carrying 42 ids', async () => {
+  const waiting = await loadQueue();
+  const routine = waiting.filter((row) => !knownFlags(reviewFlagsFor(row)).length);
+  const entered = waiting.find((row) => row.id === IDS.RECORD_MEMBER_ENTERED_99);
+  assert.equal(routine.length, 42);
+
+  await assert.rejects(
+    () =>
+      callRpc('review_records', {
+        p_ids: [routine[0].id, entered.id],
+        p_decision: 'approve',
+        p_note: null,
+      }),
+    (err) => err instanceof RpcError && err.code === 'PDS03',
+    'the server accepted member-entered points in a batch',
+  );
 
   const before = await api('/__mock/audit').then(
     (body) => body.admin.calls.filter((call) => call.fn === 'review_records').length,
@@ -761,7 +778,7 @@ await check('43 routine records are approved by ONE call carrying 43 ids', async
     p_decision: 'approve',
     p_note: null,
   });
-  assert.equal(count, 43);
+  assert.equal(count, 42);
 
   const after = await api('/__mock/audit').then((body) => body.admin.calls);
   const calls = after.filter((call) => call.fn === 'review_records');
@@ -770,18 +787,23 @@ await check('43 routine records are approved by ONE call carrying 43 ids', async
     1,
     `clearing the grid took ${calls.length - before} calls, it has to be one decision`,
   );
-  assert.equal(calls[calls.length - 1].count, 43);
+  assert.equal(calls[calls.length - 1].count, 42);
 
-  const left = (await loadQueue()).filter((row) => !row.flags.length);
-  assert.equal(left.length, 0, 'the routine zone did not empty');
+  const left = await loadQueue();
+  assert.equal(
+    left.filter((row) => !knownFlags(reviewFlagsFor(row)).length).length,
+    0,
+    'the routine zone did not empty',
+  );
+  assert.equal(left.find((row) => row.id === entered.id)?.status, 'pending');
 });
 
 await check('one audit row records the batch, with every id in it', async () => {
   const { auditLog } = await api('/__mock/audit').then((body) => body.admin);
   const batch = auditLog.filter((row) => row.action === 'review_records');
   assert.equal(batch.length, 1);
-  assert.equal(batch[0].detail.count, 43);
-  assert.equal(batch[0].detail.ids.length, 43);
+  assert.equal(batch[0].detail.count, 42);
+  assert.equal(batch[0].detail.ids.length, 42);
   assert.equal(batch[0].detail.decision, 'approve');
 });
 

@@ -1,7 +1,8 @@
 // The triage vocabulary, in the words an officer would use.
 //
-// The flag names are the database's (see the check constraint on
+// Most flag names are the database's (see the check constraint on
 // attendance_records in supabase/migrations/20260811100600_attendance.sql).
+// member_entered_value is derived from the attendance row at review time.
 // None of them appears on screen: docs/03-admin-ui.md asks for
 // spreadsheet-simple with no jargon, and "possible_duplicate_person" is not
 // something a student secretary should have to decode at 11pm.
@@ -27,6 +28,10 @@
 
 export const FLAG_ORDER = [
   'unmatched_name',
+  // Derived by the review client from submitted_value and source. It is not
+  // stored in attendance_records.flags: the value itself is the durable fact,
+  // and old pending records need the same individual review as new ones.
+  'member_entered_value',
   'previously_rejected',
   'possible_duplicate_person',
   'duplicate_photo',
@@ -42,6 +47,13 @@ export const FLAG_COPY = {
     detail: 'Link this check-in to a member or add them as a new member before awarding points.',
     actions: ['resolve'],
     severity: 'stop',
+  },
+
+  member_entered_value: {
+    headline: 'Member-entered points',
+    detail: 'Confirm the entered number before approving.',
+    actions: ['approve', 'reject'],
+    severity: 'look',
   },
 
   previously_rejected: {
@@ -97,6 +109,15 @@ export const FLAG_COPY = {
     severity: 'look',
   },
 };
+
+/** A value entered by a member, which always needs an individual decision. */
+export function isMemberEnteredValue(record) {
+  return (
+    record?.submitted_value !== null &&
+    record?.submitted_value !== undefined &&
+    (record?.source === 'self_checkin' || record?.source === 'member_request')
+  );
+}
 
 /** The flag a card leads with, or null when the record is routine. */
 export function primaryFlag(flags) {

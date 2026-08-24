@@ -13,7 +13,17 @@ const jsonResponse = (status, body) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-test('the deployment guard probes the add and remove signatures without officer credentials', async () => {
+test('the deployed event mutation contract is revision-aware save_event_config', () => {
+  const eventMutations = PROBES.filter((probe) => probe.name === 'save_event_config');
+  assert.equal(eventMutations.length, 1);
+  assert.ok(
+    Object.hasOwn(eventMutations[0].args, 'p_expected_config_version'),
+    'the deployment check would accept the pre-revision event RPC signature',
+  );
+  assert.equal(eventMutations[0].args.p_create, false);
+});
+
+test('the deployment guard probes the event mutation signatures without officer credentials', async () => {
   const requests = [];
   const checked = await checkDeployedAdminRpcs({
     baseUrl: 'https://example.supabase.co/',
@@ -25,7 +35,11 @@ test('the deployment guard probes the add and remove signatures without officer 
     },
   });
 
-  assert.deepEqual(checked, ['add_officer_attendance', 'remove_attendance_record']);
+  assert.deepEqual(checked, [
+    'save_event_config',
+    'add_officer_attendance',
+    'remove_attendance_record',
+  ]);
   assert.equal(requests.length, PROBES.length);
   for (let index = 0; index < PROBES.length; index += 1) {
     const request = requests[index];
@@ -58,7 +72,7 @@ test('the deployment guard probes the exact Events startup GET without officer c
   assert.equal(requests[0].init.body, undefined);
   assert.equal(
     requests[0].url,
-    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
+    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cconfig_version%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
   );
   assert.equal(EVENTS_STARTUP_PROBE.query, new URL(requests[0].url).search.slice(1));
 });
@@ -89,7 +103,7 @@ test('the deployment guard rejects a missing RPC or stale parameter signature', 
         baseUrl: 'https://example.supabase.co',
         anonKey: 'public-anon-key',
         eventsProbe: null,
-        probes: [PROBES[1]],
+        probes: [PROBES[2]],
         fetchImpl: async () =>
           jsonResponse(404, {
             code: 'PGRST202',
@@ -107,7 +121,7 @@ test('the deployment guard rejects an anonymously callable admin RPC', async () 
         baseUrl: 'https://example.supabase.co',
         anonKey: 'public-anon-key',
         eventsProbe: null,
-        probes: [PROBES[0]],
+        probes: [PROBES[1]],
         fetchImpl: async () => jsonResponse(200, []),
       }),
     /accepted an anonymous request/,
@@ -121,7 +135,7 @@ test('the deployment guard fails closed when the database cannot be checked', as
         baseUrl: 'https://example.supabase.co',
         anonKey: 'public-anon-key',
         eventsProbe: null,
-        probes: [PROBES[0]],
+        probes: [PROBES[1]],
         fetchImpl: async () => {
           throw new Error('offline');
         },

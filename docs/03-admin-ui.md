@@ -88,6 +88,12 @@ An officer scans the wall of photos, spots anything odd, and approves the batch.
 Nothing is auto-approved: "Approve all 43" is still a person deciding, it's just one
 decision instead of forty-three.
 
+A member-entered number is never Routine, even when every other check passes. The card
+shows the category and entered value, and an officer approves it individually. Approve
+all excludes it, and `review_records()` refuses any multi-record approval batch that
+contains a member-entered value. Entering 99 awards nothing while the record is pending;
+99 is awarded only after the officer explicitly approves that record.
+
 The flagged zone is where the failure modes you named get fixed, at the moment they're
 visible:
 
