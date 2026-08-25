@@ -58,6 +58,10 @@ docs/                  the signed-off design
 Apply them in filename order. They are numbered by concern rather than by
 feature, so each one can be read on its own.
 
+Apply migrations before deploying frontend code that depends on them. The Pages
+workflow checks the live Supabase contracts before publishing and fails closed
+when the database does not match the static page.
+
 | File | What it does |
 |---|---|
 | `..._drop_starter_tables.sql` | **Destructive.** Drops the placeholder `members` / `events` / `attendance` tables the project was created with. Read it before applying. |

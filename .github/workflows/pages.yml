@@ -14,10 +14,12 @@ name: Deploy check-in page
 on:
   push:
     branches: [main]
-    # Only when the page itself changes. A migration or a test does not alter
-    # a single byte of what is served, so redeploying on those would be noise.
+    # Only when the page or its deployment contract guard changes. A migration
+    # or a test does not alter a single byte of what is served, so redeploying
+    # on those would be noise.
     paths:
       - 'web/**'
+      - 'scripts/check_deployed_contracts.mjs'
       - '.github/workflows/pages.yml'
   # So an officer can redeploy from the Actions tab without pushing anything,
   # which is the fastest fix on the evening of an event.
@@ -45,12 +47,12 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # The page and the database deploy separately. Probe the admin RPCs and
-      # the Events startup read before publishing a page that calls them. The
-      # public key can only prove that PostgREST resolves each contract and then
-      # refuses the anonymous caller, so this check cannot read or mutate data.
-      - name: Verify deployed admin contracts
-        run: node scripts/check_deployed_admin_rpcs.mjs
+      # The page and the database deploy separately. Probe deployed contracts
+      # before publishing a page that calls them. Private contracts must resolve
+      # before refusing anon, and public contracts use synthetic non-member
+      # inputs, so this check cannot read or mutate real data.
+      - name: Verify deployed contracts
+        run: node scripts/check_deployed_contracts.mjs
 
       # NOTE: this workflow deliberately runs NO tests.
       #

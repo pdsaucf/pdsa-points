@@ -408,7 +408,7 @@ await check('matched check-in success links to the encoded member portal name', 
 
   const link = dom.$('done-points');
   assert.equal(link.hidden, false);
-  assert.equal(link.textContent.trim(), 'View my points');
+  assert.equal(link.textContent.trim(), 'View all my points');
   assert.equal(link.href, `http://localhost:${PORT}/me/?name=Abigail+Catto`);
   assert.ok(link.querySelector('.button-label-icon'), 'the portal link has no action icon');
 });

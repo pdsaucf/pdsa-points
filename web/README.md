@@ -109,6 +109,10 @@ network error.
 The whole directory is static. Nothing is compiled, bundled, minified or
 transpiled, so what is in the repo is exactly what runs.
 
+Apply database migrations before pushing a frontend that calls the new schema.
+The Pages workflow probes the live deployed contracts with the anon key and
+refuses to publish when Supabase has not caught up.
+
 GitHub Pages publishes either the repository root or `/docs`, and this lives in
 neither, so publish `web/` as the Pages artifact from a workflow. That file is
 outside this directory and therefore outside the scope of this phase, but the
