@@ -17,6 +17,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startMock } from './server.mjs';
+import { installDom } from './dom.mjs';
 import { atRule, declarations, rule } from './css-rules.mjs';
 import {
   BRAND_TOKENS,
@@ -357,6 +358,152 @@ process.stdout.write('\nCheck in stays on screen\n');
 const checkinCss = await readFile(`${WEB_ROOT}assets/css/checkin.css`, 'utf8');
 const checkinHtml = await readFile(`${WEB_ROOT}c/index.html`, 'utf8');
 const shortScreen = atRule(checkinCss, /max-height/);
+
+const checkinStore = new Map();
+globalThis.sessionStorage = {
+  getItem: (key) => checkinStore.get(key) ?? null,
+  setItem: (key, value) => checkinStore.set(key, String(value)),
+  removeItem: (key) => checkinStore.delete(key),
+};
+
+async function untilCheckin(predicate, message, timeout = 4000) {
+  const stop = Date.now() + timeout;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() > stop) throw new Error(`timed out waiting: ${message}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function mountCheckin(token, instance) {
+  checkinStore.clear();
+  const dom = installDom(checkinHtml);
+  globalThis.window = {
+    location: {
+      origin: `http://localhost:${PORT}`,
+      search: `?e=${encodeURIComponent(token)}`,
+      reload() {},
+    },
+    matchMedia: () => ({ matches: false }),
+  };
+  const { start } = await import(`../src/checkin.js?verify=${instance}`);
+  start();
+  await untilCheckin(() => !dom.$('view-form').hidden, 'the check-in form did not open');
+  return dom;
+}
+
+async function chooseMatchedMember(dom) {
+  dom.$('name-input').value = 'Abigail Catto';
+  dom.fire(dom.$('name-input'), 'input');
+  await untilCheckin(() => dom.$('results').children.length > 0, 'the roster name did not resolve');
+  dom.click(dom.$('results').children[0]);
+}
+
+await check('matched check-in success links to the encoded member portal name', async () => {
+  await reset();
+  const dom = await mountCheckin('gbm', 'matched');
+  await chooseMatchedMember(dom);
+  dom.fire(dom.$('view-form'), 'submit');
+  await untilCheckin(() => !dom.$('view-done').hidden, 'matched check-in did not finish');
+
+  const link = dom.$('done-points');
+  assert.equal(link.hidden, false);
+  assert.equal(link.textContent.trim(), 'View my points');
+  assert.equal(link.href, `http://localhost:${PORT}/me/?name=Abigail+Catto`);
+  assert.ok(link.querySelector('.button-label-icon'), 'the portal link has no action icon');
+});
+
+await check('a delayed check-in cannot change the submitted member or points link', async () => {
+  await reset();
+  const realFetch = globalThis.fetch;
+  let releaseSubmit = null;
+  let markSubmitStarted;
+  const submitStarted = new Promise((resolve) => {
+    markSubmitStarted = resolve;
+  });
+
+  globalThis.fetch = (url, init) => {
+    if (String(url).includes('/rpc/submit_checkin')) {
+      return new Promise((resolve) => {
+        let released = false;
+        releaseSubmit = () => {
+          if (released) return;
+          released = true;
+          resolve(realFetch(url, init));
+        };
+        markSubmitStarted();
+      });
+    }
+    return realFetch(url, init);
+  };
+
+  try {
+    const dom = await mountCheckin('gbm', 'delayed-member');
+    dom.$('name-input').value = 'Catto';
+    dom.fire(dom.$('name-input'), 'input');
+    await untilCheckin(
+      () => dom.$('results').children.length > 1,
+      'the two-member race fixture did not resolve',
+    );
+    const submittedResult = [...dom.$('results').children].find(
+      (row) => row.textContent === 'Abigail Catto',
+    );
+    const otherResult = [...dom.$('results').children].find(
+      (row) => row.textContent !== 'Abigail Catto',
+    );
+    assert.ok(submittedResult, 'Abigail is missing from the race fixture');
+    assert.ok(otherResult, 'the fixture needs a second member to attempt switching to');
+    dom.click(submittedResult);
+    const firstName = dom.$('chosen-name').textContent;
+
+    dom.fire(dom.$('view-form'), 'submit');
+    await submitStarted;
+    assert.equal(dom.$('change-name').disabled, true, 'Change stayed enabled during submit');
+    assert.equal(dom.$('name-input').disabled, true, 'the name field stayed enabled during submit');
+
+    dom.click(dom.$('change-name'));
+    dom.click(otherResult);
+    assert.equal(dom.$('chosen-name').textContent, firstName, 'the submitted identity changed');
+
+    releaseSubmit();
+    await untilCheckin(() => !dom.$('view-done').hidden, 'the delayed check-in did not finish');
+
+    const url = new URL(dom.$('done-points').href);
+    assert.equal(url.searchParams.get('name'), firstName);
+    const calls = (await api('/__mock/audit')).calls.filter(
+      (call) => call.fn === 'submit_checkin' && call.outcome === 'filed',
+    );
+    assert.equal(calls.at(-1)?.memberId, 'm0000000-0000-4000-a000-000000000001');
+    assert.equal(firstName, 'Abigail Catto');
+  } finally {
+    releaseSubmit?.();
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check('already checked in success keeps the matched portal link', async () => {
+  await reset();
+  const dom = await mountCheckin('dupe', 'duplicate');
+  await chooseMatchedMember(dom);
+  dom.fire(dom.$('view-form'), 'submit');
+  await untilCheckin(() => !dom.$('view-done').hidden, 'duplicate check-in did not finish');
+
+  const url = new URL(dom.$('done-points').href);
+  assert.equal(dom.$('done-points').hidden, false);
+  assert.equal(url.pathname, '/me/');
+  assert.equal(url.searchParams.get('name'), 'Abigail Catto');
+});
+
+await check('an unmatched claimed-name success has no portal link', async () => {
+  await reset();
+  const dom = await mountCheckin('gbm', 'claimed');
+  dom.click(dom.$('no-name-button'));
+  dom.$('claimed-name').value = 'Taylor Unknown';
+  dom.fire(dom.$('view-form'), 'submit');
+  await untilCheckin(() => !dom.$('view-done').hidden, 'claimed-name check-in did not finish');
+
+  assert.equal(dom.$('done-points').hidden, true);
+});
 
 await check('the submit button is inside the action bar', () => {
   const bar = /<div class="actions">([\s\S]*?)<\/div>/.exec(checkinHtml);

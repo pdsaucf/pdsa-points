@@ -107,7 +107,7 @@ function showFormMessage(copy) {
   el.formMessage.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
 }
 
-function showDone(title, lines) {
+function showDone(title, lines, memberDisplayName = null) {
   el.doneTitle.textContent = title;
   el.doneBody.replaceChildren(
     ...lines.filter(Boolean).map((text) => {
@@ -116,6 +116,14 @@ function showDone(title, lines) {
       return p;
     }),
   );
+  if (memberDisplayName) {
+    const portal = new URL('/me/', window.location.origin);
+    portal.searchParams.set('name', memberDisplayName);
+    el.donePoints.href = portal.toString();
+    el.donePoints.hidden = false;
+  } else {
+    el.donePoints.hidden = true;
+  }
   show('done');
   announce(spoken(title, lines.filter(Boolean).join(" ")));
 }
@@ -337,6 +345,7 @@ async function runSearch(query) {
 }
 
 function onSearchInput() {
+  if (state.submitting) return;
   const query = el.nameInput.value.trim();
   clearTimeout(state.searchTimer);
 
@@ -353,6 +362,7 @@ function onSearchInput() {
 }
 
 function onSearchKeydown(event) {
+  if (state.submitting) return;
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     moveActive(1);
@@ -373,7 +383,7 @@ function onSearchKeydown(event) {
 // ---------------------------------------------------------------------------
 
 function selectMember(row) {
-  if (!row) return;
+  if (!row || state.submitting) return;
   state.member = row;
   state.claimed = null;
   clearTimeout(state.searchTimer);
@@ -389,6 +399,7 @@ function selectMember(row) {
 }
 
 function backToSearch() {
+  if (state.submitting) return;
   state.member = null;
   state.claimed = null;
   el.chosenBlock.hidden = true;
@@ -401,6 +412,7 @@ function backToSearch() {
 }
 
 function openClaimedForm() {
+  if (state.submitting) return;
   state.member = null;
   clearTimeout(state.searchTimer);
   state.searchAbort?.abort();
@@ -583,6 +595,12 @@ function setSubmitting(on) {
   el.submitButton.disabled = on;
   el.submitButton.setAttribute('aria-busy', on ? 'true' : 'false');
   el.submitLabel.textContent = on ? 'Checking in…' : 'Check in';
+  el.nameInput.disabled = on;
+  el.noNameButton.disabled = on;
+  el.changeName.disabled = on;
+  el.claimedName.disabled = on;
+  el.claimedBack.disabled = on;
+  el.results.setAttribute('aria-disabled', on ? 'true' : 'false');
 }
 
 async function onSubmit(event) {
@@ -593,6 +611,8 @@ async function onSubmit(event) {
 
   const identity = collectIdentity();
   if (!identity) return;
+  const submittedMemberName = identity.p_member_id ? state.member?.display_name ?? null : null;
+  const submittedName = submittedMemberName ?? identity.p_claimed_name ?? '';
 
   const value = collectValue();
   if (!value.ok) return;
@@ -659,19 +679,23 @@ async function onSubmit(event) {
     );
 
     clearEvidence();
-    const who = firstName(state.member?.display_name ?? state.claimed?.name ?? '');
+    const who = firstName(submittedName);
     const flags = result?.flags ?? [];
-    showDone(who ? `Thanks, ${who}. Submitted for review.` : 'Submitted for review.', [
-      flags.includes('unmatched_name')
-        ? 'An officer will match your name to the roster before your credit appears.'
-        : 'An officer approves check-ins after the event.',
-      flags.includes('outside_window') ? 'Late check-in. An officer will review it.' : null,
-    ]);
+    showDone(
+      who ? `Thanks, ${who}. Submitted for review.` : 'Submitted for review.',
+      [
+        flags.includes('unmatched_name')
+          ? 'An officer will match your name to the roster before your credit appears.'
+          : 'An officer approves check-ins after the event.',
+        flags.includes('outside_window') ? 'Late check-in. An officer will review it.' : null,
+      ],
+      submittedMemberName,
+    );
   } catch (err) {
     const copy = describe(err, 'submit');
     if (copy.alreadyDone) {
       clearEvidence();
-      showDone(copy.title, [copy.body]);
+      showDone(copy.title, [copy.body], submittedMemberName);
       return;
     }
     if (copy.retakePhoto) clearEvidence();
@@ -734,6 +758,7 @@ function cacheElements() {
     submitLabel: $('submit-label'),
     doneTitle: $('done-title'),
     doneBody: $('done-body'),
+    donePoints: $('done-points'),
     live: $('live'),
   });
 }

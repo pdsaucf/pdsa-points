@@ -4074,17 +4074,14 @@ export const ADMIN_RPC = {
   //
   // Nothing here checks a role. That is the point of them.
 
-  /** portal_find_members(p_first_name text, p_last_name text) returns table */
+  /** portal_find_members(p_name text) returns table */
   portal_find_members(res, body, req, helpers) {
     const { json } = helpers;
-    const wanted = normaliseName(
-      `${String(body.p_first_name ?? '').trim()} ${String(body.p_last_name ?? '').trim()}`,
-    );
-    const first = String(body.p_first_name ?? '').trim();
-    const last = String(body.p_last_name ?? '').trim();
+    const name = String(body.p_name ?? '').trim();
+    const wanted = normaliseName(name);
 
-    if (!first || !last || !wanted) {
-      record({ fn: 'portal_find_members', outcome: 'empty' });
+    if (!wanted) {
+      record({ fn: 'portal_find_members', name, outcome: 'empty' });
       json(res, 200, []);
       return;
     }
@@ -4110,7 +4107,7 @@ export const ADMIN_RPC = {
         joined_on: entry.enrollment.joined_on ?? null,
       }));
 
-    record({ fn: 'portal_find_members', count: rows.length });
+    record({ fn: 'portal_find_members', name, count: rows.length });
     json(res, 200, rows);
   },
 

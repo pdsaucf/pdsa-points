@@ -637,7 +637,7 @@ They return only the public progress data required by that interface:
 
 | RPC | Does | Guards |
 |---|---|---|
-| `portal_find_members(q)` | matching member ids and display names | at least three search characters; current-year enrolled members only |
+| `portal_find_members(name)` | exact normalized complete-name matches with member ids and display names | nonempty complete name; current-year enrolled members only |
 | `portal_scorecard(member_id)` | point total, honorary state, and category progress | current-year enrolled member only |
 | `portal_attendance(member_id)` | each published current-year event once, with actual start and end instants, that member's status, grouped categories, approved credit, and a public scorecard evaluated in the same statement snapshot | current-year enrolled member only; no check-in window, location, review metadata, evidence, notes, or another member's records |
 | `portal_leaderboard()` | ranked current-year names and totals | approved attendance only |
@@ -652,11 +652,10 @@ number, and a refused row carries the SQLSTATE and the message instead of a memb
 id.
 
 
-**Open privacy question:** typing three letters into a public page returns matching
-member names. That's inherent to "identify yourself by name without logging in", and
-it's strictly better than today (the Google Form's dropdown exposes the entire roster
-to anyone with the link). If you'd rather tighten it, the cheap upgrade is requiring
-last name + first initial before any result is returned. Flagging, not deciding.
+**Privacy boundary:** typing a complete name into a public page returns matching member
+names. That's inherent to "identify yourself by name without logging in", and it exposes
+less than the Google Form's dropdown, which shows the entire roster to anyone with the
+link.
 
 ## 9. Importing 2025-2026
 

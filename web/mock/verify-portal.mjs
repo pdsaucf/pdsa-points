@@ -71,6 +71,7 @@ globalThis.window = {
   location: {
     origin: `http://localhost:${PORT}`,
     pathname: '/me/',
+    search: '',
     href: `http://localhost:${PORT}/me/`,
     replace() {},
     reload() {},
@@ -137,16 +138,16 @@ async function until(predicate, message, timeout = 4000) {
 const signInAs = (email) => signInAsAccount(email, PORT);
 
 /** A fresh copy of the shipped page, with the portal mounted on it. */
-function mountPortal() {
+function mountPortal(search = '') {
+  window.location.search = search;
   dom = installDom(portalHtml);
   start();
   return dom;
 }
 
 /** Types a name into the one form on the page and submits it. */
-function lookUp(first, last) {
-  dom.$('lookup-first').value = first;
-  dom.$('lookup-last').value = last;
+function lookUp(name) {
+  dom.$('lookup-name').value = name;
   dom.fire(dom.$('lookup-form'), 'submit');
 }
 
@@ -529,17 +530,138 @@ await check('the focus ring is drawn clear of the control, not on top of it', ()
 process.stdout.write('\nwhat the page says before anybody types anything\n');
 // ---------------------------------------------------------------------------
 
-await check('the initial lookup stays the same', () => {
+await check('the initial lookup has one complete-name field', () => {
   mountPortal();
   assert.equal(dom.$('lookup-form').hidden, false);
-  assert.equal(dom.$('lookup-first').getAttribute('autocomplete'), 'given-name');
-  assert.equal(dom.$('lookup-last').getAttribute('autocomplete'), 'family-name');
+  assert.equal(dom.$('lookup-name').getAttribute('autocomplete'), 'name');
+  assert.equal(dom.$('lookup-name').getAttribute('enterkeyhint'), 'go');
+  assert.equal(dom.$('lookup-name').getAttribute('autocapitalize'), 'words');
+  assert.equal(dom.$('lookup-name').getAttribute('autocorrect'), 'off');
+  assert.equal(dom.$('lookup-name').getAttribute('spellcheck'), 'false');
+  assert.equal(dom.$('lookup-first'), null);
+  assert.equal(dom.$('lookup-last'), null);
   assert.equal(dom.$('lookup-submit-label').textContent, 'Show my points');
   assert.equal(dom.$('no-match').hidden, true);
   assert.equal(dom.$('scorecard').hidden, true);
   assert.equal(dom.$('honorary').hidden, false, 'the initial Honorary Q&A was hidden');
   assert.equal(dom.$('honorary-intro').hidden, false, 'the initial Honorary intro was hidden');
   assert.equal(dom.$('honorary-about').hidden, false, 'the initial About Q&A was hidden');
+});
+
+await check('ordinary /me/ leaves the form open without a name request', async () => {
+  await api('/__mock/reset');
+  const before = (await api('/__mock/audit')).admin.calls.filter(
+    (call) => call.fn === 'portal_find_members',
+  ).length;
+
+  mountPortal();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const after = (await api('/__mock/audit')).admin.calls.filter(
+    (call) => call.fn === 'portal_find_members',
+  ).length;
+  assert.equal(dom.$('lookup-form').hidden, false);
+  assert.equal(dom.$('lookup-name').value, '');
+  assert.equal(after, before, 'ordinary /me/ sent an automatic name request');
+
+  mountPortal('?name=%20%20');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const afterBlank = (await api('/__mock/audit')).admin.calls.filter(
+    (call) => call.fn === 'portal_find_members',
+  ).length;
+  assert.equal(dom.$('lookup-form').hidden, false);
+  assert.equal(afterBlank, after, 'a blank query name sent an automatic request');
+});
+
+await check('a query name prefills and automatically opens its unique member', async () => {
+  await signInAs('officers@pdsaucf.com');
+  await patch(
+    'members',
+    { id: `eq.${IDS.MEMBER_ABBY}` },
+    { first_name: 'Benjamin', last_name: 'Le' },
+  );
+
+  mountPortal('?name=Benjamin%20Le');
+  assert.equal(dom.$('lookup-name').value, 'Benjamin Le');
+  await until(scorecardShown, 'the query name did not open its unique member');
+  assert.equal(dom.$('lookup-form').hidden, true);
+
+  await api('/__mock/reset');
+});
+
+await check('editing a name discards a delayed automatic lookup', async () => {
+  await signInAs('officers@pdsaucf.com');
+  await patch(
+    'members',
+    { id: `eq.${IDS.MEMBER_ABBY}` },
+    { first_name: 'Benjamin', last_name: 'Le' },
+  );
+
+  const realFetch = globalThis.fetch;
+  let releaseLookup = null;
+  let markLookupStarted;
+  const lookupStarted = new Promise((resolve) => {
+    markLookupStarted = resolve;
+  });
+  globalThis.fetch = (url, init) => {
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (String(url).includes('/rpc/portal_find_members') && body.p_name === 'Benjamin Le') {
+      return new Promise((resolve) => {
+        let released = false;
+        releaseLookup = () => {
+          if (released) return;
+          released = true;
+          resolve(realFetch(url, init));
+        };
+        markLookupStarted();
+      });
+    }
+    return realFetch(url, init);
+  };
+
+  try {
+    mountPortal('?name=Benjamin%20Le');
+    await lookupStarted;
+    dom.$('lookup-name').value = 'Abigail Catto';
+    dom.fire(dom.$('lookup-name'), 'input');
+    releaseLookup();
+    await until(() => !dom.$('lookup-submit').disabled, 'the stale lookup never settled');
+
+    assert.equal(dom.$('scorecard').hidden, true, 'the stale member scorecard opened');
+    const staleCards = (await api('/__mock/audit')).admin.calls.filter(
+      (call) => call.fn === 'portal_scorecard',
+    );
+    assert.equal(staleCards.length, 0, 'the stale lookup requested a scorecard');
+
+    dom.fire(dom.$('lookup-form'), 'submit');
+    await until(scorecardShown, 'the edited name did not resolve manually');
+    assert.equal(dom.$('score-name-text').textContent.trim(), 'Abigail Catto');
+  } finally {
+    releaseLookup?.();
+    globalThis.fetch = realFetch;
+    await api('/__mock/reset');
+  }
+});
+
+await check('a multiword name is sent intact and resolves', async () => {
+  await signInAs('officers@pdsaucf.com');
+  await patch(
+    'members',
+    { id: `eq.${IDS.MEMBER_ABBY}` },
+    { first_name: 'María', last_name: "de la O'Neil-Smith" },
+  );
+
+  const complete = "María   de la O'Neil-Smith";
+  mountPortal();
+  lookUp(`  ${complete}  `);
+  await until(scorecardShown, 'the multiword name did not resolve');
+
+  const calls = (await api('/__mock/audit')).admin.calls.filter(
+    (call) => call.fn === 'portal_find_members',
+  );
+  assert.equal(calls.at(-1)?.name, complete);
+
+  await api('/__mock/reset');
 });
 
 await check('the requirements box is the published rules, not copy in a file', async () => {
@@ -614,7 +736,7 @@ process.stdout.write('\ntyping your name\n');
 
 await check('a name on the roster draws that members own figures', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(scorecardShown, 'the scorecard never drew');
 
   const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
@@ -630,7 +752,7 @@ await check('a name on the roster draws that members own figures', async () => {
 
 await check('Honorary status and name stars follow only the servers verdict', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(scorecardShown, 'the non-honorary scorecard never drew');
   const notYet = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
   assert.equal(notYet.is_honorary, false, 'the non-honorary fixture changed');
@@ -640,7 +762,7 @@ await check('Honorary status and name stars follow only the servers verdict', as
   assert.ok(dom.$('score-label-star').classList.contains('board-star'));
 
   mountPortal();
-  lookUp('Daniel', 'Nguyen');
+  lookUp('Daniel Nguyen');
   await until(scorecardShown, 'the honorary scorecard never drew');
   const earned = await rpc('portal_scorecard', { p_member_id: IDS.STORAGE.MEMBER_DANIEL });
   assert.equal(earned.is_honorary, true, 'the honorary fixture changed');
@@ -665,22 +787,22 @@ await check('Not you? is a bordered secondary action with its existing X icon', 
 
 await check('the form is put away, and Not you? brings it back with the name still in it', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(scorecardShown, 'the scorecard never drew');
   assert.equal(dom.$('lookup-form').hidden, true, 'the form is still on screen under the scorecard');
   dom.click(dom.$('score-change'));
   assert.equal(dom.$('lookup-form').hidden, false, 'Not you? did not bring the form back');
   assert.equal(dom.$('scorecard').hidden, true, 'the scorecard stayed on screen');
   assert.equal(
-    dom.$('lookup-first').value,
-    'Abigail',
+    dom.$('lookup-name').value,
+    'Abigail Catto',
     'the name was cleared, so a typo means typing it all again',
   );
 });
 
 await check('the checklist is what the server said, line for line', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(scorecardShown, 'the scorecard never drew');
 
   const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
@@ -719,7 +841,7 @@ await check('the summary counts all measured requirements, not an N-of-M root va
   await callRpc('publish_requirement_set', { p_set_id: draft });
   try {
     mountPortal();
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(
       () => !dom.$('history').hidden && dom.$('history-loading').hidden,
       'the atomic scorecard never drew',
@@ -758,7 +880,7 @@ await check('progress is never conveyed by colour alone', () => {
 
 await check('a name nobody on the roster has shows the compact result and retains the name', async () => {
   mountPortal();
-  lookUp('Nobody', 'Whatsoever');
+  lookUp('Nobody Whatsoever');
   await until(() => !dom.$('no-match').hidden, 'nothing was said about a name that is not there');
 
   assert.equal(dom.$('scorecard').hidden, true, 'a scorecard was drawn for nobody');
@@ -766,8 +888,7 @@ await check('a name nobody on the roster has shows the compact result and retain
   assert.match(dom.$('no-match').textContent, /Check the spelling\. Only paid members are listed\./);
   assert.match(dom.$('no-match').textContent, /pdsa\.ucf@gmail\.com/);
   assert.equal(dom.$('no-match-contact').getAttribute('href'), 'mailto:pdsa.ucf@gmail.com');
-  assert.equal(dom.$('lookup-first').value, 'Nobody');
-  assert.equal(dom.$('lookup-last').value, 'Whatsoever');
+  assert.equal(dom.$('lookup-name').value, 'Nobody Whatsoever');
   assert.equal(dom.$('screen-message').hidden, true, 'a name that is not on the roster read as a failure');
 
   dom.click(dom.$('no-match-board'));
@@ -775,20 +896,20 @@ await check('a name nobody on the roster has shows the compact result and retain
   assert.equal(dom.$('view-board').hidden, false);
 });
 
-await check('half a name is refused before anything is sent', async () => {
+await check('an empty name is refused before anything is sent', async () => {
   mountPortal();
   const before = (await api('/__mock/audit')).admin.calls.filter(
     (call) => call.fn === 'portal_find_members',
   ).length;
 
-  lookUp('Abigail', '   ');
+  lookUp('   ');
   assert.equal(dom.$('lookup-error').hidden, false, 'nothing was said');
-  assert.match(dom.$('lookup-error').textContent, /first and last/i);
+  assert.match(dom.$('lookup-error').textContent, /full name/i);
 
   const after = (await api('/__mock/audit')).admin.calls.filter(
     (call) => call.fn === 'portal_find_members',
   ).length;
-  assert.equal(after, before, 'half a name was sent to the server anyway');
+  assert.equal(after, before, 'an empty name was sent to the server anyway');
 });
 
 await check('two members with one name are told apart, not guessed between', async () => {
@@ -822,7 +943,7 @@ await check('two members with one name are told apart, not guessed between', asy
   await patch('members', { id: `eq.${IDS.MEMBER_ABBY}` }, { first_name: 'Catherine', last_name: 'Diaz' });
 
   mountPortal();
-  lookUp('Catherine', 'Diaz');
+  lookUp('Catherine Diaz');
   await until(() => !dom.$('pick-block').hidden, 'the portal never asked which one');
 
   const buttons = dom.$('pick-list').querySelectorAll('button');
@@ -859,7 +980,7 @@ await check('the same Honorary Q&A follows each successful attendance record', a
   assert.equal(dom.$('honorary-intro').hidden, false, 'the initial intro is not visible');
   assert.ok(honoraryRows().length > 0, 'the initial published Requirements are missing');
 
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(historyShown, 'the attendance record never drew');
 
   assert.equal(dom.$('honorary'), honorary, 'the results use a second Q&A node');
@@ -891,7 +1012,7 @@ await check('the history draws approved events once with grouped category credit
       ? new Promise((resolve) => setTimeout(() => resolve(realFetch(url, init)), 100))
       : realFetch(url, init);
   try {
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(scorecardShown, 'the scorecard never drew');
     assert.equal(dom.$('score-download').disabled, true, 'download enabled before history loaded');
     await until(historyShown, 'the event history never drew');
@@ -949,7 +1070,7 @@ await check('the final screen and PDF use the attendance RPCs atomic scorecard s
 
   try {
     mountPortal();
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(scorecardShown, 'the fast scorecard never drew');
     const initialPoints = dom.$('score-points').textContent;
     await callRpc('review_records', {
@@ -990,7 +1111,7 @@ await check('the final screen and PDF use the attendance RPCs atomic scorecard s
 
 await check('actual Eastern times, duration and missing times are rendered without the check-in window', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(historyShown, 'attendance did not reload for the time check');
   const answer = await rpc('portal_attendance', { p_member_id: IDS.MEMBER_ABIGAIL });
   const timed = answer.events.find((event) => event.status === 'attended' && event.starts_at);
@@ -1005,7 +1126,7 @@ await check('actual Eastern times, duration and missing times are rendered witho
 
 await check('waiting and declined records stay separate from approved attendance', async () => {
   mountPortal();
-  lookUp('Aaron', 'Ozan');
+  lookUp('Aaron Ozan');
   await until(historyShown, 'Aarons history never drew');
   const waiting = [...dom.$('history-filters').querySelectorAll('button')].find((button) => button.textContent.startsWith('Waiting'));
   dom.click(waiting);
@@ -1026,7 +1147,7 @@ await check('attendance failure leaves the scorecard visible with retry and down
         }))
       : realFetch(url, init);
   try {
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(scorecardShown, 'the scorecard never drew');
     await until(() => !dom.$('history-error').hidden, 'attendance failure was not shown', 8000);
     assert.equal(dom.$('scorecard').hidden, false, 'attendance failure hid the scorecard');
@@ -1054,7 +1175,7 @@ await check('a mismatched attendance snapshot never enables the download', async
     });
   };
   try {
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(() => !dom.$('history-error').hidden, 'the mismatched snapshot was accepted');
     assert.equal(dom.$('scorecard').hidden, false);
     assert.equal(dom.$('score-download').disabled, true);
@@ -1178,7 +1299,7 @@ await check('long attendance records make a multi-page Letter PDF with repeated 
 
 await check('a failed browser download keeps results visible and Try again recovers', async () => {
   mountPortal();
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(historyShown, 'attendance never loaded for the download check');
   const realCreate = URL.createObjectURL;
   const realRevoke = URL.revokeObjectURL;
@@ -1238,12 +1359,12 @@ await check('a slow, superseded history answer cannot paint over the member on s
   };
 
   try {
-    lookUp('Abigail', 'Catto');
+    lookUp('Abigail Catto');
     await until(scorecardShown, 'the first lookup never drew');
     assert.equal(dom.$('score-name-text').textContent.trim(), 'Abigail Catto');
     dom.click(dom.$('score-change')); // "Not you?", the real path back to the form
 
-    lookUp('Aaron', 'Ozan');
+    lookUp('Aaron Ozan');
     // scorecardShown() alone is not enough here: the card stayed visible
     // across the switch, so it would read true immediately, before Aaron's
     // own lookup has actually finished. Wait for his name specifically.
@@ -1311,7 +1432,7 @@ await check('renaming a requirement renames it on the member screen, with no dep
     'the requirements box did not follow the rename',
   );
 
-  lookUp('Abigail', 'Catto');
+  lookUp('Abigail Catto');
   await until(scorecardShown, 'the scorecard never drew');
   assert.ok(
     dom.$('score-list').textContent.includes(renamed),
@@ -1501,10 +1622,7 @@ await check('the refusal is written for a member, not for an officer', () => {
 await check('the public functions carry no address and no student id', async () => {
   const board = JSON.stringify(await rpc('portal_leaderboard', {}));
   const card = JSON.stringify(await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL }));
-  const found = JSON.stringify(await rpc('portal_find_members', {
-    p_first_name: 'Abigail',
-    p_last_name: 'Catto',
-  }));
+  const found = JSON.stringify(await rpc('portal_find_members', { p_name: 'Abigail Catto' }));
   for (const [label, payload] of [['leaderboard', board], ['scorecard', card], ['name search', found]]) {
     for (const secret of ['email', 'ucf_nid', 'notes', 'claimed_name', 'review_note']) {
       assert.ok(!payload.includes(secret), `the ${label} carries ${secret}`);

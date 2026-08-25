@@ -83,7 +83,7 @@ const ANON_MAY_EXECUTE = [
   'fn_upload_grant_is_live(text,text)',
   'get_checkin_context(text)',
   'portal_attendance(uuid)',
-  'portal_find_members(text,text)',
+  'portal_find_members(text)',
   'portal_leaderboard()',
   'portal_requirements()',
   'portal_scorecard(uuid)',

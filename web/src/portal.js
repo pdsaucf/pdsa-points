@@ -53,6 +53,7 @@ const app = {
   tab: 'points',
   candidates: [],
   looking: false,
+  lookupSeq: 0,
   card: null,
   attendance: null,
 };
@@ -125,15 +126,14 @@ function showNoMatch() {
   announce('Name not found. Check the spelling. Only paid members are listed.');
 }
 
-async function onLookup(event) {
-  event.preventDefault();
+async function lookupMember() {
   if (app.looking) return;
 
-  const first = el.lookupFirst.value.trim();
-  const last = el.lookupLast.value.trim();
-  if (!first || !last) {
-    refuse('Type your first and last name.');
-    (first ? el.lookupLast : el.lookupFirst).focus();
+  const lookupSeq = ++app.lookupSeq;
+  const name = el.lookupName.value.trim();
+  if (!name) {
+    refuse('Type your full name.');
+    el.lookupName.focus();
     return;
   }
 
@@ -142,11 +142,13 @@ async function onLookup(event) {
   clearMessage();
   setLooking(true);
   announce('Looking up member.');
+  const isCurrent = () =>
+    lookupSeq === app.lookupSeq && el.lookupName.value.trim() === name;
   try {
     const rows = await rpc('portal_find_members', {
-      p_first_name: first,
-      p_last_name: last,
+      p_name: name,
     });
+    if (!isCurrent()) return;
     const found = Array.isArray(rows) ? rows : [];
 
     if (!found.length) {
@@ -154,15 +156,25 @@ async function onLookup(event) {
       return;
     }
     if (found.length === 1) {
-      await show(found[0].member_id);
+      await show(found[0].member_id, { isCurrent });
       return;
     }
     offerCandidates(found);
   } catch (err) {
-    fail(err, () => onLookup(event));
+    if (!isCurrent()) return;
+    fail(err, lookupMember);
   } finally {
     setLooking(false);
   }
+}
+
+function onLookup(event) {
+  event.preventDefault();
+  return lookupMember();
+}
+
+function onLookupInput() {
+  app.lookupSeq += 1;
 }
 
 function setLooking(on) {
@@ -230,7 +242,7 @@ function attendanceSnapshotMatches(attendance, memberId) {
   );
 }
 
-async function show(memberId) {
+async function show(memberId, { isCurrent = null } = {}) {
   activeMemberId = memberId;
   setHidden(el.pickBlock, true);
   clearMessage();
@@ -238,6 +250,7 @@ async function show(memberId) {
   try {
     const card = await rpc('portal_scorecard', { p_member_id: memberId });
     if (activeMemberId !== memberId) return; // superseded while this was in flight
+    if (isCurrent && !isCurrent()) return;
     app.card = card;
     app.attendance = null;
     app.scorecard.render(card);
@@ -267,11 +280,12 @@ async function show(memberId) {
       },
     });
     // The name they typed is not cleared: pressing "Not you?" puts them back on
-    // the form with it still in the boxes, which is what somebody who mistyped
+    // the form with it still in the box, which is what somebody who mistyped
     // one letter needs.
   } catch (err) {
     if (activeMemberId !== memberId) return;
-    fail(err, () => show(memberId));
+    if (isCurrent && !isCurrent()) return;
+    fail(err, () => show(memberId, { isCurrent }));
   } finally {
     if (activeMemberId === memberId) setLooking(false);
   }
@@ -291,7 +305,7 @@ function forget() {
   setHidden(el.honorary, false);
   setHidden(el.honoraryIntro, false);
   setHidden(el.pickBlock, app.candidates.length < 2);
-  el.lookupFirst.focus();
+  el.lookupName.focus();
 }
 
 async function downloadPdf() {
@@ -344,8 +358,7 @@ function cacheElements() {
     viewBoard: $('view-board'),
 
     lookupForm: $('lookup-form'),
-    lookupFirst: $('lookup-first'),
-    lookupLast: $('lookup-last'),
+    lookupName: $('lookup-name'),
     lookupError: $('lookup-error'),
     lookupSubmit: $('lookup-submit'),
     lookupSubmitLabel: $('lookup-submit-label'),
@@ -377,6 +390,7 @@ export function start() {
   app.leaderboard = createLeaderboard(ctx);
 
   el.lookupForm.addEventListener('submit', onLookup);
+  el.lookupName.addEventListener('input', onLookupInput);
   el.tabPoints.addEventListener('click', () => selectTab('points'));
   el.tabBoard.addEventListener('click', () => selectTab('board'));
   $('score-change').addEventListener('click', forget);
@@ -395,4 +409,10 @@ export function start() {
   // The requirements below the form are what this page says before anybody has
   // typed anything, so they are read on load rather than on demand.
   app.scorecard.loadRequirements();
+
+  const queryName = new URLSearchParams(window.location.search).get('name');
+  if (queryName?.trim()) {
+    el.lookupName.value = queryName;
+    lookupMember();
+  }
 }

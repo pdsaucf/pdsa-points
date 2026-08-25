@@ -34,8 +34,7 @@ let db;
 const anon = (sql, params = []) => db.withRole('anon', null, () => db.val(sql, params));
 const anonRows = (sql, params = []) => db.withRole('anon', null, () => db.q(sql, params));
 
-const findMembers = (first, last) =>
-  anonRows(`select * from portal_find_members($1, $2)`, [first, last]);
+const findMembers = (name) => anonRows(`select * from portal_find_members($1)`, [name]);
 
 const scorecard = (memberId) => anon(`select portal_scorecard($1)`, [memberId]);
 const attendance = (memberId) => anon(`select portal_attendance($1)`, [memberId]);
@@ -83,27 +82,47 @@ test.after(async () => {
 // ---------------------------------------------------------------------------
 
 test('a name finds the member on this years roster', async () => {
-  const rows = await findMembers('Ada', 'Testwood');
+  const rows = await findMembers('Ada Testwood');
   assert.equal(rows.length, 1, 'a member typing their own name found nobody');
   assert.equal(rows[0].member_id, MEMBERS.ada);
   assert.ok(rows[0].joined_on, 'the join date is what tells two of one name apart');
 });
 
 test('case, spacing and punctuation do not make somebody a stranger', async () => {
-  const rows = await findMembers('  ADA ', 'testwood');
+  const rows = await findMembers('  ADA   testwood ');
   assert.equal(rows.length, 1);
   assert.equal(rows[0].member_id, MEMBERS.ada);
 });
 
 test('the name search returns names and ids, never anything else', async () => {
-  const rows = await findMembers('Ada', 'Testwood');
+  const rows = await findMembers('Ada Testwood');
   assert.deepEqual(Object.keys(rows[0]).sort(), ['display_name', 'joined_on', 'member_id']);
 });
 
-test('half a name finds nobody rather than everybody', async () => {
-  assert.deepEqual(await findMembers('Ada', ''), []);
-  assert.deepEqual(await findMembers('', ''), []);
-  assert.deepEqual(await findMembers(null, null), []);
+test('an empty name finds nobody rather than everybody', async () => {
+  assert.deepEqual(await findMembers(''), []);
+  assert.deepEqual(await findMembers('   '), []);
+  assert.deepEqual(await findMembers(null), []);
+});
+
+test('a multiword surname is matched as part of the complete name', async () => {
+  const member = '55555555-0000-4000-a000-000000000002';
+  await db.q(
+    `insert into members (id, first_name, last_name) values ($1, $2, $3)`,
+    [member, 'María', "de la O'Neil-Smith"],
+  );
+  await db.q(
+    `insert into member_enrollments (member_id, academic_year_id, joined_on)
+     values ($1, $2, date '2026-11-03')`,
+    [member, YEAR_2026],
+  );
+
+  const rows = await findMembers("  María   de la O'Neil-Smith  ");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].member_id, member);
+
+  await db.q(`delete from member_enrollments where member_id = $1`, [member]);
+  await db.q(`delete from members where id = $1`, [member]);
 });
 
 test('two members with one name both come back, to be told apart', async () => {
@@ -117,7 +136,7 @@ test('two members with one name both come back, to be told apart', async () => {
     values ('${twin}', '${YEAR_2026}', date '2026-11-02');
   `);
 
-  const rows = await findMembers('Ada', 'Testwood');
+  const rows = await findMembers('Ada Testwood');
   assert.equal(rows.length, 2, 'the portal picked one of two people with the same name');
   assert.notEqual(rows[0].joined_on?.toISOString?.() ?? rows[0].joined_on,
                   rows[1].joined_on?.toISOString?.() ?? rows[1].joined_on,
@@ -141,7 +160,7 @@ test('somebody not on this years roster is not found by name', async () => {
     on conflict do nothing;
   `);
 
-  assert.deepEqual(await findMembers('Wilhelmina', 'Formeryear'), []);
+  assert.deepEqual(await findMembers('Wilhelmina Formeryear'), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -696,7 +715,7 @@ test('anon holds EXECUTE on the five portal functions and nothing near them', as
     db.val(`select has_function_privilege('anon', $1, 'EXECUTE')`, [name]);
 
   for (const name of [
-    'portal_find_members(text, text)',
+    'portal_find_members(text)',
     'portal_scorecard(uuid)',
     'portal_attendance(uuid)',
     'portal_leaderboard()',
@@ -704,6 +723,12 @@ test('anon holds EXECUTE on the five portal functions and nothing near them', as
   ]) {
     assert.equal(await may(name), true, `anon cannot call ${name}, so the portal is dead`);
   }
+
+  assert.equal(
+    await db.val(`select to_regprocedure('portal_find_members(text,text)') is null`),
+    true,
+    'the obsolete two-argument overload still exists',
+  );
 
   for (const name of [
     'fn_portal_year()',

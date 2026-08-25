@@ -7,6 +7,10 @@ This is the cheapest fix for the failure mode that drove the review decision: a 
 who can see their own record notices a missing credit themselves, instead of it staying
 invisible until nobody catches it.
 
+A successful check-in by a matched roster member links here with the display name in
+`/me/?name=...`, which prefills the same lookup and runs it once. A claimed name has no
+roster identity yet, so its confirmation has no portal link.
+
 ## There is no sign-in
 
 **Members do not have email addresses, and the club is not collecting any.** The imported
@@ -18,7 +22,7 @@ question, "which roster row is this person", from an address.
 The question is now asked directly:
 
 ```
-   member types First name + Last name
+        member types Full name
                     │
      ┌──────────────┼───────────────────────────┐
      │              │                           │
@@ -58,13 +62,14 @@ photo, no other member. That boundary is tested the same way the rest of this fi
 
 Every one is a `SECURITY DEFINER` function that any caller may execute, including one
 holding nothing but the anon key. Four are defined in `..._public_member_portal.sql`
-(migration 21). `portal_attendance()` originated in `..._member_event_history.sql`
-(migration 23), and its current one-row-per-event contract is defined in
-`..._event_times_and_portal_attendance.sql` (migration 25).
+(migration 21), with the current one-field name signature in
+`..._portal_full_name_lookup.sql`. `portal_attendance()` originated in
+`..._member_event_history.sql` (migration 23), and its current one-row-per-event
+contract is defined in `..._event_times_and_portal_attendance.sql` (migration 25).
 
 | What the page needs | Function |
 |---|---|
-| the name box | `portal_find_members(first_name, last_name)` |
+| the name box | `portal_find_members(name)` |
 | one member's points | `portal_scorecard(member_id)` |
 | that member's event history | `portal_attendance(member_id)` |
 | the leaderboard, with breakdowns | `portal_leaderboard()` |
@@ -78,7 +83,8 @@ answers rather than trusting the SELECT list.
 Name matching is `fn_normalise_name()`, the same comparison the duplicate view and the
 CSV import use, so `o halloran` finds `O'Halloran`. Both spellings of a roster name are
 compared, the display name and first plus last, so a member whose row carries a preferred
-name is found by either.
+name is found by either. The page sends the complete field unchanged apart from trimming
+its ends, so multiword surnames and prefixes are not split in the browser.
 
 **The verdict is still Postgres's.** `portal_scorecard()` evaluates the published rules
 through `fn_member_requirement_status()`, which is the same function `v_member_status`
