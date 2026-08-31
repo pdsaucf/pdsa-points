@@ -1460,7 +1460,7 @@ const openEvent = async (title) => {
   await until(() => !dom.$('event-detail-body').hidden, `${title} never opened`);
 };
 
-// Add members is on screen for the whole of the detail view and is disabled
+// Add attendance is on screen for the whole of the detail view and is disabled
 // for exactly as long as a write is in flight, so it is what "the screen has
 // finished" is read off. Waiting on the row that changed is not enough: the
 // list behind this screen is reloaded after it, and a check that returned in
@@ -1473,6 +1473,10 @@ const backToList = async () => {
 };
 
 await openEvent('Spring GBM 5');
+
+await check('the paste attendance action uses the new label', () => {
+  assert.equal(dom.$('attendee-add').textContent.trim(), 'Add attendance');
+});
 
 await check('the attendee list is every record on the event, waiting ones first', () => {
   const rows = dom.$('attendee-rows').querySelectorAll('tr');

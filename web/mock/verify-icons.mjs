@@ -20,7 +20,7 @@ const { document, $ } = installDom(`
     <button id="event-detail-duplicate" class="button">Duplicate</button>
     <button id="event-detail-delete" class="button button-danger">Delete</button>
     <button id="event-new" class="button button-primary">New event</button>
-    <button id="attendee-add" class="button">Add members</button>
+    <button id="attendee-add" class="button">Add attendance</button>
     <button id="card-qr" class="button button-small">QR</button>
     <button id="card-edit" class="button button-small">Edit</button>
     <button id="loading" class="button"><span id="loading-label">Save</span></button>
