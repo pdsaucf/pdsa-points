@@ -14,11 +14,11 @@ name: Deploy check-in page
 on:
   push:
     branches: [main]
-    # Only when the page or its deployment contract guard changes. A migration
-    # or a test does not alter a single byte of what is served, so redeploying
-    # on those would be noise.
+    # Run when the page, a production migration, or the deployment contract
+    # guard changes. Tests alone do not alter what is served.
     paths:
       - 'web/**'
+      - 'supabase/migrations/**'
       - 'scripts/check_deployed_contracts.mjs'
       - '.github/workflows/pages.yml'
   # So an officer can redeploy from the Actions tab without pushing anything,
@@ -47,10 +47,26 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # The page and the database deploy separately. Probe deployed contracts
-      # before publishing a page that calls them. Private contracts must resolve
-      # before refusing anon, and public contracts use synthetic non-member
-      # inputs, so this check cannot read or mutate real data.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.115.0
+
+      # Apply committed migrations before checking whether the static page and
+      # production database agree. The CLI records each applied migration, so
+      # frontend-only deploys and workflow retries are no-ops here.
+      - name: Apply pending database migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+          supabase db push --linked
+
+      # Probe deployed contracts after migrations and before publishing the
+      # page. Private contracts must resolve before refusing anon, and public
+      # contracts use synthetic non-member inputs, so this check cannot read or
+      # mutate real data.
       - name: Verify deployed contracts
         run: node scripts/check_deployed_contracts.mjs
 
