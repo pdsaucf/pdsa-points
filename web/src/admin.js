@@ -58,6 +58,7 @@ const app = {
   storageReloadQueue: Promise.resolve(),
   tab: 'events',
   returnTab: 'roster',
+  now: () => new Date(),
 };
 
 let quietFailureDepth = 0;
@@ -263,6 +264,7 @@ function context(panelName) {
       return app.years;
     },
     userId: app.session.user.id,
+    now: app.now,
     // Pass the original error through unchanged so describeOfficer can still
     // distinguish RpcError, NetworkError and an expired session. A refresh is
     // always the panel's read-only reload, never a mutation retry callback.
@@ -474,7 +476,8 @@ function wire() {
   });
 }
 
-export function start() {
+export function start({ now = () => new Date() } = {}) {
+  app.now = now;
   installButtonIcons();
   cacheElements();
   wire();

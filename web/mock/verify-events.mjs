@@ -125,6 +125,9 @@ const {
   fromNewYorkDatetimeLocalValue,
   eventStatus,
   buildCheckinUrl,
+  sortEvents,
+  todayDividerIndex,
+  todayInNewYork,
 } = await import('../src/events-model.js');
 const { encodeQR, formatBits, ECC_TABLE_M } = await import('../src/qr.js');
 const {
@@ -333,6 +336,38 @@ await check('actual event times round trip as America/New_York instants', () => 
   assert.equal(fromNewYorkDatetimeLocalValue('2027-01-11T18:00'), winter);
   assert.equal(fromNewYorkDatetimeLocalValue('2026-03-08T02:30'), null);
   assert.equal(fromNewYorkDatetimeLocalValue('2026-11-01T01:30', '2026-11-01T06:30:00.000Z'), '2026-11-01T06:30:00.000Z');
+});
+
+await check('today uses the America/New_York calendar date across UTC rollover', () => {
+  assert.equal(todayInNewYork(new Date('2026-08-11T03:59:59.000Z')), '2026-08-10');
+  assert.equal(todayInNewYork(new Date('2026-08-11T04:00:00.000Z')), '2026-08-11');
+});
+
+await check('ascending events place today at the first current event', () => {
+  const events = [
+    { title: 'Tomorrow', occurred_on: '2026-08-11' },
+    { title: 'Yesterday', occurred_on: '2026-08-09' },
+    { title: 'Today', occurred_on: '2026-08-10' },
+  ];
+  const sorted = sortEvents(events);
+  assert.deepEqual(
+    sorted.map((event) => event.title),
+    ['Yesterday', 'Today', 'Tomorrow'],
+    'the model default is not oldest first',
+  );
+  assert.equal(todayDividerIndex(sorted, 'date_asc', '2026-08-10'), 1);
+  assert.equal(sorted[1].occurred_on, '2026-08-10', 'an event on today is above the boundary');
+});
+
+await check('today divider hides for one-sided and non-ascending lists', () => {
+  const past = [{ occurred_on: '2026-08-08' }, { occurred_on: '2026-08-09' }];
+  const current = [{ occurred_on: '2026-08-10' }, { occurred_on: '2026-08-11' }];
+  const both = [...past, ...current];
+  assert.equal(todayDividerIndex(past, 'date_asc', '2026-08-10'), -1);
+  assert.equal(todayDividerIndex(current, 'date_asc', '2026-08-10'), -1);
+  assert.equal(todayDividerIndex([...both].reverse(), 'date_desc', '2026-08-10'), -1);
+  assert.equal(todayDividerIndex(both, 'title', '2026-08-10'), -1);
+  assert.equal(todayDividerIndex(both, 'attendance', '2026-08-10'), -1);
 });
 
 await check('buildCheckinUrl resolves against the admin page location and carries the token', () => {
@@ -559,6 +594,7 @@ const eventRowFor = (title) =>
     .find((row) => row.querySelector('.event-title')?.textContent.trim() === title) ?? null;
 const rowTitles = () =>
   dom.$('event-list').querySelectorAll('.event-title').map((node) => node.textContent.trim());
+const todayDivider = () => dom.$('event-list').querySelector('.event-today-divider');
 const tabLabels = () =>
   dom.$('event-category-tabs').querySelectorAll('.filter-tab').map((node) => node.textContent.trim());
 const attendeeNames = () =>
@@ -780,7 +816,8 @@ function captureRequests() {
 
 const initialStorageLoad = holdNextRestResponse('v_purge_runs_outstanding');
 const initialEventsFailure = failInitialEventsStartupOnce();
-start();
+const SCREEN_NOW = new Date('2026-08-10T16:00:00.000Z');
+start({ now: () => new Date(SCREEN_NOW) });
 dom.$('signin-passcode').value = 'mock-passcode';
 dom.fire(dom.$('signin-form'), 'submit');
 await until(() => !dom.$('view-app').hidden, 'the app never opened');
@@ -851,6 +888,67 @@ await check('an Events schema drift banner reloads Events without reloading Revi
 
 initialEventsFailure.restore();
 await until(() => !dom.$('event-list').hidden, 'the events list never rendered after recovery');
+
+await check('Events opens oldest first with Today between past and current events', async () => {
+  const sort = dom.$('events-sort');
+  assert.equal(sort.value, 'date_asc');
+  assert.equal(
+    sort.querySelectorAll('option').find((option) => option.value === sort.value)?.textContent,
+    'Oldest first',
+  );
+  const loadedEvents = await select('events', {
+    select: 'title,occurred_on',
+    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+  });
+  assert.deepEqual(
+    rowTitles(),
+    sortEvents(loadedEvents).map((event) => event.title),
+    'initial rows are not ascending by calendar date',
+  );
+
+  const divider = todayDivider();
+  assert.ok(divider, 'Today is missing');
+  assert.equal(divider.textContent.trim(), 'Today');
+  assert.equal(divider.getAttribute('role'), 'separator');
+  assert.equal(divider.getAttribute('aria-label'), 'Today');
+  assert.equal(divider.hasAttribute('tabindex'), false, 'Today is focusable');
+  assert.ok(divider.querySelector('.event-today-dot'), 'Today has no marker');
+  assert.ok(divider.querySelector('.event-today-line'), 'Today has no line');
+
+  const children = dom.$('event-list').children;
+  const at = children.indexOf(divider);
+  assert.equal(children[at - 1].querySelector('.event-title').textContent, 'Give Kids A Smile');
+  assert.equal(children[at + 1].querySelector('.event-title').textContent, 'Soap Carving');
+  const rowCount = dom.$('event-list').querySelectorAll('.event-row').length;
+  assert.equal(dom.$('events-count').textContent, `${rowCount} events`);
+});
+
+await check('search recomputes Today without server reads', async () => {
+  const captured = captureRequests();
+  const search = dom.$('events-search');
+  try {
+    search.value = 'Give Kids';
+    dom.fire(search, 'input');
+    assert.deepEqual(rowTitles(), ['Give Kids A Smile']);
+    assert.equal(Boolean(todayDivider()), false, 'a past-only search left Today behind');
+
+    search.value = 'Soap';
+    dom.fire(search, 'input');
+    assert.deepEqual(rowTitles(), ['Soap Carving']);
+    assert.equal(Boolean(todayDivider()), false, 'a current-only search added Today');
+
+    search.value = '';
+    dom.fire(search, 'input');
+    assert.ok(todayDivider(), 'clearing search did not restore Today');
+
+    const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
+    assert.equal(eventReads.length, 0, 'search re-read events from the server');
+    const rowCount = dom.$('event-list').querySelectorAll('.event-row').length;
+    assert.equal(dom.$('events-count').textContent, `${rowCount} events`);
+  } finally {
+    captured.restore();
+  }
+});
 
 await check('category rows filter duplicates and an inline category appears immediately', async () => {
   dom.click(dom.$('event-new'));
@@ -1244,10 +1342,10 @@ await check('View event opens the event named on its card', async () => {
 await check('ordinary list repainting does not steal focus', () => {
   const search = dom.$('events-search');
   search.focus();
-  dom.$('events-sort').value = 'title_asc';
+  dom.$('events-sort').value = 'title';
   dom.fire(dom.$('events-sort'), 'change');
   assert.equal(document.activeElement, search);
-  dom.$('events-sort').value = 'date_desc';
+  dom.$('events-sort').value = 'date_asc';
   dom.fire(dom.$('events-sort'), 'change');
   assert.equal(document.activeElement, search);
 });
@@ -1299,6 +1397,22 @@ await check('event cards stack actions with full tap targets on narrow screens',
     adminCss,
     /\.event-row > \.chip-row \.category-chip > span\s*\{[^}]*min-width: 0[^}]*overflow-wrap: anywhere/,
   );
+  assert.match(
+    adminCss,
+    /\.event-today-divider\s*\{[^}]*display: flex;[^}]*width: 100%;[^}]*min-width: 0;[^}]*color: var\(--danger\)/,
+  );
+  assert.match(
+    adminCss,
+    /\.event-today-line\s*\{[^}]*min-width: 0;[^}]*flex: 1 1 auto;/,
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 46rem\)[\s\S]*?\.event-today-divider\s*\{[^}]*padding-inline:/,
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 34rem\)[\s\S]*?\.event-today-divider\s*\{[^}]*gap:/,
+  );
 });
 
 await check('QR actions center, wrap, and stay within the dialog on narrow screens', () => {
@@ -1328,7 +1442,7 @@ function clearListFilters() {
   dom.fire(dom.$('events-search'), 'input');
   dom.$('events-status').value = 'all';
   dom.fire(dom.$('events-status'), 'change');
-  dom.$('events-sort').value = 'date_desc';
+  dom.$('events-sort').value = 'date_asc';
   dom.fire(dom.$('events-sort'), 'change');
   dom.click(dom.$('event-category-tabs').querySelectorAll('.filter-tab')[0]);
 }
@@ -1345,6 +1459,7 @@ await check('picking a tab narrows the list to that category', () => {
     const titles = rowTitles();
     assert.ok(titles.includes('Soap Carving'), `Socials left out a Socials event: ${titles.join(', ')}`);
     assert.ok(!titles.includes('Spring GBM 5'), 'a GBM is showing under Socials');
+    assert.ok(todayDivider(), 'a category spanning the boundary lost Today');
     for (const row of dom.$('event-list').querySelectorAll('.event-row')) {
       assert.match(row.textContent, /Socials/, `a row with no Socials chip is under the Socials tab: ${row.textContent}`);
     }
@@ -1409,23 +1524,26 @@ await check('Show narrows to what is still open for check-in', () => {
     const waiting = rowTitles();
     assert.ok(waiting.includes('Spring GBM 5'), `the event with a queue is missing: ${waiting.join(', ')}`);
     assert.ok(!waiting.includes('Field Day'), 'an event with nothing waiting is under the waiting filter');
+    assert.ok(todayDivider(), 'the waiting list spanning the boundary lost Today');
   } finally {
     clearListFilters();
   }
 });
 
 await check('the order picker reorders the list without re-reading the server', async () => {
-  const before = (await adminAudit()).calls.filter((call) => call.fn === 'rest.events').length;
+  const captured = captureRequests();
   try {
     const sort = dom.$('events-sort');
 
     sort.value = 'title';
     dom.fire(sort, 'change');
+    assert.equal(Boolean(todayDivider()), false, 'Title displayed a misleading Today divider');
     const byTitle = rowTitles();
     assert.deepEqual(byTitle, [...byTitle].sort((a, b) => a.localeCompare(b)), 'Title did not sort by title');
 
     sort.value = 'attendance';
     dom.fire(sort, 'change');
+    assert.equal(Boolean(todayDivider()), false, 'Most check-ins displayed a misleading Today divider');
     // Read off the rows rather than named against a fixture, so this stays
     // true whichever event happens to be the busiest.
     const live = dom
@@ -1442,9 +1560,18 @@ await check('the order picker reorders the list without re-reading the server', 
     assert.deepEqual(live, [...live].sort((a, b) => b - a), 'Most check-ins is not in order');
     assert.ok(live[0] > live[live.length - 1], 'every event has the same number of check-ins');
 
-    const after = (await adminAudit()).calls.filter((call) => call.fn === 'rest.events').length;
-    assert.equal(after, before, 'sorting sent a request');
+    sort.value = 'date_desc';
+    dom.fire(sort, 'change');
+    assert.equal(Boolean(todayDivider()), false, 'Newest first displayed a misleading Today divider');
+
+    sort.value = 'date_asc';
+    dom.fire(sort, 'change');
+    assert.ok(todayDivider(), 'Oldest first did not restore Today');
+
+    const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
+    assert.equal(eventReads.length, 0, 'sorting sent a request');
   } finally {
+    captured.restore();
     clearListFilters();
   }
 });

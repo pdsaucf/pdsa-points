@@ -37,6 +37,8 @@ import {
   duplicateDraft,
   filterEvents,
   sortEvents,
+  todayDividerIndex,
+  todayInNewYork,
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
   toNewYorkDatetimeLocalValue,
@@ -149,7 +151,7 @@ export function createEvents(ctx) {
     tab: 'all',
     query: '',
     status: 'all',
-    sort: 'date_desc',
+    sort: 'date_asc',
     editingEvent: null, // the row being edited, or the row Save just created
     formReturn: 'list', // where Cancel and Save go back to: 'list' or 'detail'
     // Set only by Duplicate: the fields a new event opens with, copied from
@@ -400,7 +402,17 @@ export function createEvents(ctx) {
 
     setHidden(el.empty, true);
     setHidden(el.list, false);
-    el.list.replaceChildren(...shown.map(renderRow));
+    const dividerIndex = todayDividerIndex(
+      shown,
+      state.sort,
+      todayInNewYork(ctx.now?.() ?? new Date()),
+    );
+    const children = [];
+    shown.forEach((event, index) => {
+      if (index === dividerIndex) children.push(renderTodayDivider());
+      children.push(renderRow(event));
+    });
+    el.list.replaceChildren(...children);
 
     if (restoreDetailFocus) {
       const originId = state.detailOriginEventId;
@@ -411,6 +423,16 @@ export function createEvents(ctx) {
         ?.querySelector('.event-view')
         ?.focus();
     }
+  }
+
+  function renderTodayDivider() {
+    return h(
+      'div',
+      { class: 'event-today-divider', role: 'separator', 'aria-label': 'Today' },
+      h('span', { class: 'event-today-label' }, 'Today'),
+      h('span', { class: 'event-today-dot', 'aria-hidden': 'true' }),
+      h('span', { class: 'event-today-line', 'aria-hidden': 'true' }),
+    );
   }
 
   /**

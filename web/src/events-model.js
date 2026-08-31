@@ -76,6 +76,13 @@ export function fromDatetimeLocalValue(value) {
 
 const NEW_YORK_ZONE = 'America/New_York';
 
+const nyDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: NEW_YORK_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 const nyFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: NEW_YORK_ZONE,
   year: 'numeric',
@@ -85,6 +92,16 @@ const nyFormatter = new Intl.DateTimeFormat('en-CA', {
   minute: '2-digit',
   hourCycle: 'h23',
 });
+
+/** The calendar date in America/New_York for an injected instant. */
+export function todayInNewYork(now = new Date()) {
+  const instant = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(instant.getTime())) return null;
+  const parts = Object.fromEntries(
+    nyDateFormatter.formatToParts(instant).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 
 /** An instant rendered for the event editor in America/New_York. */
 export function toNewYorkDatetimeLocalValue(isoTimestamp) {
@@ -292,8 +309,8 @@ export function qrFileName(title, occurredOn) {
 export const NO_CATEGORY_TAB = 'none';
 
 export const EVENT_SORTS = [
-  { value: 'date_desc', label: 'Newest first' },
   { value: 'date_asc', label: 'Oldest first' },
+  { value: 'date_desc', label: 'Newest first' },
   { value: 'title', label: 'Title' },
   { value: 'attendance', label: 'Most check-ins' },
 ];
@@ -385,7 +402,7 @@ export function filterEvents(events, { tab = 'all', query = '', status = 'all' }
  * A copy of the list in the chosen order. Never sorts in place: the caller's
  * array is the year as loaded, and the order on screen is a view of it.
  */
-export function sortEvents(events, sort = 'date_desc') {
+export function sortEvents(events, sort = 'date_asc') {
   const rows = [...(events ?? [])];
   const byDate = (a, b) => String(a.occurred_on ?? '').localeCompare(String(b.occurred_on ?? ''));
 
@@ -407,6 +424,24 @@ export function sortEvents(events, sort = 'date_desc') {
     default:
       return rows.sort((a, b) => byDate(b, a));
   }
+}
+
+/**
+ * Where the Today separator belongs in an ascending visible event list.
+ * Returns -1 when either side is empty or the chosen order can interleave the
+ * two groups. Event dates are compared as YYYY-MM-DD calendar dates.
+ */
+export function todayDividerIndex(events, sort = 'date_asc', today = todayInNewYork()) {
+  if (sort !== 'date_asc' || !today) return -1;
+  const rows = events ?? [];
+  const firstCurrent = rows.findIndex(
+    (event) => String(event.occurred_on ?? '').slice(0, 10) >= today,
+  );
+  if (firstCurrent <= 0) return -1;
+  const hasPast = rows
+    .slice(0, firstCurrent)
+    .some((event) => String(event.occurred_on ?? '').slice(0, 10) < today);
+  return hasPast && firstCurrent < rows.length ? firstCurrent : -1;
 }
 
 // ---------------------------------------------------------------------------
