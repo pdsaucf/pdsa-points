@@ -41,6 +41,8 @@ test('the deployment guard probes the event mutation signatures without officer 
     'save_event_config',
     'add_officer_attendance',
     'remove_attendance_record',
+    'add_officer_attendance_batch',
+    'recover_officer_attendance_batch',
   ]);
   assert.equal(requests.length, ADMIN_RPC_PROBES.length);
   for (let index = 0; index < ADMIN_RPC_PROBES.length; index += 1) {

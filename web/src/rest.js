@@ -174,6 +174,7 @@ const READ_ONLY_RPCS = new Set([
   'fn_retroactive_match_candidates',
   'fn_storage_usage',
   'preview_requirement_set',
+  'recover_officer_attendance_batch',
   'validate_requirement_set',
 ]);
 

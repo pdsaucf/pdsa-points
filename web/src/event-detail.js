@@ -33,13 +33,14 @@
 import { select, remove, callRpc, deleteEvidenceObjects } from './rest.js';
 import { NetworkError } from './errors.js';
 import { downloadCsv } from './csv.js';
+import { parsePastedNames } from './name-parser.js';
+import { normaliseName, rankMembers } from './match.js';
 import {
   ATTENDANCE_STATUS,
   ATTENDANCE_SOURCES,
   attendeeCsvFilename,
   attendeeCsvRows,
   attendeeName,
-  addableMembers,
   canDeleteEvent,
   collectsTypedValue,
   eventStats,
@@ -79,6 +80,173 @@ const SOURCE_LABEL = Object.fromEntries(ATTENDANCE_SOURCES.map((row) => [row.val
 // for the same reason.
 const NOT_WRITTEN = 'The change was refused. Reload the page and try again.';
 
+const ATTENDANCE_FUZZY_FLOOR = 0.3;
+
+/** Every nonblank pasted line, reconciled with the roster and this event. */
+export function buildAttendancePastePreview(text, roster, records, choices = new Map()) {
+  const { entries } = parsePastedNames(text);
+  const live = (records ?? []).filter((record) => record.status !== 'rejected');
+  const byName = new Map();
+  for (const member of roster ?? []) {
+    const key = normaliseName(member.display_name);
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(member);
+  }
+
+  return entries.map((entry) => {
+    if (entry.kind === 'invalid') {
+      return { ...entry, status: 'invalid', label: 'Needs full name', disposition: 'invalid' };
+    }
+    if (entry.kind === 'repeated') {
+      return { ...entry, status: 'repeated', label: 'Repeated', disposition: 'repeated' };
+    }
+
+    const normalizedName = normaliseName(entry.name);
+    const exact = byName.get(normalizedName) ?? [];
+    const ranked = rankMembers({ name: entry.name }, roster ?? [], {
+      limit: 3,
+      floor: ATTENDANCE_FUZZY_FLOOR,
+    });
+    const suggestions = exact.length
+      ? exact.map((member) => ({ member, percent: 100 }))
+      : ranked;
+    const storedChoice = choices.get(entry.row);
+    const choice = storedChoice?.normalized_name === normalizedName &&
+      storedChoice?.source_text === text &&
+      !(storedChoice?.kind === 'unmatched' && exact.length)
+      ? storedChoice
+      : null;
+
+    if (choice?.kind === 'member') {
+      const member = (roster ?? []).find((row) => row.id === choice.member_id);
+      if (member) {
+        const unmatched = live.find(
+          (record) => !record.member_id && normaliseName(record.claimed_name) === normalizedName,
+        );
+        const recorded = unmatched ?? live.find((record) => record.member_id === member.id);
+        return {
+          ...entry,
+          status: recorded ? 'recorded' : 'member',
+          label: unmatched ? 'Needs review' : recorded ? 'Already recorded' : 'Member',
+          disposition: 'member',
+          member,
+          suggestions,
+          record: recorded ?? null,
+          needsReview: Boolean(unmatched),
+        };
+      }
+    }
+
+    if (choice?.kind === 'unmatched') {
+      const recorded = live.find(
+        (record) => !record.member_id && normaliseName(record.claimed_name) === normaliseName(entry.name),
+      );
+      return {
+        ...entry,
+        status: recorded ? 'recorded' : 'unmatched',
+        label: recorded ? 'Already recorded' : 'Not on roster',
+        disposition: 'unmatched',
+        member: null,
+        suggestions,
+      };
+    }
+
+    if (exact.length === 1) {
+      const member = exact[0];
+      const unmatched = live.find(
+        (record) => !record.member_id && normaliseName(record.claimed_name) === normalizedName,
+      );
+      const recorded = unmatched ?? live.find((record) => record.member_id === member.id);
+      return {
+        ...entry,
+        status: recorded ? 'recorded' : 'member',
+        label: unmatched ? 'Needs review' : recorded ? 'Already recorded' : 'Member',
+        disposition: 'member',
+        member,
+        suggestions,
+        record: recorded ?? null,
+        needsReview: Boolean(unmatched),
+      };
+    }
+
+    if (suggestions.length) {
+      return {
+        ...entry,
+        status: 'choice',
+        label: 'Choose member',
+        disposition: null,
+        member: null,
+        suggestions,
+      };
+    }
+
+    const recorded = live.find(
+      (record) => !record.member_id && normaliseName(record.claimed_name) === normaliseName(entry.name),
+    );
+    return {
+      ...entry,
+      status: recorded ? 'recorded' : 'unmatched',
+      label: recorded ? 'Already recorded' : 'Not on roster',
+      disposition: 'unmatched',
+      member: null,
+      suggestions: [],
+    };
+  });
+}
+
+/** Rebuilds only the outcomes an attendance snapshot can prove. */
+export function reconstructAttendanceBatchOutcomes(
+  entries,
+  _current,
+  before,
+  _options = {},
+) {
+  const liveBefore = (before ?? []).filter((row) => row.status !== 'rejected');
+  const seenMembers = new Set();
+  const seenNames = new Set();
+  const results = [];
+
+  for (const entry of entries ?? []) {
+    if (entry.disposition === 'invalid' || entry.disposition === 'repeated') {
+      results.push({ ...entry, outcome: entry.disposition, record_id: null });
+      continue;
+    }
+
+    if (entry.disposition === 'member') {
+      if (seenMembers.has(entry.member_id)) {
+        results.push({ ...entry, outcome: 'repeated', record_id: null });
+        continue;
+      }
+      seenMembers.add(entry.member_id);
+      const existing = liveBefore.find((row) => row.member_id === entry.member_id);
+      if (existing) {
+        results.push({ ...entry, outcome: 'already_recorded', record_id: existing.id });
+        continue;
+      }
+      return null;
+    }
+
+    const norm = normaliseName(entry.claimed_name);
+    if (seenNames.has(norm)) {
+      results.push({ ...entry, outcome: 'repeated', record_id: null });
+      continue;
+    }
+    seenNames.add(norm);
+    const existing = liveBefore.find(
+      (row) => !row.member_id && normaliseName(row.claimed_name) === norm,
+    );
+    if (existing) {
+      results.push({ ...entry, outcome: 'already_recorded', record_id: existing.id });
+      continue;
+    }
+    // Only the recovery RPC can attribute a new row to this batch. A snapshot
+    // can prove old live rows, invalid input, and repeated input, but nothing
+    // written after the before snapshot belongs to this call by inspection.
+    return null;
+  }
+  return results;
+}
+
 /**
  * @param {object} ctx the admin shell's context: year, fail, note, openMember
  * @param {{openForm: Function, openQr: Function, previewCheckin: Function,
@@ -117,7 +285,7 @@ export function createEventDetail(ctx, host) {
 
     addDialog: $('attendee-add-dialog'),
     addForm: $('attendee-add-form'),
-    addSearch: $('attendee-add-search'),
+    addNames: $('attendee-add-names'),
     addList: $('attendee-add-list'),
     addValueField: $('attendee-add-value-field'),
     addValueLabel: $('attendee-add-value-label'),
@@ -125,6 +293,9 @@ export function createEventDetail(ctx, host) {
     addError: $('attendee-add-error'),
     addSubmit: $('attendee-add-submit'),
     addCount: $('attendee-add-count'),
+    addResultDialog: $('attendee-add-result-dialog'),
+    addResultSummary: $('attendee-add-result-summary'),
+    addResultList: $('attendee-add-result-list'),
 
     removeDialog: $('attendee-remove-dialog'),
     removeForm: $('attendee-remove-form'),
@@ -150,11 +321,8 @@ export function createEventDetail(ctx, host) {
     // remains disabled until a later open() proves current state and clears
     // this lock, so stale buttons cannot repeat the completed mutation.
     refreshLocked: false,
-    // The add dialog's own state: who is ticked, and what is typed in its
-    // search box. Kept here rather than read off the DOM so a re-render of
-    // the list cannot lose a tick.
-    picked: new Set(),
-    query: '',
+    addRows: [],
+    addChoices: new Map(),
     // The record the Remove dialog is asking about. Held here rather than
     // closed over by a listener added per press, so the form is wired once.
     removing: null,
@@ -714,74 +882,174 @@ export function createEventDetail(ctx, host) {
   }
 
   // -------------------------------------------------------------------------
-  // Adding people by hand
+  // Adding attendance from a pasted list
   // -------------------------------------------------------------------------
-  //
-  // A sheet of paper with twelve names on it is the case this exists for, so
-  // the dialog takes as many at a time as an officer ticks. Each one is filed
-  // pending and the whole batch is approved in one review_records() call.
 
   function openAddDialog() {
-    state.picked = new Set();
-    state.query = '';
-    el.addSearch.value = '';
+    state.addRows = [];
+    state.addChoices = new Map();
+    el.addNames.value = '';
     el.addValue.value = '';
     setHidden(el.addError, true);
-
-    const offered = addableMembers(state.roster, state.records);
-    if (!offered.length) {
-      ctx.note('Everybody on the roster already has a record for this event.', 'warn');
-      return;
-    }
-
     setHidden(el.addValueField, !typed());
     el.addValueLabel.textContent = typedValueCategory(state.event) ?? 'Amount';
-
-    renderAddList();
+    renderAddPreview();
     el.addDialog.showModal();
-    el.addSearch.focus();
+    el.addNames.focus();
   }
 
-  function renderAddList() {
-    const needle = state.query.trim().toLowerCase();
-    const offered = addableMembers(state.roster, state.records).filter((member) =>
-      needle ? String(member.display_name).toLowerCase().includes(needle) : true,
-    );
+  function chooseAddMember(row, memberId) {
+    state.addChoices.set(row.row, {
+      kind: 'member',
+      member_id: memberId,
+      normalized_name: normaliseName(row.name),
+      source_text: el.addNames.value,
+    });
+    renderAddPreview();
+  }
 
-    el.addList.replaceChildren(
-      ...(offered.length
-        ? offered.map((member) =>
+  function leaveAddUnmatched(row) {
+    state.addChoices.set(row.row, {
+      kind: 'unmatched',
+      normalized_name: normaliseName(row.name),
+      source_text: el.addNames.value,
+    });
+    renderAddPreview();
+  }
+
+  function openSuggestedMember(memberId) {
+    el.addDialog.close();
+    ctx.openMember(memberId);
+  }
+
+  function reviewPreservedAttendance() {
+    el.addDialog.close();
+    ctx.openReview?.(state.event.id);
+  }
+
+  function addPreviewRow(row) {
+    const suggestions = row.status === 'choice'
+      ? h(
+          'div',
+          { class: 'attendance-paste-suggestions' },
+          ...row.suggestions.map((suggestion) =>
             h(
-              'label',
-              { class: 'attendee-pick' },
-              h('input', {
-                type: 'checkbox',
-                checked: state.picked.has(member.id),
-                onChange: (event) => {
-                  if (event.target.checked) state.picked.add(member.id);
-                  else state.picked.delete(member.id);
-                  renderAddCount();
+              'div',
+              { class: 'attendance-paste-suggestion' },
+              h('span', {}, suggestion.member.display_name),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'button button-small button-quiet',
+                  onClick: () => openSuggestedMember(suggestion.member.id),
                 },
-              }),
-              h('span', {}, member.display_name),
+                'Open member',
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'button button-small',
+                  onClick: () => chooseAddMember(row, suggestion.member.id),
+                },
+                'Link member',
+              ),
             ),
-          )
-        : [h('p', { class: 'muted small' }, 'No match on the roster.')]),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'button button-small',
+              onClick: () => leaveAddUnmatched(row),
+            },
+            'Not on roster',
+          ),
+        )
+      : null;
+    const review = row.needsReview
+      ? h(
+          'button',
+          { type: 'button', class: 'button button-small', onClick: reviewPreservedAttendance },
+          'Review',
+        )
+      : null;
+
+    return h(
+      'div',
+      { class: 'attendance-paste-row', dataset: { status: row.status, line: String(row.row) } },
+      h(
+        'span',
+        { class: 'attendance-paste-line', 'aria-label': `Line ${row.row}` },
+        String(row.row),
+      ),
+      h(
+        'span',
+        { class: 'attendance-paste-name' },
+        row.name ?? row.raw,
+        row.member && row.member.display_name !== row.name
+          ? h('span', { class: 'muted small' }, row.member.display_name)
+          : null,
+      ),
+      h('span', { class: 'attendance-paste-badge' }, row.label),
+      review,
+      suggestions,
     );
-    renderAddCount();
   }
 
-  function renderAddCount() {
-    el.addCount.textContent = state.picked.size
-      ? plural(state.picked.size, 'member')
-      : 'Nobody picked';
-    el.addSubmit.disabled = state.picked.size === 0;
+  function renderAddPreview() {
+    state.addRows = buildAttendancePastePreview(
+      el.addNames.value,
+      state.roster,
+      state.records,
+      state.addChoices,
+    );
+    el.addList.replaceChildren(...state.addRows.map(addPreviewRow));
+
+    const members = state.addRows.filter((row) => row.status === 'member').length;
+    const unmatched = state.addRows.filter((row) => row.status === 'unmatched').length;
+    const recorded = state.addRows.filter((row) => row.status === 'recorded').length;
+    const review = state.addRows.filter((row) =>
+      ['choice', 'invalid', 'repeated'].includes(row.status),
+    ).length;
+    el.addCount.textContent = [
+      plural(members, 'member'),
+      `${unmatched} not on roster`,
+      `${recorded} already recorded`,
+      `${review} needs review`,
+    ].join(' · ');
+    const unresolved = state.addRows.some((row) => row.status === 'choice');
+    const actionable = state.addRows.some((row) => ['member', 'unmatched'].includes(row.status));
+    el.addSubmit.disabled = unresolved || !actionable;
   }
 
-  async function addPicked(event) {
+  const batchEntries = () => {
+    const batchKey = globalThis.crypto?.randomUUID?.() ??
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return state.addRows.map((row) => ({
+      line: row.row,
+      claimed_name: row.name ?? row.raw,
+      disposition: row.disposition,
+      member_id: row.member?.id ?? null,
+      batch_key: batchKey,
+    }));
+  };
+
+  function outcomesCoverEntries(outcomes, entries) {
+    if (!Array.isArray(outcomes) || outcomes.length !== entries.length) return false;
+    const counts = new Map();
+    for (const outcome of outcomes) {
+      const line = Number(outcome?.line);
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+    }
+    return entries.every((entry) => counts.get(Number(entry.line)) === 1);
+  }
+
+  async function addPasted(event) {
     event.preventDefault();
-    const memberIds = [...state.picked];
-    if (!memberIds.length) return;
+    renderAddPreview();
+    if (el.addSubmit.disabled) return;
 
     const needsValue = typed();
     const value = Number(el.addValue.value);
@@ -792,74 +1060,100 @@ export function createEventDetail(ctx, host) {
       return;
     }
     setHidden(el.addError, true);
-    el.addDialog.close();
 
     ctx.clearMessage();
     setBusy(true);
     try {
-      // ONE CALL, ONE TRANSACTION. This used to be an insert followed by
-      // review_records(), and the gap between them was two bugs at once: an
-      // approval that failed after the insert committed left records nobody
-      // was told about sitting pending, and the decision about whether this
-      // event wants a typed number was made here, from an event row read when
-      // the screen opened. add_officer_attendance() reads event_categories
-      // itself, under a lock, and refuses rather than filing credit worth
-      // zero. See supabase/migrations/20260822100000_officer_attendance_entry.sql.
-      const recordsBeforeCall = new Set(state.records.map((row) => row.id));
-      let filed;
+      const entries = batchEntries();
+      const recordsBeforeCall = [...state.records];
+      let outcomes;
       try {
-        filed = await callRpc('add_officer_attendance', {
+        outcomes = await callRpc('add_officer_attendance_batch', {
           p_event_id: state.event.id,
-          p_member_ids: memberIds,
+          p_entries: entries,
           p_submitted_value: needsValue ? value : null,
         });
       } catch (err) {
-        if (
-          err instanceof NetworkError &&
-          (await addedRecordsWereFiled(memberIds, needsValue ? value : null, recordsBeforeCall))
-        ) {
-          filed = memberIds;
-        } else {
+        if (err instanceof NetworkError) {
+          outcomes = await recoverBatchOutcomes(entries, needsValue ? value : null, recordsBeforeCall);
+        }
+        if (!outcomes) {
           ctx.fail(err, null);
-          // Re-read the event after a definitive refusal. Its credit mode or
-          // attendance may have changed while the dialog was open.
           await reload();
           return;
         }
       }
 
-      const count = Array.isArray(filed) ? filed.length : memberIds.length;
-      await refreshAfterAttendanceChange(`${plural(count, 'member')} added`);
+      if (!outcomesCoverEntries(outcomes, entries)) {
+        ctx.note('Attendance result incomplete. Reload and check the event.', 'warn');
+        await reload();
+        return;
+      }
+
+      el.addDialog.close();
+      const added = outcomes.filter((row) => row.outcome === 'added').length;
+      const waiting = outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length;
+      await refreshAfterAttendanceChange(
+        `${added} added · ${waiting} waiting for member links`,
+        waiting ? 'warn' : 'ok',
+      );
+      showAddResults(outcomes);
     } finally {
       if (!state.refreshLocked) setBusy(false);
     }
   }
 
-  async function addedRecordsWereFiled(memberIds, submittedValue, recordsBeforeCall) {
+  async function recoverBatchOutcomes(entries, submittedValue, before) {
     try {
-      const rows = await select('attendance_records', {
-        select: 'id,member_id,status,source,submitted_value,reviewed_by',
-        filters: {
-          event_id: `eq.${state.event.id}`,
-          member_id: idFilter(memberIds),
-        },
+      try {
+        const outcomes = await callRpc('recover_officer_attendance_batch', {
+          p_event_id: state.event.id,
+          p_batch_key: entries[0]?.batch_key,
+        });
+        if (outcomesCoverEntries(outcomes, entries)) {
+          return outcomes;
+        }
+      } catch {
+        // The before snapshot below can still prove pre-existing live rows.
+      }
+
+      const current = await select('attendance_records', {
+        select: 'id,member_id,claimed_name,status,source,submitted_value,reviewed_by,flags',
+        filters: { event_id: `eq.${state.event.id}` },
       });
-      return memberIds.every((memberId) =>
-        rows.some(
-          (row) =>
-            !recordsBeforeCall.has(row.id) &&
-            row.member_id === memberId &&
-            row.status === 'approved' &&
-            row.source === 'officer_entry' &&
-            row.reviewed_by === ctx.userId &&
-            (submittedValue === null
-              ? row.submitted_value === null
-              : Number(row.submitted_value) === submittedValue),
-        ),
-      );
+      return reconstructAttendanceBatchOutcomes(entries, current, before, { submittedValue });
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  function showAddResults(outcomes) {
+    const labels = {
+      added: 'Added',
+      waiting_for_member_link: 'Waiting for member link',
+      already_recorded: 'Already recorded',
+      repeated: 'Repeated',
+      invalid: 'Needs full name',
+    };
+    const added = outcomes.filter((row) => row.outcome === 'added').length;
+    const waiting = outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length;
+    el.addResultSummary.textContent = `${added} added · ${waiting} waiting for member links`;
+    el.addResultList.replaceChildren(
+      ...outcomes.map((row) =>
+        h(
+          'div',
+          { class: 'attendance-paste-result', dataset: { outcome: row.outcome } },
+          h(
+            'span',
+            { class: 'attendance-paste-line', 'aria-label': `Line ${row.line}` },
+            String(row.line),
+          ),
+          h('span', { class: 'attendance-paste-name' }, row.claimed_name),
+          h('span', { class: 'attendance-paste-badge' }, labels[row.outcome] ?? 'Needs review'),
+        ),
+      ),
+    );
+    el.addResultDialog.showModal();
   }
 
   // -------------------------------------------------------------------------
@@ -955,15 +1249,15 @@ export function createEventDetail(ctx, host) {
     el.add.addEventListener('click', openAddDialog);
     el.exportCsv.addEventListener('click', exportAttendees);
 
-    el.addForm.addEventListener('submit', addPicked);
+    el.addForm.addEventListener('submit', addPasted);
     el.removeForm.addEventListener('submit', confirmRemove);
     el.deleteForm.addEventListener('submit', confirmDelete);
-    el.addSearch.addEventListener('input', () => {
-      state.query = el.addSearch.value;
-      renderAddList();
+    el.addNames.addEventListener('input', () => {
+      state.addChoices.clear();
+      renderAddPreview();
     });
 
-    for (const dialog of [el.addDialog, el.removeDialog, el.deleteDialog]) {
+    for (const dialog of [el.addDialog, el.addResultDialog, el.removeDialog, el.deleteDialog]) {
       dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
     }
     // Cancelling leaves nothing armed: a dialog dismissed with Esc closes

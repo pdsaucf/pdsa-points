@@ -1872,6 +1872,8 @@ await check('only the checked record gets linked, whichever one that is', async 
   assert.equal(linked.member_id, IDS.RETRO_MEMBER, 'the checked record was not linked');
   assert.equal(untouched.member_id, null, 'an unchecked record was linked anyway');
   assert.equal(alsoUntouched.member_id, null, 'an unchecked record was linked anyway');
+  const linkedRow = retroRows().find((row) => row.textContent.includes('Soap Carving'));
+  assert.ok(dom.buttonNamed(linkedRow, 'Review'), 'a linked record has no next action');
 });
 
 await check('a record decided elsewhere while linking was in progress reports its own outcome', async () => {
@@ -2070,6 +2072,35 @@ await check('a CSV import surfaces earlier check-ins as a quiet, separate zone',
   // separate check: navigating away a second time to observe it would only
   // prove the same call happened twice.
   assert.equal(dom.$('import-retro').hidden, true, 'the zone survived the navigation that clears it');
+});
+
+await check('roster Paste names surfaces officer-entered unmatched attendance', async () => {
+  dom.click(dom.$('tab-roster'));
+  await until(() => rosterRows().length > 0, 'the roster never drew');
+
+  const outcomes = await callRpc('add_officer_attendance_batch', {
+    p_event_id: IDS.EVENT_GBM,
+    p_entries: [
+      {
+        line: 1,
+        claimed_name: 'Peregrine Pastepath',
+        disposition: 'unmatched',
+        member_id: null,
+      },
+    ],
+    p_submitted_value: null,
+  });
+  assert.equal(outcomes[0].outcome, 'waiting_for_member_link');
+
+  const before = rosterRows().length;
+  dom.click(dom.$('roster-paste'));
+  dom.$('paste-names').value = 'Peregrine Pastepath';
+  dom.fire(dom.$('paste-form'), 'submit');
+  await until(() => rosterRows().length === before + 1, 'the pasted member never landed');
+  await until(() => !dom.$('import-retro').hidden, 'the pasted member did not surface earlier attendance');
+  assert.match(dom.$('import-retro-list').textContent, /Peregrine Pastepath/);
+  assert.match(dom.$('import-retro-list').textContent, /1 earlier check-in/);
+  dom.$('paste-result-dialog').close();
 });
 
 await check(

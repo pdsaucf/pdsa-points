@@ -2216,6 +2216,10 @@ export const ADMIN_RPC = {
       pds(res, 'PDS03', 'This event does not collect a number.');
       return;
     }
+    if (value !== null && (!Number.isFinite(Number(value)) || Number(value) < 0)) {
+      pds(res, 'PDS03', 'Type a number that is zero or greater.');
+      return;
+    }
 
     const missing = memberIds.filter(
       (id) => !db.members.some((m) => m.id === id && !m.archived_at && !m.merged_into_id),
@@ -2279,6 +2283,238 @@ export const ADMIN_RPC = {
 
     if (dropCommittedResponse(res, 'add_officer_attendance')) return;
     json(res, 200, ids);
+  },
+
+  /** add_officer_attendance_batch(event, entries, value) returns jsonb */
+  add_officer_attendance_batch(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+
+    if (!isOfficer(auth)) {
+      record({ fn: 'add_officer_attendance_batch', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const entries = Array.isArray(body.p_entries) ? body.p_entries : [];
+    if (!entries.length || entries.length > 500) {
+      pds(res, 'PDS03', entries.length ? 'Paste no more than 500 names at once.' : 'Paste at least one name.');
+      return;
+    }
+    const event = db.events.find((row) => row.id === body.p_event_id);
+    if (!event) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+
+    const wantsValue = db.event_categories.some(
+      (link) => link.event_id === event.id && link.credit_mode === 'from_submission',
+    );
+    const value = body.p_submitted_value ?? null;
+    if (wantsValue && value === null) {
+      pds(res, 'PDS03', 'This event asks the member for a number, so one is required.');
+      return;
+    }
+    if (!wantsValue && value !== null) {
+      pds(res, 'PDS03', 'This event does not collect a number.');
+      return;
+    }
+    if (value !== null && (!Number.isFinite(Number(value)) || Number(value) < 0)) {
+      pds(res, 'PDS03', 'Type a number that is zero or greater.');
+      return;
+    }
+
+    const seenMembers = new Set();
+    const seenNames = new Set();
+    const outcomes = [];
+    const addedIds = [];
+    const now = new Date().toISOString();
+
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index] ?? {};
+      const line = Number.isInteger(Number(entry.line)) ? Number(entry.line) : index + 1;
+      const claimedName = String(entry.claimed_name ?? '').trim().replace(/\s+/g, ' ');
+      const norm = normaliseName(claimedName);
+      const base = { line, claimed_name: claimedName, record_id: null, member_id: entry.member_id ?? null };
+
+      if (entry.disposition === 'repeated') {
+        outcomes.push({ ...base, outcome: 'repeated' });
+        continue;
+      }
+      if (
+        entry.disposition === 'invalid' ||
+        !norm ||
+        norm.split(' ').length < 2 ||
+        !['member', 'unmatched'].includes(entry.disposition)
+      ) {
+        outcomes.push({ ...base, outcome: 'invalid' });
+        continue;
+      }
+
+      if (entry.disposition === 'member') {
+        const member = db.members.find(
+          (row) => row.id === entry.member_id && !row.archived_at && !row.merged_into_id,
+        );
+        const enrolled = member && db.member_enrollments.some(
+          (row) => row.member_id === member.id && row.academic_year_id === event.academic_year_id,
+        );
+        if (!member || !enrolled) {
+          outcomes.push({ ...base, outcome: 'invalid' });
+          continue;
+        }
+        if (seenMembers.has(member.id)) {
+          outcomes.push({ ...base, outcome: 'repeated', member_id: member.id });
+          continue;
+        }
+        seenMembers.add(member.id);
+
+        const preserved = db.attendance_records.find(
+          (row) =>
+            row.event_id === event.id &&
+            row.member_id === null &&
+            row.status !== 'rejected' &&
+            normaliseName(row.claimed_name) === norm,
+        );
+        if (preserved) {
+          outcomes.push({
+            ...base,
+            outcome: 'already_recorded',
+            record_id: preserved.id,
+            member_id: member.id,
+          });
+          continue;
+        }
+
+        const existing = db.attendance_records.find(
+          (row) => row.event_id === event.id && row.member_id === member.id && row.status !== 'rejected',
+        );
+        if (existing) {
+          outcomes.push({
+            ...base,
+            outcome: 'already_recorded',
+            record_id: existing.id,
+            member_id: member.id,
+          });
+          continue;
+        }
+
+        const row = {
+          id: uuid('r8100000-0000-4000-a000-'),
+          event_id: event.id,
+          member_id: member.id,
+          claimed_name: claimedName,
+          claimed_email: null,
+          status: 'approved',
+          source: 'officer_entry',
+          submitted_value: value,
+          flags: [],
+          submitted_at: now,
+          reviewed_by: auth.userId,
+          reviewed_at: now,
+          review_note: null,
+          created_at: now,
+        };
+        db.attendance_records.push(row);
+        addedIds.push(row.id);
+        outcomes.push({ ...base, outcome: 'added', record_id: row.id, member_id: member.id });
+        continue;
+      }
+
+      if (seenNames.has(norm)) {
+        outcomes.push({ ...base, outcome: 'repeated', member_id: null });
+        continue;
+      }
+      seenNames.add(norm);
+      const existing = db.attendance_records.find(
+        (row) =>
+          row.event_id === event.id &&
+          row.member_id === null &&
+          row.status !== 'rejected' &&
+          normaliseName(row.claimed_name) === norm,
+      );
+      if (existing) {
+        outcomes.push({ ...base, outcome: 'already_recorded', record_id: existing.id, member_id: null });
+        continue;
+      }
+
+      const row = {
+        id: uuid('r8200000-0000-4000-a000-'),
+        event_id: event.id,
+        member_id: null,
+        claimed_name: claimedName,
+        claimed_email: null,
+        status: 'pending',
+        source: 'officer_entry',
+        submitted_value: value,
+        flags: ['unmatched_name'],
+        submitted_at: now,
+        reviewed_by: null,
+        reviewed_at: null,
+        review_note: null,
+        created_at: now,
+      };
+      db.attendance_records.push(row);
+      outcomes.push({ ...base, outcome: 'waiting_for_member_link', record_id: row.id, member_id: null });
+    }
+
+    audit(auth, 'add_officer_attendance_batch', 'attendance_record', null, {
+      event_id: event.id,
+      batch_key: entries[0]?.batch_key ?? null,
+      submitted_value: value,
+      added: addedIds.length,
+      waiting: outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length,
+      outcomes,
+    });
+    record({
+      fn: 'add_officer_attendance_batch',
+      actor: auth.userId,
+      eventId: event.id,
+      count: entries.length,
+      added: addedIds.length,
+      waiting: outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length,
+      submittedValue: value,
+      outcomes,
+    });
+
+    if (dropCommittedResponse(res, 'add_officer_attendance_batch')) return;
+    json(res, 200, outcomes);
+  },
+
+  /** Returns only the current officer own committed batch result. */
+  recover_officer_attendance_batch(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      record({
+        fn: 'recover_officer_attendance_batch',
+        outcome: 'PDS07',
+        role: auth.role ?? auth.kind,
+      });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const eventId = body.p_event_id;
+    const batchKey = String(body.p_batch_key ?? '').trim();
+    if (!eventId || !batchKey) {
+      pds(res, 'PDS03', 'A batch key and event are required.');
+      return;
+    }
+    const auditRow = [...db.audit_log].reverse().find(
+      (row) =>
+        row.actor_user_id === auth.userId &&
+        row.action === 'add_officer_attendance_batch' &&
+        row.detail?.event_id === eventId &&
+        row.detail?.batch_key === batchKey,
+    );
+    record({
+      fn: 'recover_officer_attendance_batch',
+      actor: auth.userId,
+      eventId,
+      batchKey,
+      found: Boolean(auditRow),
+    });
+    json(res, 200, auditRow?.detail?.outcomes ?? null);
   },
 
   /**

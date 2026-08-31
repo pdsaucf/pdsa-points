@@ -60,7 +60,10 @@ import { normaliseName, rankMembers, similarity } from './match.js';
 import { csvFilename, downloadCsv, readRoster } from './csv.js';
 import { firstJoinedIndex } from './joined.js';
 import { createCandidatePicker, loadCandidates as loadRetroCandidates } from './retro.js';
+import { parsePastedNames } from './name-parser.js';
 import { $, h, announce, setHidden, plural, monthYear } from './ui.js';
+
+export { parsePastedNames } from './name-parser.js';
 
 // Above this, an incoming name is close enough to somebody on the roster that
 // an officer has to look.
@@ -131,61 +134,6 @@ const DUPLICATE_REASON = {
  *   repeated: Array<{name: string, row: number}>,
  *   unusable: Array<{raw: string, row: number, why: string}>}}
  */
-export function parsePastedNames(text) {
-  const people = [];
-  const repeated = [];
-  const unusable = [];
-  const seen = new Map(); // normalised name -> the line it first arrived on
-
-  String(text ?? '')
-    .split(/\r?\n/)
-    .forEach((line, index) => {
-      const row = index + 1;
-      // Bullets, "1.", "1)", and a trailing comma from a pasted list.
-      const cleaned = line
-        .replace(/^\s*(?:[-*•·]|\d+[.)])\s*/, '')
-        .replace(/[,;]\s*$/, '')
-        .trim()
-        .replace(/\s+/g, ' ');
-      if (!cleaned) return;
-
-      const [first, last] = splitName(cleaned);
-      if (!first || !last) {
-        unusable.push({ raw: cleaned, row, why: 'Needs a first and last name' });
-        return;
-      }
-
-      const key = `${first} ${last}`.toLowerCase();
-      if (seen.has(key)) {
-        repeated.push({ name: `${first} ${last}`, row });
-        return;
-      }
-      seen.set(key, row);
-      people.push({ first_name: first, last_name: last, row });
-    });
-
-  return { people, repeated, unusable };
-}
-
-/**
- * 'Marcus Bell' and 'Bell, Marcus' are the same person written two ways.
- *
- * A comma means a spreadsheet wrote it last-name-first. Without one, the first
- * word is the first name and everything after it is the surname, so "Maria de
- * la Cruz" keeps her whole name instead of losing two thirds of it.
- */
-function splitName(cleaned) {
-  const comma = cleaned.indexOf(',');
-  if (comma > 0) {
-    const last = cleaned.slice(0, comma).trim();
-    const first = cleaned.slice(comma + 1).trim();
-    return [first, last];
-  }
-  const parts = cleaned.split(' ');
-  if (parts.length < 2) return [cleaned, ''];
-  return [parts[0], parts.slice(1).join(' ')];
-}
-
 /**
  * Every incoming row, matched against the roster, with what would happen to it.
  *
@@ -918,6 +866,7 @@ export function createRoster(ctx) {
     }
     setHidden(el.pasteError, true);
     el.pasteDialog.close();
+    const scanToken = ++state.retroScanToken;
 
     // Same tiers as the import preview, with no address to match on, so an
     // exact hit means somebody on file already carries this exact name.
@@ -944,6 +893,7 @@ export function createRoster(ctx) {
     const added = [];
     const returning = [];
     const refused = [];
+    const linkedIds = new Set();
     let unknown = 0;
 
     setBusy(true);
@@ -966,6 +916,7 @@ export function createRoster(ctx) {
             refused.push({ name: row.name, message: result.message ?? '' });
             return;
           }
+          if (result?.member_id) linkedIds.add(result.member_id);
           (result?.was_created ? added : returning).push(row.name);
         });
       }
@@ -991,6 +942,7 @@ export function createRoster(ctx) {
       refused,
       unknown,
     });
+    if (linkedIds.size) scanImportRetro([...linkedIds], scanToken);
   }
 
   /**

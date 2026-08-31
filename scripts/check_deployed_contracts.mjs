@@ -40,6 +40,21 @@ const ADMIN_RPC_PROBES = [
     name: 'remove_attendance_record',
     args: { p_record_id: '00000000-0000-4000-a000-000000000001' },
   },
+  {
+    name: 'add_officer_attendance_batch',
+    args: {
+      p_event_id: '00000000-0000-4000-a000-000000000001',
+      p_entries: [],
+      p_submitted_value: null,
+    },
+  },
+  {
+    name: 'recover_officer_attendance_batch',
+    args: {
+      p_event_id: '00000000-0000-4000-a000-000000000001',
+      p_batch_key: 'deployment-contract-probe',
+    },
+  },
 ];
 
 const EXPECTED_DENIALS = new Set(['42501', 'PDS07']);

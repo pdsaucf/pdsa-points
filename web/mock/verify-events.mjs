@@ -127,6 +127,10 @@ const {
   buildCheckinUrl,
 } = await import('../src/events-model.js');
 const { encodeQR, formatBits, ECC_TABLE_M } = await import('../src/qr.js');
+const {
+  buildAttendancePastePreview,
+  reconstructAttendanceBatchOutcomes,
+} = await import('../src/event-detail.js');
 
 let failures = 0;
 async function check(name, fn) {
@@ -1097,6 +1101,39 @@ await check('a read-only RPC retries when its response body is lost', async () =
   assert.equal(restoreFetch.calls(), 2, 'the read-only RPC did not retry exactly once');
 });
 
+await check('attendance batch recovery is a retryable authoritative read', async () => {
+  const batchKey = 'mock-recovery-read';
+  await callRpc('add_officer_attendance_batch', {
+    p_event_id: IDS.EVENT_GKAS,
+    p_entries: [{
+      line: 1,
+      claimed_name: 'One',
+      disposition: 'invalid',
+      member_id: null,
+      batch_key: batchKey,
+    }],
+    p_submitted_value: 0,
+  });
+  const restoreFetch = dropRpcBodyOnce('recover_officer_attendance_batch');
+  try {
+    const outcomes = await callRpc('recover_officer_attendance_batch', {
+      p_event_id: IDS.EVENT_GKAS,
+      p_batch_key: batchKey,
+    }, { sleep: async () => {} });
+    assert.deepEqual(outcomes.map((row) => row.outcome), ['invalid']);
+  } finally {
+    restoreFetch();
+  }
+  assert.equal(restoreFetch.calls(), 2, 'batch recovery was not retried as a read');
+  assert.equal(
+    await callRpc('recover_officer_attendance_batch', {
+      p_event_id: IDS.EVENT_GKAS,
+      p_batch_key: 'missing-key',
+    }),
+    null,
+  );
+});
+
 await check('the events list draws the year, and last year stays out of it', () => {
   const titles = rowTitles();
   assert.ok(titles.includes('Spring GBM 5'), `Spring GBM 5 is missing: ${titles.join(', ')}`);
@@ -1697,6 +1734,27 @@ process.stdout.write('\nfiling the paper sign-in sheet\n');
 await backToList();
 await openEvent('Give Kids A Smile');
 
+await check('the batch mock rejects negative and nonfinite values before writes', async () => {
+  const before = (await adminAudit()).attendance.length;
+  for (const value of [-1, 'NaN']) {
+    await assert.rejects(
+      () => callRpc('add_officer_attendance_batch', {
+        p_event_id: IDS.EVENT_GKAS,
+        p_entries: [{
+          line: 1,
+          claimed_name: 'Rejected Value',
+          disposition: 'unmatched',
+          member_id: null,
+          batch_key: `rejected-${value}`,
+        }],
+        p_submitted_value: value,
+      }),
+      RpcError,
+    );
+  }
+  assert.equal((await adminAudit()).attendance.length, before);
+});
+
 await check('event bulk approval excludes member-entered points', async () => {
   const [enteredMember, routineMember] = await insert('members', [
     { first_name: 'Entered', last_name: 'Control' },
@@ -1746,44 +1804,149 @@ await check('event bulk approval excludes member-entered points', async () => {
   assert.equal(rows.find((row) => row.id === entered.id)?.status, 'approved');
 });
 
-const pickerNames = () =>
-  dom.$('attendee-add-list').querySelectorAll('.attendee-pick').map((row) => row.textContent.trim());
+const attendancePasteRows = () =>
+  dom.$('attendee-add-list').querySelectorAll('.attendance-paste-row');
 
-await check('the add dialog leaves out anybody who already has a live record', () => {
-  dom.click(dom.$('attendee-add'));
-  const offered = pickerNames();
-  assert.ok(offered.length > 5, `only ${offered.length} members offered`);
-  // Grace Okonkwo holds a pending record on this event, and the database
-  // allows exactly one that is not declined.
-  assert.ok(
-    !offered.some((name) => name.includes('Grace Okonkwo')),
-    'somebody who already has a record for this event was offered again',
+function pasteAttendance(text) {
+  const input = dom.$('attendee-add-names');
+  input.value = text;
+  dom.fire(input, 'input');
+}
+
+await check('paste choices are bound to the exact text and normalized name', () => {
+  const roster = [
+    { id: 'abby', display_name: 'Abby Catto' },
+    { id: 'abigail', display_name: 'Abigail Catto' },
+    { id: 'marcus', display_name: 'Marcus Bell' },
+  ];
+  const memberChoice = new Map([[1, {
+    kind: 'member',
+    member_id: 'abby',
+    normalized_name: 'abby cato',
+    source_text: 'Abby Cato',
+  }]]);
+  const inserted = buildAttendancePastePreview('Marcus Bell\nAbby Cato', roster, [], memberChoice);
+  assert.equal(inserted[0].member.id, 'marcus', 'an inserted line inherited the old member choice');
+  assert.equal(inserted[1].status, 'choice', 'the moved line retained its old member choice');
+
+  const unmatchedChoice = new Map([[1, {
+    kind: 'unmatched',
+    normalized_name: 'abby cato',
+    source_text: 'Abby Cato',
+  }]]);
+  const newlyExact = buildAttendancePastePreview(
+    'Abby Cato',
+    [...roster, { id: 'exact', display_name: 'Abby Cato' }],
+    [],
+    unmatchedChoice,
   );
+  assert.equal(newlyExact[0].status, 'member');
+  assert.equal(newlyExact[0].member.id, 'exact', 'Not on roster overrode a new exact match');
+});
+
+await check('editing, inserting, deleting, or reordering clears paste choices', () => {
+  dom.click(dom.$('attendee-add'));
+  pasteAttendance('Abby Cato\nTalia Newcomer');
+  let rows = attendancePasteRows();
+  dom.click(dom.buttonNamed(rows[0], 'Link member'));
+  assert.equal(attendancePasteRows()[0].dataset.status, 'member');
+
+  pasteAttendance('Talia Newcomer\nAbby Cato');
+  rows = attendancePasteRows();
+  assert.equal(rows[1].dataset.status, 'choice', 'reordering retained a member choice');
+
+  dom.click(dom.buttonNamed(rows[1], 'Not on roster'));
+  assert.equal(attendancePasteRows()[1].dataset.status, 'unmatched');
+  pasteAttendance('Marcus Bell\nTalia Newcomer\nAbby Cato');
+  rows = attendancePasteRows();
+  assert.equal(rows[0].dataset.status, 'member');
+  assert.equal(rows[2].dataset.status, 'choice', 'insertion retained Not on roster');
+
+  pasteAttendance('Abby Cato');
+  assert.equal(attendancePasteRows()[0].dataset.status, 'choice', 'deletion retained a stale choice');
+  pasteAttendance('Marcus Bell');
+  assert.equal(attendancePasteRows()[0].dataset.status, 'member', 'an edit retained a stale choice');
+  dom.$('attendee-add-dialog').close();
+});
+
+await check('duplicate exact names offer distinct member targets before linking', async () => {
+  const [older, newer] = await insert('members', [
+    { first_name: 'Same', last_name: 'Person' },
+    { first_name: 'Same', last_name: 'Person' },
+  ]);
+  await insert('member_enrollments', [
+    {
+      member_id: older.id,
+      academic_year_id: IDS.YEAR_CURRENT,
+      status: 'active',
+      joined_on: '2024-01-05',
+    },
+    {
+      member_id: newer.id,
+      academic_year_id: IDS.YEAR_CURRENT,
+      status: 'active',
+      joined_on: '2025-02-05',
+    },
+  ]);
+  await backToList();
+  await openEvent('Give Kids A Smile');
+
+  const openCandidate = async (index, joined) => {
+    dom.click(dom.$('attendee-add'));
+    pasteAttendance('Same Person');
+    const row = attendancePasteRows()[0];
+    assert.equal(row.dataset.status, 'choice', 'duplicate exact names were selected blindly');
+    const suggestions = row.querySelectorAll('.attendance-paste-suggestion');
+    assert.equal(suggestions.length, 2);
+    assert.equal(suggestions[index].textContent.includes('Link member'), true);
+    dom.click(dom.buttonNamed(suggestions[index], 'Open member'));
+    assert.equal(dom.$('attendee-add-dialog').open, false, 'Open member left the paste modal open');
+    await until(() => !dom.$('member-body').hidden, 'the selected member did not open');
+    assert.match(dom.$('member-meta').textContent, joined);
+    dom.click(dom.$('member-back'));
+    await until(() => !dom.$('event-detail-body').hidden, 'Back did not return to the event');
+  };
+
+  await openCandidate(0, /Joined Jan 2024/);
+  await openCandidate(1, /Joined Feb 2025/);
+});
+
+await check('every pasted line has a visible outcome, including ambiguity and an existing record', () => {
+  dom.click(dom.$('attendee-add'));
+  pasteAttendance([
+    'Marcus Bell',
+    'Talia Newcomer',
+    'Talia Newcomer',
+    'Bob',
+    'Abby Cato',
+    'Grace Okonkwo',
+  ].join('\n'));
+
+  const rows = attendancePasteRows();
+  assert.equal(rows.length, 6);
+  assert.deepEqual(rows.map((row) => row.dataset.status), [
+    'member',
+    'unmatched',
+    'repeated',
+    'invalid',
+    'choice',
+    'recorded',
+  ]);
+  assert.match(rows[2].textContent, /Repeated/);
+  assert.match(rows[3].textContent, /Needs full name/);
+  assert.match(rows[4].textContent, /Choose member/);
+  assert.match(rows[5].textContent, /Already recorded/);
+  assert.equal(dom.$('attendee-add-submit').disabled, true, 'an ambiguous name could be submitted without a choice');
+
+  dom.click(dom.buttonNamed(rows[4], 'Not on roster'));
+  assert.equal(attendancePasteRows()[4].dataset.status, 'unmatched');
+  assert.equal(dom.$('attendee-add-submit').disabled, false);
+  assert.match(dom.$('attendee-add-count').textContent, /1 member · 2 not on roster · 1 already recorded · 2 needs review/);
 });
 
 await check("the number an event collects is labelled by the category, not by the word 'hours'", () => {
   assert.ok(!dom.$('attendee-add-value-field').hidden, 'the number field is not shown on an event that collects one');
   assert.equal(dom.$('attendee-add-value-label').textContent, 'Volunteering');
-});
-
-await check('the picker searches, and a tick survives the search that hid it', () => {
-  const search = dom.$('attendee-add-search');
-  search.value = 'marcus';
-  dom.fire(search, 'input');
-  const narrowed = pickerNames();
-  assert.ok(narrowed.length >= 1 && narrowed.every((name) => /marcus/i.test(name)), `search showed: ${narrowed.join(', ')}`);
-
-  dom.$('attendee-add-list').querySelectorAll('input')[0].checked = true;
-  dom.fire(dom.$('attendee-add-list').querySelectorAll('input')[0], 'change');
-  assert.match(dom.$('attendee-add-count').textContent, /1 member/);
-
-  search.value = 'leah';
-  dom.fire(search, 'input');
-  assert.match(dom.$('attendee-add-count').textContent, /1 member/, 'searching lost the tick');
-
-  dom.$('attendee-add-list').querySelectorAll('input')[0].checked = true;
-  dom.fire(dom.$('attendee-add-list').querySelectorAll('input')[0], 'change');
-  assert.match(dom.$('attendee-add-count').textContent, /2 members/);
 });
 
 await check('adding goes through one call, not an insert the approval can be lost after', async () => {
@@ -1794,9 +1957,11 @@ await check('adding goes through one call, not an insert the approval can be los
   await settle();
 
   const calls = (await adminAudit()).calls.slice(before);
-  const filedCall = calls.find((call) => call.fn === 'add_officer_attendance');
-  assert.ok(filedCall, `add_officer_attendance was never called: ${calls.map((c) => c.fn).join(', ')}`);
-  assert.equal(filedCall.count, 2);
+  const filedCall = calls.find((call) => call.fn === 'add_officer_attendance_batch');
+  assert.ok(filedCall, `add_officer_attendance_batch was never called: ${calls.map((c) => c.fn).join(', ')}`);
+  assert.equal(filedCall.count, 6);
+  assert.equal(filedCall.added, 1);
+  assert.equal(filedCall.waiting, 2);
   assert.equal(Number(filedCall.submittedValue), 2.5);
 
   // The two-call shape is what this replaced. A direct insert into
@@ -1812,44 +1977,114 @@ await check('adding goes through one call, not an insert the approval can be los
     select: 'status,source,submitted_value,reviewed_by',
     filters: { event_id: `eq.${IDS.EVENT_GKAS}`, source: 'eq.officer_entry' },
   });
-  assert.equal(filed.length, 2, `${filed.length} officer entries were written`);
+  assert.equal(filed.length, 3, `${filed.length} officer entries were written`);
+  assert.equal(filed.filter((row) => row.status === 'approved').length, 1);
+  assert.equal(filed.filter((row) => row.status === 'pending').length, 2);
   for (const row of filed) {
-    assert.equal(row.status, 'approved', 'an officer entry did not end up approved');
     assert.equal(Number(row.submitted_value), 2.5, 'the number typed was not written');
-    assert.ok(row.reviewed_by, 'the record carries no reviewer');
   }
+  assert.ok(filed.find((row) => row.status === 'approved').reviewed_by, 'the member record carries no reviewer');
 
   const names = attendeeNames();
   assert.ok(names.some((name) => name.includes('Marcus Bell')), `Marcus Bell is not on the list: ${names.join(', ')}`);
+  assert.equal(dom.$('attendee-add-result-list').querySelectorAll('.attendance-paste-result').length, 6);
+  assert.equal(dom.$('attendee-add-result-summary').textContent, '1 added · 2 waiting for member links');
+  dom.$('attendee-add-result-dialog').close();
+});
+
+await check('a preserved unmatched name becomes a Review action after enrollment', async () => {
+  dom.click(dom.$('attendee-add'));
+  pasteAttendance('Preserved Browser');
+  dom.$('attendee-add-value').value = '1';
+  dom.fire(dom.$('attendee-add-form'), 'submit');
+  await settle();
+  dom.$('attendee-add-result-dialog').close();
+
+  const before = await adminAudit();
+  const preserved = before.attendance.find(
+    (row) => row.event_id === IDS.EVENT_GKAS && row.claimed_name === 'Preserved Browser',
+  );
+  assert.ok(preserved, 'the unmatched row was not preserved');
+  assert.equal(preserved.status, 'pending');
+  assert.equal(preserved.member_id, null);
+
+  const [member] = await insert('members', [
+    { first_name: 'Preserved', last_name: 'Browser' },
+  ]);
+  await insert('member_enrollments', [{
+    member_id: member.id,
+    academic_year_id: IDS.YEAR_CURRENT,
+    status: 'active',
+  }]);
+  const staleOutcomes = await callRpc('add_officer_attendance_batch', {
+    p_event_id: IDS.EVENT_GKAS,
+    p_entries: [{
+      line: 1,
+      claimed_name: 'Preserved Browser',
+      disposition: 'member',
+      member_id: member.id,
+      batch_key: 'preserved-browser-stale-client',
+    }],
+    p_submitted_value: 1,
+  });
+  assert.equal(staleOutcomes[0].outcome, 'already_recorded');
+  assert.equal(staleOutcomes[0].record_id, preserved.id);
+  await backToList();
+  await openEvent('Give Kids A Smile');
+
+  dom.click(dom.$('attendee-add'));
+  pasteAttendance('Preserved Browser');
+  const row = attendancePasteRows()[0];
+  assert.equal(row.dataset.status, 'recorded');
+  assert.match(row.textContent, /Needs review/);
+  assert.equal(dom.$('attendee-add-submit').disabled, true, 'the preserved row could be submitted');
+  dom.click(dom.buttonNamed(row, 'Review'));
+  assert.equal(dom.$('attendee-add-dialog').open, false, 'Review left the paste modal open');
+  await until(() => !dom.$('panel-review').hidden, 'Review did not open the event review flow');
+
+  const after = await adminAudit();
+  const sameName = after.attendance.filter(
+    (candidate) =>
+      candidate.event_id === IDS.EVENT_GKAS &&
+      String(candidate.claimed_name ?? '').toLowerCase() === 'preserved browser',
+  );
+  assert.equal(sameName.length, 1, 'same-name paste created a second attendance row');
+  assert.equal(sameName[0].status, 'pending', 'same-name paste approved the preserved row');
+  dom.click(dom.$('tab-events'));
+  await until(() => !dom.$('event-detail-body').hidden, 'Events did not return to the open event');
 });
 
 await check('Add reconciles a committed call whose response was lost', async () => {
   const before = await adminAudit();
   const beforeCalls = before.calls.length;
   const beforeAudits = before.auditLog.filter(
-    (entry) => entry.action === 'add_officer_attendance',
+    (entry) => entry.action === 'add_officer_attendance_batch',
   ).length;
   const beforeFiled = before.attendance.filter(
     (row) => row.event_id === IDS.EVENT_GKAS && row.source === 'officer_entry',
   ).length;
 
   dom.click(dom.$('attendee-add'));
-  const picked = dom.$('attendee-add-list').querySelectorAll('input')[0];
-  assert.ok(picked, 'there is nobody left to add');
-  picked.checked = true;
-  dom.fire(picked, 'change');
+  // Grace already holds a self_checkin with 3.5. This batch sends 1.5, so
+  // recovery must recognize the before snapshot without requiring the old
+  // row to be an officer entry or to carry this calls value.
+  pasteAttendance('Grace Okonkwo\nLeah Ortiz\nNora Response');
   dom.$('attendee-add-value').value = '1.5';
-  dropRpcResponseOnce('add_officer_attendance');
+  dropRpcResponseOnce('add_officer_attendance_batch');
   dom.fire(dom.$('attendee-add-form'), 'submit');
   await settle();
 
   const after = await adminAudit();
   const mutationCalls = after.calls
     .slice(beforeCalls)
-    .filter((call) => call.fn === 'add_officer_attendance' && call.actor);
+    .filter((call) => call.fn === 'add_officer_attendance_batch' && call.actor);
   assert.equal(mutationCalls.length, 1, 'Add retried after its committed response was lost');
+  assert.ok(
+    after.calls.slice(beforeCalls).some((call) => call.fn === 'recover_officer_attendance_batch'),
+    'Add did not recover through the authoritative batch RPC',
+  );
   assert.equal(
-    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance').length,
+    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance_batch').length,
     beforeAudits + 1,
     'Add wrote more than one audit row',
   );
@@ -1857,21 +2092,91 @@ await check('Add reconciles a committed call whose response was lost', async () 
     after.attendance.filter(
       (row) => row.event_id === IDS.EVENT_GKAS && row.source === 'officer_entry',
     ).length,
-    beforeFiled + 1,
-    'Add did not leave exactly one new record',
+    beforeFiled + 2,
+    'Add did not leave exactly two new records',
   );
-  assert.equal(dom.$('screen-message-title').textContent, '1 member added');
+  assert.equal(dom.$('screen-message-title').textContent, '1 added · 1 waiting for member links');
+  const resultOutcomes = dom.$('attendee-add-result-list')
+    .querySelectorAll('.attendance-paste-result')
+    .map((row) => row.dataset.outcome);
+  assert.deepEqual(resultOutcomes, ['already_recorded', 'added', 'waiting_for_member_link']);
   assert.ok(
     after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
     'Add did not refresh member-derived views',
   );
+  dom.$('attendee-add-result-dialog').close();
+});
+
+await check('snapshot recovery repeats a second spelling of a pre-existing member', () => {
+  const memberId = 'm-same-member';
+  const entries = [
+    { line: 1, claimed_name: 'Jonathan Pak', disposition: 'member', member_id: memberId },
+    { line: 2, claimed_name: 'Jonathon Pak', disposition: 'member', member_id: memberId },
+  ];
+  const before = [
+    {
+      id: 'record-old',
+      member_id: memberId,
+      status: 'pending',
+      source: 'self_checkin',
+    },
+  ];
+  const outcomes = reconstructAttendanceBatchOutcomes(entries, before, before);
+  assert.deepEqual(outcomes.map((row) => row.outcome), ['already_recorded', 'repeated']);
+});
+
+await check('snapshot recovery never attributes a new matched row to the batch', () => {
+  const entries = [
+    { line: 1, claimed_name: 'Grace Okonkwo', disposition: 'member', member_id: 'member-old' },
+    { line: 2, claimed_name: 'Leah Ortiz', disposition: 'member', member_id: 'member-new' },
+  ];
+  const before = [
+    {
+      id: 'record-old',
+      member_id: 'member-old',
+      status: 'pending',
+      source: 'self_checkin',
+      submitted_value: 99,
+    },
+  ];
+  const current = [
+    ...before,
+    {
+      id: 'record-new',
+      member_id: 'member-new',
+      status: 'approved',
+      source: 'officer_entry',
+      submitted_value: 2,
+      reviewed_by: 'officer-id',
+    },
+  ];
+  const outcomes = reconstructAttendanceBatchOutcomes(entries, current, before);
+  assert.equal(outcomes, null);
+});
+
+await check('lost-response reconstruction does not claim an unrelated concurrent unmatched row', () => {
+  const outcomes = reconstructAttendanceBatchOutcomes(
+    [{ line: 1, claimed_name: 'Nora Response', disposition: 'unmatched', member_id: null }],
+    [{
+      id: 'other-row',
+      member_id: null,
+      claimed_name: 'Nora Response',
+      status: 'pending',
+      source: 'officer_entry',
+      submitted_value: 2,
+      flags: ['unmatched_name'],
+    }],
+    [],
+    { submittedValue: 2, userId: 'officer-id' },
+  );
+  assert.equal(outcomes, null);
 });
 
 await check('Add reconciles a committed call whose response body was lost', async () => {
   const before = await adminAudit();
   const beforeCalls = before.calls.length;
   const beforeAudits = before.auditLog.filter(
-    (entry) => entry.action === 'add_officer_attendance',
+    (entry) => entry.action === 'add_officer_attendance_batch',
   ).length;
   const beforeIds = new Set(
     before.attendance
@@ -1880,12 +2185,9 @@ await check('Add reconciles a committed call whose response body was lost', asyn
   );
 
   dom.click(dom.$('attendee-add'));
-  const picked = dom.$('attendee-add-list').querySelectorAll('input')[0];
-  assert.ok(picked, 'there is nobody left for the Add body-loss check');
-  picked.checked = true;
-  dom.fire(picked, 'change');
+  pasteAttendance('Daniel Nguyen');
   dom.$('attendee-add-value').value = '1.25';
-  const restoreFetch = dropRpcBodyOnce('add_officer_attendance');
+  const restoreFetch = dropRpcBodyOnce('add_officer_attendance_batch');
   try {
     dom.fire(dom.$('attendee-add-form'), 'submit');
     await settle();
@@ -1897,12 +2199,12 @@ await check('Add reconciles a committed call whose response body was lost', asyn
   assert.equal(
     after.calls
       .slice(beforeCalls)
-      .filter((call) => call.fn === 'add_officer_attendance' && call.actor).length,
+      .filter((call) => call.fn === 'add_officer_attendance_batch' && call.actor).length,
     1,
     'Add retried after success headers and a lost body',
   );
   assert.equal(
-    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance').length,
+    after.auditLog.filter((entry) => entry.action === 'add_officer_attendance_batch').length,
     beforeAudits + 1,
     'Add wrote more than one audit row after body loss',
   );
@@ -1914,7 +2216,8 @@ await check('Add reconciles a committed call whose response body was lost', asyn
   );
   assert.equal(added.length, 1, 'Add body loss did not leave exactly one new record');
   assert.equal(Number(added[0].submitted_value), 1.25);
-  assert.equal(dom.$('screen-message-title').textContent, '1 member added');
+  assert.equal(dom.$('screen-message-title').textContent, '1 added · 0 waiting for member links');
+  dom.$('attendee-add-result-dialog').close();
 });
 
 await check('an event whose credit mode changed under the screen refuses the add', async () => {
@@ -1935,9 +2238,7 @@ await check('an event whose credit mode changed under the screen refuses the add
   ).length;
 
   dom.click(dom.$('attendee-add'));
-  const first = dom.$('attendee-add-list').querySelectorAll('input')[0];
-  first.checked = true;
-  dom.fire(first, 'change');
+  pasteAttendance('Ethan Wallace');
   dom.$('attendee-add-value').value = '4';
   dom.fire(dom.$('attendee-add-form'), 'submit');
   await settle();
@@ -1957,6 +2258,7 @@ await check('an event whose credit mode changed under the screen refuses the add
     { event_id: `eq.${IDS.EVENT_GKAS}`, category_id: `eq.${IDS.CATEGORY_VOLUNTEERING}` },
     { credit_mode: 'from_submission' },
   );
+  dom.$('attendee-add-dialog').close();
 
   // And the screen picks the restored mode up on its next read, rather than
   // holding the copy it was opened with for as long as it stays open.

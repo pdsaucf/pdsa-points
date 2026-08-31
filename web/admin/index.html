@@ -896,25 +896,24 @@
       </div>
     </dialog>
 
-    <!--
-      Filing the paper sign-in sheet. Everybody ticked is inserted pending and
-      the batch is approved in one review_records() call, which is the same
-      path the review queue and the member screen take. Members who already
-      hold a live record for this event are not offered: the database allows
-      exactly one (one_live_record_per_member_event).
-    -->
+    <!-- Filing a paper sign-in sheet, including names not on the roster yet. -->
     <dialog id="attendee-add-dialog" class="dialog dialog-wide">
       <form id="attendee-add-form" method="dialog" novalidate>
-        <h2 class="dialog-title">Add members</h2>
-        <label class="label" for="attendee-add-search">Search</label>
-        <input
-          id="attendee-add-search"
-          class="input"
-          type="search"
+        <h2 class="dialog-title">Add attendance</h2>
+        <label class="label" for="attendee-add-names">Names</label>
+        <textarea
+          id="attendee-add-names"
+          class="input paste-box"
+          rows="8"
           autocomplete="off"
-          placeholder="Name"
-        />
-        <div id="attendee-add-list" class="attendee-picker"></div>
+          placeholder="One name per line"
+        ></textarea>
+        <div
+          id="attendee-add-list"
+          class="attendance-paste-preview"
+          aria-live="polite"
+          aria-label="Attendance preview"
+        ></div>
         <div id="attendee-add-value-field" hidden>
           <label class="label" for="attendee-add-value"><span id="attendee-add-value-label"></span></label>
           <input
@@ -936,6 +935,15 @@
           </button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="attendee-add-result-dialog" class="dialog dialog-wide">
+      <h2 class="dialog-title">Attendance added</h2>
+      <p id="attendee-add-result-summary" class="muted small"></p>
+      <div id="attendee-add-result-list" class="attendance-paste-preview"></div>
+      <div class="dialog-actions">
+        <button type="button" class="button button-primary" data-close>Close</button>
+      </div>
     </dialog>
 
     <!-- Removing a record deletes it. Decline is the one that keeps history,

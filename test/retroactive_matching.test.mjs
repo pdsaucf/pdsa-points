@@ -510,6 +510,59 @@ test('a merged member is followed to the survivor, and the survivor is told so',
   assert.equal(row.status, 'pending');
 });
 
+test('officer-pasted unmatched attendance surfaces after enrollment and counts only after approval', async () => {
+  const memberId = '44444444-0000-4000-a000-0000000000a1';
+  const outcomes = await db.withRole('authenticated', USERS.officer, () =>
+    db.val(`select add_officer_attendance_batch($1::uuid, $2::jsonb, null)`, [
+      EVENTS.gbmSingle,
+      JSON.stringify([
+        { line: 1, claimed_name: 'Talia Newcomer', disposition: 'unmatched', member_id: null },
+      ]),
+    ]),
+  );
+  assert.equal(outcomes[0].outcome, 'waiting_for_member_link');
+  const recordId = outcomes[0].record_id;
+
+  await db.q(
+    `insert into members (id, first_name, last_name) values ($1, 'Talia', 'Newcomer')`,
+    [memberId],
+  );
+  await db.q(
+    `insert into member_enrollments (member_id, academic_year_id) values ($1, $2)`,
+    [memberId, YEAR_2026],
+  );
+
+  const candidates = await candidatesFor(memberId);
+  assert.ok(byId(candidates, recordId), 'the officer-entered unmatched record was not offered');
+
+  const linked = await link(memberId, [recordId]);
+  assert.equal(linked[0].outcome, 'linked');
+  let record = await db.one(
+    `select member_id, status from attendance_records where id = $1`,
+    [recordId],
+  );
+  assert.equal(record.member_id, memberId);
+  assert.equal(record.status, 'pending');
+  assert.equal(
+    Number(await db.val(`select count(*) from v_attendance_credit where member_id = $1`, [memberId])),
+    0,
+  );
+
+  await db.withRole('authenticated', USERS.officer, () =>
+    db.val(`select review_records($1::uuid[], 'approve', null)`, [[recordId]]),
+  );
+  record = await db.one(`select status from attendance_records where id = $1`, [recordId]);
+  assert.equal(record.status, 'approved');
+  assert.ok(
+    Number(await db.val(`select coalesce(sum(credit), 0) from v_attendance_credit where member_id = $1`, [memberId])) > 0,
+    'approved retroactive attendance did not flow through the database credit view',
+  );
+
+  await db.q(`delete from attendance_records where id = $1`, [recordId]);
+  await db.q(`delete from member_enrollments where member_id = $1`, [memberId]);
+  await db.q(`delete from members where id = $1`, [memberId]);
+});
+
 // ---------------------------------------------------------------------------
 // Privileges
 // ---------------------------------------------------------------------------

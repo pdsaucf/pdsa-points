@@ -124,6 +124,17 @@ export function createCandidatePicker(ctx) {
             { class: 'card-outcome retro-outcome', dataset: ok ? {} : { kind: 'error' } },
             describeRetroOutcome(outcome.outcome),
           ),
+          ok && typeof ctx.openReview === 'function'
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'button button-small',
+                  onClick: () => ctx.openReview(candidate.event_id),
+                },
+                'Review',
+              )
+            : null,
         ),
       );
     }

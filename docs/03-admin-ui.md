@@ -163,7 +163,7 @@ narrow thing (print the code, change the fields); this is where the attendees ar
 │ └────────┘└────────┘└────────┘└─────────────┘└───────────────┘           │
 │ Scanned 54 · Added by an officer 2 · 2:00 PM to 2:40 PM                  │
 │                                                                          │
-│ Attendance  [Approve 11 waiting] [Add members] [Export CSV]              │
+│ Attendance  [Approve 11 waiting] [Add attendance] [Export CSV]           │
 │ ──────────────────────────────────────────────────────────────────────── │
 │ Aaron Ozan          Waiting   Scanned  2:40 PM  [Approve][Decline][Remove]│
 │ "Abby Cato"         Waiting   Scanned  2:01 PM  [Review] [Decline][Remove]│
@@ -187,10 +187,26 @@ narrowed to this event, where the roster suggestions are.
 for the same reason the queue does not: that function is what stamps the reviewer,
 writes the audit row, and refuses the approvals that have to be refused.
 
-**Adding members goes through `add_officer_attendance()`, in one transaction**, which
-inserts the rows and hands their ids to `review_records()`. Invariant 6 still holds:
-the officer pressing Add is the person approving. Two calls from the client were wrong
-for two reasons, and neither could be fixed in the client:
+**Pasted attendance goes through `add_officer_attendance_batch()`, in one transaction.**
+The dialog accepts one name per line and uses the roster paste parser, including
+surname-first names, pasted list markers, multiword surnames, line numbers, and repeated
+lines. Its preview accounts for every nonblank line. Exact, unambiguous roster matches
+are ready to add. Similar names and shared exact names require an explicit member choice
+or an explicit `Not on roster` choice. Existing event records, invalid lines, and
+repeated lines create nothing.
+
+A preview choice belongs to the exact pasted text and normalized line. Editing,
+inserting, deleting, or reordering lines clears it. Shared exact names show `Open
+member` beside `Link member`, so the officer can inspect each record before choosing.
+If a matching free-text attendance row predates roster enrollment, the line shows
+`Needs review` and opens the event review queue. It never creates an approved duplicate.
+
+The RPC accepts the resulting mixed batch and returns one outcome per line. Enrolled
+members are inserted and their ids are handed to `review_records()`. Invariant 6 still
+holds: the officer pressing Add is the person approving. Names not on the roster are
+stored permanently as pending `officer_entry` records with `member_id = null`, their
+cleaned display name in `claimed_name`, and `unmatched_name` in `flags`. They are not
+members and they do not count yet. Two client calls would be wrong for two reasons:
 
 - The insert commits, the approval fails, and records nobody was told about sit in the
   queue while the screen reports a failure.
@@ -199,6 +215,11 @@ for two reasons, and neither could be fixed in the client:
   filing `null` against a `from_submission` link. That is an approved record worth
   zero: nothing raises, nothing is violated, and the officer is told it worked. The
   function reads the event itself, under a lock, and refuses.
+
+Each submission carries an opaque batch key. If the write commits but its response is
+lost, `recover_officer_attendance_batch()` reads that officer's audit outcome for the
+same event and key. Attendance snapshots can identify records that existed before the
+call, but never prove that a new row belongs to the lost response.
 
 **Approve N waiting counts only what it can send.** An unmatched record is waiting too,
 and is exactly what the button cannot approve, so it is not in the number.
@@ -224,9 +245,9 @@ that dies in between leaves an outstanding run, which the Storage screen already
 and already knows how to finish, and the officer is told the photo is waiting on Storage
 rather than being left to assume it went.
 
-**Add members is the paper sign-in sheet.** As many as an officer ticks, in one pass.
-Anybody who already holds a live record for the event is left off the list, because
-`one_live_record_per_member_event` allows exactly one.
+**Add attendance is the paper sign-in sheet.** The typed-value field stays visible when
+the event collects a submitted number. The server locks and rereads that configuration,
+and stores the same validated value on matched and unmatched rows.
 
 **Delete is offered only on an event nobody checked in to.** `attendance_records.event_id`
 is `on delete restrict`, so Postgres refuses the rest, and a button that comes back as
@@ -424,15 +445,18 @@ pair never nags twice.
 
 Somebody who attended before they joined used the Couldn't find their name path at
 check-in (§ Review queue, above), so their earlier attendance sits unmatched, waiting on
-`resolve_unmatched()` one record at a time. Adding them to the roster is the moment an
-officer already knows who they are, so it's also the moment those records can be
-offered back: `fn_retroactive_match_candidates(member_id)` returns every unresolved
+`resolve_unmatched()` one record at a time. Adding them through single-member Add,
+Paste names, or CSV import is the moment an officer already knows who they are, so it
+is also the moment those records are offered back:
+`fn_retroactive_match_candidates(member_id)` returns every unresolved
 check-in that might be theirs, restricted to years they're actually enrolled in. A
 claimed name that resembles theirs is reported as a resemblance, never as a certainty. (A
 claimed address that matched the member's own used to be reported as an identity, and
 still is for records filed before check-in stopped asking for one.) Nothing is linked until an officer confirms which ones are really theirs,
 through `link_retroactive_matches()`, and confirming does not approve: the records stay
-in the review queue exactly like every other pending record.
+in the review queue exactly like every other pending record. A linked outcome offers
+`Review` as the next action. Points enter the existing views only after approval through
+`review_records()`.
 
 Confirming a batch is not all-or-nothing. `link_retroactive_matches()` answers back one
 outcome per record an officer confirmed, not a total, because "9 of the 10 you picked

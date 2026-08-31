@@ -70,6 +70,13 @@ const add = (eventId, memberIds, value = null) =>
     value,
   ]);
 
+const addPaste = (eventId, entries, value = null) =>
+  asOfficer(`select add_officer_attendance_batch($1::uuid, $2::jsonb, $3::numeric)`, [
+    eventId,
+    JSON.stringify(entries),
+    value,
+  ]);
+
 test('a batch is filed and approved in one call, stamped with the officer', async () => {
   const ids = await add(FIXED_EVENT, [MEMBERS.dorian, MEMBERS.greta]);
   assert.equal(ids.length, 2);
@@ -260,6 +267,241 @@ test('the audit log records who filed what', async () => {
   assert.equal(audit.detail.count, 1);
 
   await db.q(`delete from attendance_records where id = any($1::uuid[])`, [ids]);
+});
+
+test('a mixed paste approves members and preserves nonmembers as pending', async () => {
+  const membersBefore = Number(await db.val(`select count(*) from members`));
+  const outcomes = await addPaste(FIXED_EVENT, [
+    { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+    { line: 2, claimed_name: 'Talia Newcomer', disposition: 'unmatched', member_id: null },
+  ]);
+
+  assert.equal(outcomes.length, 2);
+  assert.deepEqual(outcomes.map((row) => row.line), [1, 2]);
+  assert.deepEqual(outcomes.map((row) => row.outcome), ['added', 'waiting_for_member_link']);
+
+  const rows = await db.q(
+    `select member_id, claimed_name, status, source, submitted_value, flags, reviewed_by
+       from attendance_records where id = any($1::uuid[]) order by claimed_name`,
+    [outcomes.map((row) => row.record_id)],
+  );
+  const member = rows.find((row) => row.member_id === MEMBERS.dorian);
+  const unmatched = rows.find((row) => row.member_id === null);
+  assert.equal(member.status, 'approved');
+  assert.equal(member.source, 'officer_entry');
+  assert.equal(member.reviewed_by, USERS.officer);
+  assert.equal(unmatched.claimed_name, 'Talia Newcomer');
+  assert.equal(unmatched.status, 'pending');
+  assert.equal(unmatched.source, 'officer_entry');
+  assert.deepEqual(unmatched.flags, ['unmatched_name']);
+  assert.equal(Number(await db.val(`select count(*) from members`)), membersBefore);
+
+  await db.q(`delete from attendance_records where id = any($1::uuid[])`, [
+    outcomes.map((row) => row.record_id),
+  ]);
+});
+
+test('typed values are validated and stored for matched and unmatched paste rows', async () => {
+  const refused = await db.withRole('authenticated', USERS.officer, () =>
+    db.expectError(
+      `select add_officer_attendance_batch($1::uuid, $2::jsonb, null)`,
+      [TYPED_EVENT, JSON.stringify([
+        { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+      ])],
+    ),
+  );
+  assert.equal(refused.code, 'PDS03');
+
+  const outcomes = await addPaste(TYPED_EVENT, [
+    { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+    { line: 2, claimed_name: 'Uma Beforedues', disposition: 'unmatched', member_id: null },
+  ], 2.75);
+  const rows = await db.q(
+    `select submitted_value from attendance_records where id = any($1::uuid[])`,
+    [outcomes.map((row) => row.record_id)],
+  );
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => Number(row.submitted_value) === 2.75));
+  await db.q(`delete from attendance_records where id = any($1::uuid[])`, [
+    outcomes.map((row) => row.record_id),
+  ]);
+});
+
+test('negative and NaN typed values create neither matched nor unmatched rows', async () => {
+  const entries = [
+    { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+    { line: 2, claimed_name: 'Uma Beforedues', disposition: 'unmatched', member_id: null },
+  ];
+  const before = Number(await db.val(
+    `select count(*) from attendance_records where event_id = $1`,
+    [TYPED_EVENT],
+  ));
+
+  for (const value of [-1, 'NaN']) {
+    const err = await db.withRole('authenticated', USERS.officer, () =>
+      db.expectError(
+        `select add_officer_attendance_batch($1::uuid, $2::jsonb, $3::numeric)`,
+        [TYPED_EVENT, JSON.stringify(entries), value],
+      ),
+    );
+    assert.equal(err.code, 'PDS03');
+    assert.equal(
+      Number(await db.val(`select count(*) from attendance_records where event_id = $1`, [TYPED_EVENT])),
+      before,
+    );
+  }
+
+  const zero = await addPaste(TYPED_EVENT, [entries[0]], 0);
+  assert.equal(zero[0].outcome, 'added');
+  assert.equal(
+    Number(await db.val(`select submitted_value from attendance_records where id = $1`, [zero[0].record_id])),
+    0,
+  );
+  await db.q(`delete from attendance_records where id = $1`, [zero[0].record_id]);
+});
+
+test('a preserved unmatched row blocks a second approved member row', async () => {
+  const memberId = '11111111-0000-4000-a000-0000000000e9';
+  const first = await addPaste(FIXED_EVENT, [
+    { line: 1, claimed_name: 'Preserved Person', disposition: 'unmatched', member_id: null },
+  ]);
+  assert.equal(first[0].outcome, 'waiting_for_member_link');
+
+  await db.exec(`
+    insert into members (id, first_name, last_name)
+    values ('${memberId}', 'Preserved', 'Person');
+    insert into member_enrollments (member_id, academic_year_id)
+    values ('${memberId}', '${YEAR_2026}');
+  `);
+
+  const second = await addPaste(FIXED_EVENT, [
+    { line: 1, claimed_name: 'Preserved Person', disposition: 'member', member_id: memberId },
+  ]);
+  assert.equal(second[0].outcome, 'already_recorded');
+  assert.equal(second[0].record_id, first[0].record_id);
+  assert.equal(
+    Number(await db.val(
+      `select count(*) from attendance_records
+       where event_id = $1 and (member_id = $2 or fn_normalise_name(claimed_name) = fn_normalise_name($3))`,
+      [FIXED_EVENT, memberId, 'Preserved Person'],
+    )),
+    1,
+  );
+  assert.equal(await db.val(`select status from attendance_records where id = $1`, [first[0].record_id]), 'pending');
+
+  const linked = await asOfficer(
+    `select jsonb_agg(to_jsonb(x) order by x.record_id)
+       from link_retroactive_matches($1::uuid, $2::uuid[]) x`,
+    [memberId, [first[0].record_id]],
+  );
+  assert.equal(linked[0].outcome, 'linked');
+  assert.equal(await db.val(`select status from attendance_records where id = $1`, [first[0].record_id]), 'pending');
+  await asOfficer(`select review_records($1::uuid[], 'approve', null)`, [[first[0].record_id]]);
+  assert.equal(await db.val(`select status from attendance_records where id = $1`, [first[0].record_id]), 'approved');
+
+  await db.q(`delete from attendance_records where id = $1`, [first[0].record_id]);
+  await db.q(`delete from member_enrollments where member_id = $1`, [memberId]);
+  await db.q(`delete from members where id = $1`, [memberId]);
+});
+
+test('invalid, repeated, and already-recorded paste lines create nothing', async () => {
+  const [existing] = await add(FIXED_EVENT, [MEMBERS.dorian]);
+  const before = Number(await db.val(`select count(*) from attendance_records where event_id = $1`, [FIXED_EVENT]));
+  const outcomes = await addPaste(FIXED_EVENT, [
+    { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+    { line: 2, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+    { line: 3, claimed_name: 'Onlyone', disposition: 'invalid', member_id: null },
+    { line: 4, claimed_name: 'Dorian Vega', disposition: 'repeated', member_id: null },
+    { line: 5, claimed_name: '... !!!', disposition: 'unmatched', member_id: null },
+  ]);
+  assert.equal(outcomes.length, 5);
+  assert.deepEqual(outcomes.map((row) => row.outcome), [
+    'already_recorded',
+    'repeated',
+    'invalid',
+    'repeated',
+    'invalid',
+  ]);
+  assert.equal(
+    Number(await db.val(`select count(*) from attendance_records where event_id = $1`, [FIXED_EVENT])),
+    before,
+  );
+  await db.q(`delete from attendance_records where id = $1`, [existing]);
+});
+
+test('the mixed paste RPC is unavailable to anon and refuses a viewer', async () => {
+  const entries = JSON.stringify([
+    { line: 1, claimed_name: 'Dorian Vega', disposition: 'member', member_id: MEMBERS.dorian },
+  ]);
+  const viewer = await db.withRole('authenticated', USERS.viewer, () =>
+    db.expectError(`select add_officer_attendance_batch($1::uuid, $2::jsonb, null)`, [FIXED_EVENT, entries]),
+  );
+  assert.equal(viewer.code, 'PDS07');
+  const anon = await db.withRole('anon', null, () =>
+    db.expectError(`select add_officer_attendance_batch($1::uuid, $2::jsonb, null)`, [FIXED_EVENT, entries]),
+  );
+  assert.equal(anon.code, '42501');
+});
+
+test('batch recovery is scoped to the current actor, event, and batch key', async () => {
+  const batchKey = 'officer-attendance-recovery-test';
+  const entries = [
+    {
+      line: 1,
+      claimed_name: 'Dorian Vega',
+      disposition: 'member',
+      member_id: MEMBERS.dorian,
+      batch_key: batchKey,
+    },
+  ];
+  const outcomes = await addPaste(FIXED_EVENT, entries);
+  const recovered = await asOfficer(
+    `select recover_officer_attendance_batch($1::uuid, $2::text)`,
+    [FIXED_EVENT, batchKey],
+  );
+  assert.deepEqual(recovered, outcomes);
+  assert.equal(
+    await asOfficer(`select recover_officer_attendance_batch($1::uuid, $2::text)`, [FIXED_EVENT, 'other-key']),
+    null,
+  );
+  assert.equal(
+    await asOfficer(`select recover_officer_attendance_batch($1::uuid, $2::text)`, [TYPED_EVENT, batchKey]),
+    null,
+  );
+
+  await db.q(
+    `insert into audit_log (actor_user_id, action, entity_type, detail)
+     values ($1, 'add_officer_attendance_batch', 'attendance_record', $2::jsonb)`,
+    [USERS.admin, JSON.stringify({
+      event_id: FIXED_EVENT,
+      batch_key: 'other-actor-key',
+      outcomes: [{ line: 1, outcome: 'added', record_id: outcomes[0].record_id }],
+    })],
+  );
+  assert.equal(
+    await asOfficer(
+      `select recover_officer_attendance_batch($1::uuid, $2::text)`,
+      [FIXED_EVENT, 'other-actor-key'],
+    ),
+    null,
+  );
+
+  const viewer = await db.withRole('authenticated', USERS.viewer, () =>
+    db.expectError(
+      `select recover_officer_attendance_batch($1::uuid, $2::text)`,
+      [FIXED_EVENT, batchKey],
+    ),
+  );
+  assert.equal(viewer.code, 'PDS07');
+  const anon = await db.withRole('anon', null, () =>
+    db.expectError(
+      `select recover_officer_attendance_batch($1::uuid, $2::text)`,
+      [FIXED_EVENT, batchKey],
+    ),
+  );
+  assert.equal(anon.code, '42501');
+
+  await db.q(`delete from attendance_records where id = $1`, [outcomes[0].record_id]);
 });
 
 // ---------------------------------------------------------------------------
