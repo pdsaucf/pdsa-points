@@ -1,14 +1,16 @@
 // The review queue.
 //
-// Every submission is reviewed by a person (invariant 6). The job of this
+// Every points award is reviewed by a person (invariant 6). The job of this
 // screen is not to skip that step, it is to make the routine ones cost one
 // decision between them and to make the broken ones impossible to miss. So the
-// queue splits into two zones by the triage flags rather than presenting
+// queue splits into three zones by the triage flags rather than presenting
 // forty-seven identical rows:
 //
 //   Needs review   cards, one per record, each carrying the fix for whatever
 //                  went wrong
 //   Routine        a wall of photographs and one button
+//   Not on roster  ordinary visitors, collapsed unless an officer needs to
+//                  link one to a member
 //
 // THE ONE INTERACTION THAT MATTERS. A record with no member attached cannot be
 // approved: the check constraint on attendance_records forbids it and
@@ -88,10 +90,18 @@ const SETTLED_HEADLINE = 'Ready to approve';
  */
 export function reviewFlagsFor(record) {
   const flags = Array.isArray(record?.flags) ? [...record.flags] : [];
+  if (record && !record.member_id && !flags.includes('unmatched_name')) {
+    flags.push('unmatched_name');
+  }
   if (isMemberEnteredValue(record) && !flags.includes('member_entered_value')) {
     flags.push('member_entered_value');
   }
   return flags;
+}
+
+/** An ordinary visitor whose name is not on the member roster. */
+export function isUnmatchedRecord(record) {
+  return Boolean(record) && !record.member_id;
 }
 
 /**
@@ -142,6 +152,9 @@ export function createReview(ctx) {
     routineZone: $('zone-routine'),
     routineGrid: $('routine-grid'),
     routineCount: $('routine-count'),
+    unmatchedZone: $('zone-unmatched'),
+    unmatchedList: $('unmatched-list'),
+    unmatchedCount: $('unmatched-count'),
     approveAll: $('approve-all'),
     showAll: $('show-all'),
     eventSelect: $('event-select'),
@@ -171,6 +184,7 @@ export function createReview(ctx) {
     eventFilter: 'all',
     showAllRoutine: false,
     cursorId: null,
+    resolved: new Set(), // linked here, still awaiting an explicit approval
     busy: false,
     loaded: false,
   };
@@ -203,6 +217,7 @@ export function createReview(ctx) {
       });
 
       state.records = records;
+      state.resolved.clear();
       state.loaded = true;
 
       await Promise.all([loadPhotos(records), loadRosterIfNeeded(), loadPriorRejections()]);
@@ -282,8 +297,20 @@ export function createReview(ctx) {
     state.eventFilter === 'all' || record.event_id === state.eventFilter;
 
   const visible = () => state.records.filter(inFilter);
-  const flagged = () => visible().filter((r) => knownFlags(reviewFlagsFor(r)).length > 0);
-  const routine = () => visible().filter((r) => knownFlags(reviewFlagsFor(r)).length === 0);
+  const unmatched = () => visible().filter(isUnmatchedRecord);
+  const flagged = () =>
+    visible().filter(
+      (r) =>
+        !isUnmatchedRecord(r) &&
+        (state.resolved.has(r.id) || knownFlags(reviewFlagsFor(r)).length > 0),
+    );
+  const routine = () =>
+    visible().filter(
+      (r) =>
+        !isUnmatchedRecord(r) &&
+        !state.resolved.has(r.id) &&
+        knownFlags(reviewFlagsFor(r)).length === 0,
+    );
 
   const nameOf = (record) =>
     record.members?.display_name ?? record.claimed_name ?? 'No name on file';
@@ -334,15 +361,18 @@ export function createReview(ctx) {
     const all = visible();
     const flaggedRows = flagged();
     const routineRows = routine();
+    const unmatchedRows = unmatched();
+    const actionableCount = flaggedRows.length + routineRows.length;
 
-    el.pendingCount.textContent = all.length
-      ? `${plural(all.length, 'check-in')} waiting`
+    el.pendingCount.textContent = actionableCount
+      ? `${plural(actionableCount, 'check-in')} waiting`
       : '';
-    ctx.setReviewCount(state.records.length);
+    ctx.setReviewCount(state.records.filter((record) => !isUnmatchedRecord(record)).length);
 
     if (!all.length) {
       setHidden(el.flaggedZone, true);
       setHidden(el.routineZone, true);
+      setHidden(el.unmatchedZone, true);
       setHidden(el.empty, false);
       el.emptyBody.textContent =
         state.eventFilter === 'all'
@@ -371,6 +401,14 @@ export function createReview(ctx) {
 
     el.approveAll.textContent = `Approve all ${routineRows.length}`;
     el.approveAll.disabled = state.busy || routineRows.length === 0;
+
+    setHidden(el.unmatchedZone, unmatchedRows.length === 0);
+    el.unmatchedCount.textContent = unmatchedRows.length ? `\u00b7 ${unmatchedRows.length}` : '';
+    el.unmatchedList.replaceChildren(
+      ...(el.unmatchedZone.open
+        ? unmatchedRows.map((record) => renderCard(record, { unmatched: true }))
+        : []),
+    );
 
     applyCursor();
   }
@@ -410,7 +448,7 @@ export function createReview(ctx) {
 
   // ---- flagged cards ------------------------------------------------------
 
-  function renderCard(record) {
+  function renderCard(record, { unmatched: ordinaryUnmatched = false } = {}) {
     const reviewFlags = reviewFlagsFor(record);
     const flags = knownFlags(reviewFlags);
     const lead = primaryFlag(reviewFlags);
@@ -427,7 +465,13 @@ export function createReview(ctx) {
 
     // The heading names the state. Who they are, which event and what time all
     // sit on the metadata line under it.
-    main.append(h('p', { class: 'card-headline' }, copy ? copy.headline : SETTLED_HEADLINE));
+    main.append(
+      h(
+        'p',
+        { class: 'card-headline' },
+        ordinaryUnmatched ? 'Not on roster' : copy ? copy.headline : SETTLED_HEADLINE,
+      ),
+    );
 
     main.append(
       metaLine([
@@ -442,12 +486,14 @@ export function createReview(ctx) {
       ]),
     );
 
-    if (copy?.detail) main.append(h('p', { class: 'card-detail' }, copy.detail));
+    if (!ordinaryUnmatched && copy?.detail) {
+      main.append(h('p', { class: 'card-detail' }, copy.detail));
+    }
 
     // Any flag past the first one is still named, otherwise a card headlined
     // "Member not matched" would silently drop "and no photo either". The
     // headline is the whole fact, so the details are not repeated here.
-    if (flags.length > 1) {
+    if (!ordinaryUnmatched && flags.length > 1) {
       const also = flags.slice(1).map((flag) => FLAG_COPY[flag].headline).join(', ');
       main.append(h('p', { class: 'card-detail' }, `Also: ${also}`));
     }
@@ -496,7 +542,7 @@ export function createReview(ctx) {
 
     card.append(main, h('div', { class: 'card-side' }, thumbFor(record)));
 
-    if (flags.includes('unmatched_name')) card.append(renderSuggestions(record, card));
+    if (flags.includes('unmatched_name')) card.append(renderSuggestions(record));
 
     card.append(renderActions(record, actions, card));
     return card;
@@ -531,7 +577,7 @@ export function createReview(ctx) {
    * the exceptional one: the system ships with an empty roster and the first
    * GBM is a recruiting event.
    */
-  function renderSuggestions(record, card) {
+  function renderSuggestions(record) {
     const list = h('ul', { class: 'suggestions' });
     const ranked = rankMembers({ name: record.claimed_name }, state.roster ?? [], { limit: 5 });
 
@@ -572,7 +618,7 @@ export function createReview(ctx) {
               title: clashes
                 ? `${row.member.display_name} already has a check-in for this event`
                 : '',
-              onClick: () => resolveToMember(record, row.member, card),
+              onClick: () => resolveToMember(record, row.member),
             },
             h('span', { class: 'suggestion-name' }, row.member.display_name),
             h(
@@ -594,7 +640,7 @@ export function createReview(ctx) {
           {
             type: 'button',
             class: 'button button-small',
-            onClick: () => resolveToNewMember(record, card),
+            onClick: () => resolveToNewMember(record),
           },
           'Add new member',
         ),
@@ -618,6 +664,8 @@ export function createReview(ctx) {
         },
         label,
       );
+
+    row.append(button('View event', '', () => ctx.openEvent?.(record.event_id)));
 
     for (const action of actions) {
       if (action === 'resolve') continue; // the suggestion row above is the control
@@ -709,6 +757,7 @@ export function createReview(ctx) {
   function drop(ids) {
     const gone = new Set(ids);
     state.records = state.records.filter((r) => !gone.has(r.id));
+    for (const id of gone) state.resolved.delete(id);
     if (gone.has(state.cursorId)) state.cursorId = null;
   }
 
@@ -772,7 +821,7 @@ export function createReview(ctx) {
    * one on the spot and puts the cursor on the Approve button, so the second
    * decision is one keystroke away rather than a page reload away.
    */
-  async function resolveToMember(record, member, card) {
+  async function resolveToMember(record, member) {
     setBusy(true);
     ctx.clearMessage();
     try {
@@ -780,15 +829,15 @@ export function createReview(ctx) {
         p_record_id: record.id,
         p_member_id: member.id,
       });
-      onResolved(record, member, card, `Linked to ${member.display_name}.`);
+      onResolved(record, member, `Linked to ${member.display_name}.`);
     } catch (err) {
-      ctx.fail(err, () => resolveToMember(record, member, card));
+      ctx.fail(err, () => resolveToMember(record, member));
     } finally {
       setBusy(false);
     }
   }
 
-  async function resolveToNewMember(record, card) {
+  async function resolveToNewMember(record) {
     const guess = splitName(record.claimed_name);
     const details = await askNewMember(guess);
     if (!details) return;
@@ -803,30 +852,32 @@ export function createReview(ctx) {
       const display = `${details.first_name} ${details.last_name}`.trim();
       const member = { id: memberId, display_name: display };
       if (state.roster) state.roster.push(member);
-      onResolved(record, member, card, `${display} added to the roster and linked.`);
+      onResolved(record, member, `${display} added to the roster and linked.`);
     } catch (err) {
-      ctx.fail(err, () => resolveToNewMember(record, card));
+      ctx.fail(err, () => resolveToNewMember(record));
     } finally {
       setBusy(false);
     }
   }
 
-  function onResolved(record, member, card, said) {
+  function onResolved(record, member, said) {
     record.member_id = member.id;
     record.members = { id: member.id, display_name: member.display_name };
     record.flags = (record.flags ?? []).filter((f) => f !== 'unmatched_name');
     // resolve_unmatched() enrols them in the event's year as part of the same
     // transaction, so a not_enrolled flag left over from submission is stale.
     record.flags = record.flags.filter((f) => f !== 'not_enrolled');
+    state.resolved.add(record.id);
 
     const settled = `${said} Not approved yet.`;
     ctx.note(settled);
     announce(settled);
 
-    const replacement = renderCard(record);
+    render();
+    const replacement = nodeFor(record.id);
+    if (!replacement) return;
     replacement.classList.add('is-settled');
     replacement.append(h('p', { class: 'card-outcome' }, settled));
-    card.replaceWith(replacement);
     state.cursorId = record.id;
     applyCursor();
 
@@ -1101,12 +1152,14 @@ export function createReview(ctx) {
   const orderedIds = () => [
     ...flagged().map((r) => r.id),
     ...(state.showAllRoutine ? routine() : routine().slice(0, GRID_PAGE)).map((r) => r.id),
+    ...(el.unmatchedZone.open ? unmatched().map((r) => r.id) : []),
   ];
 
   function nodeFor(id) {
     return (
       el.flaggedList.querySelector(`[data-id="${CSS.escape(id)}"]`) ??
-      el.routineGrid.querySelector(`[data-id="${CSS.escape(id)}"]`)
+      el.routineGrid.querySelector(`[data-id="${CSS.escape(id)}"]`) ??
+      el.unmatchedList.querySelector(`[data-id="${CSS.escape(id)}"]`)
     );
   }
 
@@ -1209,6 +1262,8 @@ export function createReview(ctx) {
       state.showAllRoutine = true;
       render();
     });
+
+    el.unmatchedZone.addEventListener('toggle', render);
 
     for (const dialog of [el.rejectDialog, el.newMemberDialog, el.photoDialog]) {
       dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());

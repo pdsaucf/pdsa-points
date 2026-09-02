@@ -61,7 +61,7 @@ const auth = await import('../src/auth.js');
 const { select, patch, callRpc, signPhotoUrls } = await import('../src/rest.js');
 const { rankMembers, splitName, similarity, normaliseName } = await import('../src/match.js');
 const { actionsFor, FLAG_COPY, knownFlags, primaryFlag } = await import('../src/flags.js');
-const { membersAlreadyOnEvent, reviewFlagsFor } = await import('../src/review.js');
+const { isUnmatchedRecord, membersAlreadyOnEvent, reviewFlagsFor } = await import('../src/review.js');
 const { describeOfficer, describeSignIn } = await import('../src/officer-errors.js');
 const { OFFICER_ACCOUNT_EMAIL } = await import('../config.js');
 const { RpcError } = await import('../src/errors.js');
@@ -557,13 +557,16 @@ await signInAs('officers@pdsaucf.com');
 
 await check('the queue is this year only, split into flagged and routine', async () => {
   const rows = await loadQueue();
-  const flagged = rows.filter((row) => knownFlags(reviewFlagsFor(row)).length);
-  const routine = rows.filter((row) => !knownFlags(reviewFlagsFor(row)).length);
+  const unmatched = rows.filter(isUnmatchedRecord);
+  const flagged = rows.filter(
+    (row) => !isUnmatchedRecord(row) && knownFlags(reviewFlagsFor(row)).length,
+  );
+  const routine = rows.filter(
+    (row) => !isUnmatchedRecord(row) && !knownFlags(reviewFlagsFor(row)).length,
+  );
   assert.equal(routine.length, 42, `expected 42 routine records, got ${routine.length}`);
-  // 8 base fixture flags, plus 15 unmatched_name records from the
-  // retroactive-matching fixtures (see the note above), plus one clean
-  // record whose member-entered value makes individual review mandatory.
-  assert.equal(flagged.length, 24, `expected 24 flagged records, got ${flagged.length}`);
+  assert.equal(unmatched.length, 17, `expected 17 ordinary unmatched records, got ${unmatched.length}`);
+  assert.equal(flagged.length, 7, `expected 7 actionable flagged records, got ${flagged.length}`);
   const entered = rows.find((row) => row.id === IDS.RECORD_MEMBER_ENTERED_99);
   assert.deepEqual(entered.flags, [], 'the fixture no longer proves the durable value is checked');
   assert.equal(Number(entered.submitted_value), 99);
@@ -571,6 +574,12 @@ await check('the queue is this year only, split into flagged and routine', async
   for (const row of rows) {
     assert.equal(row.events.academic_year_id, IDS.YEAR_CURRENT, 'last year leaked into the queue');
   }
+});
+
+await check('a missing member stays out of bulk approval even if its stored flag is stale', () => {
+  const stale = { member_id: null, claimed_name: 'Ordinary Visitor', flags: [] };
+  assert.equal(isUnmatchedRecord(stale), true);
+  assert.ok(reviewFlagsFor(stale).includes('unmatched_name'));
 });
 
 await check('every photo in the queue signs in one request, not one each', async () => {

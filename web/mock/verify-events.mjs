@@ -3015,6 +3015,58 @@ await check('changing the year abandons a half-filled form rather than writing i
   dom.click(dom.$('event-cancel'));
 });
 
+await check('unmatched visitors stay out of Needs review and can open their event', async () => {
+  dom.click(dom.$('tab-review'));
+  dom.click(dom.$('refresh'));
+  await until(
+    () => !dom.$('zone-unmatched').hidden && !dom.$('zone-flagged').hidden,
+    'the review groups did not open',
+  );
+
+  const unmatchedId = IDS.RECORD_UNMATCHED_CLOSE;
+  assert.equal(
+    dom.$('flagged-list').querySelector(`[data-id="${unmatchedId}"]`),
+    null,
+    'an ordinary unmatched visitor still appeared in Needs review',
+  );
+  assert.equal(dom.$('unmatched-list').children.length, 0, 'collapsed visitors were still rendered');
+  dom.$('zone-unmatched').open = true;
+  dom.fire(dom.$('zone-unmatched'), 'toggle');
+  const card = dom.$('unmatched-list').querySelector(`[data-id="${unmatchedId}"]`);
+  assert.ok(card, 'the unmatched visitor was no longer available for optional linking');
+  assert.equal(card.querySelector('.card-headline').textContent.trim(), 'Not on roster');
+  assert.doesNotMatch(card.textContent, /before awarding points/i);
+
+  const suggestion = card.querySelector(`[data-member-id="${IDS.MEMBER_ABIGAIL}"]`);
+  assert.ok(suggestion, 'the optional group no longer offered a roster link');
+  dom.click(suggestion);
+  await until(
+    () => dom.$('flagged-list').querySelector(`[data-id="${unmatchedId}"]`),
+    'linking did not move the record into actionable review',
+  );
+  const linked = dom.$('flagged-list').querySelector(`[data-id="${unmatchedId}"]`);
+  assert.equal(linked.querySelector('.card-headline').textContent.trim(), 'Ready to approve');
+  assert.ok(dom.buttonNamed(linked, 'Approve'), 'the linked record offered no approval action');
+
+  const offending = dom.$('flagged-list').querySelector(
+    `[data-id="${IDS.RECORD_MISSING_EVIDENCE}"]`,
+  );
+  dom.click(dom.buttonNamed(offending, 'View event'));
+  await until(
+    () => !dom.$('panel-events').hidden && !dom.$('event-detail-body').hidden,
+    'View event did not open the event detail',
+  );
+  assert.equal(dom.$('event-detail-title').textContent, 'Soap Carving');
+
+  dom.click(dom.$('event-detail-back'));
+  await until(
+    () => !dom.$('panel-review').hidden && dom.$('event-select').value === IDS.EVENT_SOAP,
+    'Back did not return to the filtered review queue',
+  );
+  dom.$('event-select').value = 'all';
+  dom.fire(dom.$('event-select'), 'change');
+});
+
 await check('Approve all excludes 99 member-entered points until an individual approval', async () => {
   const [member] = await insert('members', [
     { first_name: 'Routine', last_name: 'Control' },

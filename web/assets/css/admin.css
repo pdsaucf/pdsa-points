@@ -536,6 +536,29 @@ kbd {
   font-size: 0.8125rem;
 }
 
+.quiet-zone {
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.quiet-zone-summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.quiet-zone-summary::marker {
+  color: var(--ink-muted);
+}
+
+.quiet-list {
+  margin-top: 0.75rem;
+}
+
+.quiet-list .card {
+  border-left-color: var(--line-strong);
+  box-shadow: none;
+}
+
 /* --------------------------------------------------------------------------- */
 /* Flagged cards                                                                */
 /* --------------------------------------------------------------------------- */

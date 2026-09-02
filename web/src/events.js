@@ -165,6 +165,7 @@ export function createEvents(ctx) {
     // Only a deliberate trip from a card into its detail gets a return
     // target. Quiet reloads repaint the list too, but must not move focus.
     detailOriginEventId: null,
+    detailReturnReviewEventId: null,
   };
 
   function syncFormAvailability() {
@@ -188,7 +189,17 @@ export function createEvents(ctx) {
     openQr: (event) => openQr(event),
     previewCheckin: (event) => previewCheckin(event),
     duplicate: (event) => duplicate(event),
-    backToList: () => showList({ restoreDetailFocus: true }),
+    backToList: () => {
+      const reviewEventId = state.detailReturnReviewEventId;
+      state.detailReturnReviewEventId = null;
+      if (reviewEventId) {
+        detail.dismiss();
+        showList();
+        ctx.openReview?.(reviewEventId);
+        return;
+      }
+      showList({ restoreDetailFocus: true });
+    },
     // An approve, a decline, a removal or an added member all move the counts
     // on the row behind this screen, and the review queue's badge with them.
     afterChange: async () => {
@@ -561,8 +572,12 @@ export function createEvents(ctx) {
   // One event, in full
   // -------------------------------------------------------------------------
 
-  function openDetail(event, { rememberOrigin = false } = {}) {
+  function openDetail(
+    event,
+    { rememberOrigin = false, returnToReviewEventId = null } = {},
+  ) {
     if (rememberOrigin) state.detailOriginEventId = event.id;
+    state.detailReturnReviewEventId = returnToReviewEventId;
     state.view = 'detail';
     ctx.clearMessage();
     setHidden(el.formView, true);
@@ -573,6 +588,17 @@ export function createEvents(ctx) {
     const opened = detail.open(event);
     if (rememberOrigin) el.detailBack.focus();
     return opened;
+  }
+
+  async function open(eventId, { returnToReview = false } = {}) {
+    let event = state.events.find((row) => row.id === eventId);
+    if (!event) {
+      await load();
+      event = state.events.find((row) => row.id === eventId);
+    }
+    if (!event) return false;
+    await openDetail(event, { returnToReviewEventId: returnToReview ? event.id : null });
+    return true;
   }
 
   /**
@@ -1220,6 +1246,7 @@ export function createEvents(ctx) {
       return load();
     },
     reload: () => load(),
+    open,
     yearChanged,
     hasLoaded: () => state.loaded,
   };

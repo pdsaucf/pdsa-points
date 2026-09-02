@@ -292,6 +292,10 @@ function context(panelName) {
       selectTab('review');
       app.review?.focusEvent(eventId);
     },
+    openEvent: (eventId) => {
+      selectTab('events');
+      app.events?.open(eventId, { returnToReview: true });
+    },
     // A record added by hand, or a name edited, changes a number the board and
     // the roster are both showing. They reload rather than being patched in
     // place, because the point total and the honorary star are the database's
