@@ -57,7 +57,7 @@ most of this product.
 
 ### UI copy style
 
-**Never imitate Claude or chatbot prose in UI copy. This should sound like software,
+**Never imitate Codex or chatbot prose in UI copy. This should sound like software,
 not like an assistant explaining itself.**
 
 Before adding or changing any user-facing text, apply this test:
@@ -173,6 +173,6 @@ Breaking any of these reintroduces a problem the design exists to solve:
 
 ## Multi-agent workflow
 
-Per the global CLAUDE.md: orchestrator plans, `implementer` subagent builds,
+Per the global AGENTS.md: orchestrator plans, `implementer` subagent builds,
 `/codex:adversarial-review` and `/codex:rescue` check the work. Nobody signs off on
 their own work.
