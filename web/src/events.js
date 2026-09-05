@@ -60,6 +60,8 @@ import {
   validateCategoryRows,
   buildCheckinUrl,
   qrFileName,
+  releasesAfterEvent,
+  releaseAtLabel,
 } from './events-model.js';
 import { $, h, announce, setHidden, shortDate, plural } from './ui.js';
 
@@ -138,6 +140,10 @@ export function createEvents(ctx) {
     qrCopyStatus: $('qr-copy-status'),
     qrDownload: $('qr-download'),
     qrPreview: $('qr-preview'),
+
+    publishAfterDialog: $('event-publish-after-dialog'),
+    publishAfterForm: $('event-publish-after-form'),
+    publishAfterMeta: $('event-publish-after-meta'),
   };
 
   const state = {
@@ -1252,6 +1258,7 @@ export function createEvents(ctx) {
 
   async function saveEvent(fields, desiredCategories) {
     const wasEdit = Boolean(state.editingEvent);
+    const savedYearId = ctx.year.id;
     try {
       await callRpc('save_event_config', {
         p_event_id: state.saveEventId,
@@ -1283,6 +1290,15 @@ export function createEvents(ctx) {
     await load();
     ctx.onEventsChanged?.();
     if (wasEdit) returnAfterSave();
+    // If the officer switched the year selector while save_event_config or
+    // the load() above was still in flight, a newer load() from
+    // yearChanged() can win the race and leave state.events holding a
+    // different year's rows by now. Skip the offer rather than search a
+    // year that isn't this save's own: today's UUID-keyed .find() would
+    // just fail to match and no-op anyway, but this makes that intentional.
+    if (ctx.year.id === savedYearId) {
+      await maybeOfferImmediatePublish(state.events.find((row) => row.id === state.saveEventId));
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1349,6 +1365,68 @@ export function createEvents(ctx) {
   }
 
   // -------------------------------------------------------------------------
+  // The publish-after-save dialog
+  // -------------------------------------------------------------------------
+
+  /**
+   * A dialog that answers true when it is submitted and false when it is
+   * dismissed. Modeled on requirements.js's decide(): close() fires its event
+   * as a queued task, so the cancel path can still run after submit decided.
+   */
+  function decideDialog(dialog, form) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        form.removeEventListener('submit', onSubmit);
+        dialog.removeEventListener('close', onClose);
+        resolve(value);
+      };
+      const onSubmit = () => {
+        dialog.close();
+        finish(true);
+      };
+      const onClose = () => finish(false);
+
+      form.addEventListener('submit', onSubmit);
+      dialog.addEventListener('close', onClose, { once: true });
+      dialog.showModal();
+    });
+  }
+
+  /**
+   * docs/05-events-page.md: an event created late enough that its Monday
+   * release lands after its own date will never auto-publish. Offered right
+   * after Save because that is the one moment the officer is already
+   * looking at this event; the alternative is hoping they notice the
+   * "Publishes after the event" warning on the list later.
+   *
+   * release_at and is_visible are read off the reloaded row, never
+   * recomputed here: the Monday arithmetic lives in Postgres on purpose.
+   */
+  async function maybeOfferImmediatePublish(event) {
+    // Same reasoning as eventPublishStatus() in events-model.js: with the
+    // auto-publish toggle off, fn_event_is_visible() never fires from the
+    // Monday drop for any event, so there is no drop to promise here either.
+    if (!event || event.is_visible || !state.autoPublishEnabled || !releasesAfterEvent(event)) return;
+    el.publishAfterMeta.textContent =
+      `${shortDate(event.occurred_on)} ${event.title} · Next drop is ${releaseAtLabel(event.release_at)}`;
+    const confirmed = await decideDialog(el.publishAfterDialog, el.publishAfterForm);
+    if (!confirmed) return;
+    try {
+      await callRpc('set_event_published', { p_event_id: event.id, p_published: true });
+      const said = `${event.title} published.`;
+      ctx.note(said);
+      announce(said);
+      await load({ quiet: true });
+      ctx.onEventsChanged?.();
+    } catch (err) {
+      ctx.fail(err, null);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Wiring
   // -------------------------------------------------------------------------
 
@@ -1390,6 +1468,7 @@ export function createEvents(ctx) {
 
     el.newCategoryDialog.querySelector('[data-close]')?.addEventListener('click', () => el.newCategoryDialog.close());
     el.qrDialog.querySelector('[data-close]')?.addEventListener('click', () => el.qrDialog.close());
+    el.publishAfterDialog.querySelector('[data-close]')?.addEventListener('click', () => el.publishAfterDialog.close());
   }
 
   /**

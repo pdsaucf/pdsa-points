@@ -41,6 +41,7 @@ import {
   dropRpcResponseOnce,
   failRpcOnce,
   failStorageDeleteOnce,
+  eventReleaseAtRaw,
 } from './admin-server.mjs';
 import { installDom } from './dom.mjs';
 
@@ -1046,6 +1047,15 @@ await check('Edit saves a retired link unchanged and reloads after a stale confl
     ),
     'the retired-link form did not call save_event_config',
   );
+  // This event is dated well in the past and was never published, so its
+  // Monday release (computed from today) lands after its own date: the
+  // publish-after-save dialog offers to publish it. Not what this check is
+  // about, so it is dismissed without publishing.
+  await until(
+    () => dom.$('event-publish-after-dialog').open === true,
+    'the publish-after-save dialog did not open for the retired-link edit',
+  );
+  dom.click(dom.$('event-publish-after-dialog').querySelector('[data-close]'));
   await until(() => !dom.$('event-save').disabled, 'the retired-link save never settled');
   assert.ok(dom.$('event-error').hidden, dom.$('event-error').textContent || 'the retired-link save failed');
   const [savedTitle] = await select('events', { select: 'title', filters: { id: `eq.${event.id}` } });
@@ -1316,6 +1326,148 @@ await check('Location, Attire, Sign-up and Description save and reload with the 
   assert.equal(cleared.attire, null);
   assert.equal(cleared.signup, null);
   assert.equal(cleared.description, null);
+});
+
+// The bug this covers: an event created late enough that its Monday release
+// lands after its own date sits queued forever unless an officer notices the
+// "Publishes after the event" warning on the card. events.js now offers to
+// publish it immediately, right after Save.
+const daysFromNow = (n) => new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+/** One calendar day before a 'YYYY-MM-DD' string, done in plain Y/M/D
+ * arithmetic at UTC noon so no local time zone's DST transition can shift
+ * the result by a day. */
+const dayBefore = (ymd) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const noonUtc = new Date(Date.UTC(y, m - 1, d, 12));
+  noonUtc.setUTCDate(noonUtc.getUTCDate() - 1);
+  return noonUtc.toISOString().slice(0, 10);
+};
+
+// The instant fn_event_release_at() would pick as "the next Monday 8am NY
+// strictly after now": eventReleaseAtRaw() is the mock's faithful
+// reproduction of that function, returning max(term1, term2). Passing an
+// occurred_on far enough in the past (year 2000) makes term1 trivially old,
+// so the result is term2 alone, computed with the exact production
+// arithmetic rather than a re-derivation trusted separately here. One
+// calendar day before that Monday's NY date is then guaranteed to occur on
+// an event dated strictly before its own release, on every day of the week
+// and every hour the suite happens to run: term2 is "the first Monday 8am NY
+// strictly after now", so the day before that Monday can never itself BE
+// that Monday, and releasesAfterEvent() (releaseDate > occurred_on, strict)
+// reads true unconditionally. This is what closes both windows a naive
+// daysFromNow(0) misses: the ~8-hour Monday-before-8am-NY window (where that
+// same Monday's 8am instant still legitimately counts as "strictly after" an
+// early-morning run) and the UTC-vs-NY calendar-date skew near midnight.
+const nextDropDate = todayInNewYork(eventReleaseAtRaw('2000-01-01', new Date()));
+const triggersOccurredOn = dayBefore(nextDropDate);
+
+/** Creates an event through the real form and waits for its card to appear. */
+async function createEventViaForm(title, occurredOn) {
+  // A prior check's own save can still be settling in the background
+  // (including the quiet reload maybeOfferImmediatePublish triggers after
+  // Publish now): onSubmit's own state.busy guard silently ignores a submit
+  // fired while a save is still in flight, and New bails silently while
+  // categories or terms are mid-reload. Both wait for the same signal this
+  // file already uses elsewhere: event-save re-enabling, then New
+  // re-enabling, rather than racing either.
+  await until(() => !dom.$('event-save').disabled, 'a previous save never finished settling');
+  await until(() => !dom.$('event-new').disabled, 'the New button never became available');
+  dom.click(dom.$('event-new'));
+  dom.$('event-title').value = title;
+  dom.$('event-date').value = occurredOn;
+  dom.fire(dom.$('event-form'), 'submit');
+  await until(() => Boolean(eventRowFor(title)), `${title} never appeared in the list`);
+}
+
+await check('the publish-after-save dialog offers to publish an event whose release lands after its own date', async () => {
+  // triggersOccurredOn (see above) is the day before the next real Monday
+  // drop, so the drop always lands after this event's own date, on any day
+  // of the week or hour this suite happens to run.
+  await createEventViaForm('Verify Publish After Dialog Shows', triggersOccurredOn);
+
+  assert.equal(dom.$('event-publish-after-dialog').open, true, 'the dialog did not open after saving');
+  const meta = dom.$('event-publish-after-meta').textContent;
+  assert.match(meta, /Verify Publish After Dialog Shows/, 'the meta line does not name the event');
+  assert.match(
+    meta,
+    /Next drop is [A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/,
+    `the meta line does not read a release label: "${meta}"`,
+  );
+
+  dom.click(dom.$('event-publish-after-dialog').querySelector('[data-close]'));
+  await until(() => dom.$('event-publish-after-dialog').open === false, 'Leave queued did not close the dialog');
+});
+
+await check('the publish-after-save dialog does not appear for an event that will drop normally', async () => {
+  // Comfortably past the 14-day fairness window plus the worst-case up-to-7-
+  // day gap before the next Monday, so the drop lands before the event
+  // regardless of what weekday the suite runs on.
+  await createEventViaForm('Verify Publish After Dialog Normal Drop', daysFromNow(30));
+
+  assert.equal(
+    dom.$('event-publish-after-dialog').open,
+    false,
+    'the dialog opened for an event that will drop before it happens',
+  );
+});
+
+await check('Publish now calls set_event_published and the card re-renders as published', async () => {
+  await createEventViaForm('Verify Publish After Dialog Publish Now', triggersOccurredOn);
+  assert.equal(dom.$('event-publish-after-dialog').open, true, 'the dialog did not open after saving');
+
+  const [created] = await select('events', {
+    select: 'id',
+    filters: { title: 'eq.Verify Publish After Dialog Publish Now' },
+  });
+  assert.ok(created, 'the new event is missing from the table');
+
+  dom.fire(dom.$('event-publish-after-form'), 'submit');
+  // The dialog closes the instant it is submitted, same as every other
+  // confirm dialog in this file; the RPC that follows is still in flight, so
+  // this waits for the audit entry itself rather than for the dialog.
+  await until(
+    async () =>
+      (await adminAudit()).calls.some(
+        (call) => call.fn === 'set_event_published' && call.eventId === created.id && call.published === true,
+      ),
+    'set_event_published was not called for the new event',
+  );
+  assert.equal(dom.$('event-publish-after-dialog').open, false, 'Publish now did not close the dialog');
+
+  await until(
+    () =>
+      eventRowFor('Verify Publish After Dialog Publish Now')
+        ?.querySelector('.event-publish-status')
+        ?.textContent.trim() === 'Published',
+    'the card never re-rendered as published',
+  );
+});
+
+await check('Leave queued dismisses the dialog without writing anything', async () => {
+  await createEventViaForm('Verify Publish After Dialog Leave Queued', triggersOccurredOn);
+  assert.equal(dom.$('event-publish-after-dialog').open, true, 'the dialog did not open after saving');
+
+  const before = (await adminAudit()).calls.length;
+  dom.click(dom.$('event-publish-after-dialog').querySelector('[data-close]'));
+  await until(() => dom.$('event-publish-after-dialog').open === false, 'Leave queued did not close the dialog');
+
+  // Not a call count comparison: a still-settling background reload from an
+  // earlier check can add its own unrelated rest.* audit entries around this
+  // point. What Leave queued must never do is call set_event_published, so
+  // that is what this checks, from the moment this check took over.
+  const calls = (await adminAudit()).calls.slice(before);
+  assert.ok(
+    !calls.some((call) => call.fn === 'set_event_published'),
+    'Leave queued called set_event_published',
+  );
+
+  const row = eventRowFor('Verify Publish After Dialog Leave Queued');
+  assert.notEqual(
+    row?.querySelector('.event-publish-status')?.textContent.trim(),
+    'Published',
+    'the card reads published after Leave queued',
+  );
 });
 
 // This is the ordinary steady state for most events (hardly any get

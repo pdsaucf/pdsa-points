@@ -939,6 +939,23 @@
       </div>
     </dialog>
 
+    <!--
+      An event created late enough that its Monday release lands after its
+      own date will never auto-publish (docs/05-events-page.md). Offered
+      right after Save, since that is the one moment the officer is already
+      looking at this event.
+    -->
+    <dialog id="event-publish-after-dialog" class="dialog">
+      <form id="event-publish-after-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Publishes after the event</h2>
+        <p id="event-publish-after-meta" class="muted small event-publish-after-meta"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Leave queued</button>
+          <button type="submit" class="button button-primary">Publish now</button>
+        </div>
+      </form>
+    </dialog>
+
     <!-- Filing a paper sign-in sheet, including names not on the roster yet. -->
     <dialog id="attendee-add-dialog" class="dialog dialog-wide">
       <form id="attendee-add-form" method="dialog" novalidate>

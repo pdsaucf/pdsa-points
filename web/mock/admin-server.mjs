@@ -640,7 +640,7 @@ function mondayEightOnOrAfter(ymd) {
  * fn_event_release_at(occurred_on, created_at), in the mock. `occurredOn` is
  * a 'YYYY-MM-DD' string; `createdAt` is anything `new Date()` accepts.
  */
-function eventReleaseAtRaw(occurredOn, createdAt) {
+export function eventReleaseAtRaw(occurredOn, createdAt) {
   const [oy, om, od] = occurredOn.slice(0, 10).split('-').map(Number);
   const fourteenDaysBefore = addDaysYmd({ y: oy, m: om, d: od }, -14);
   const a = mondayEightOnOrAfter(fourteenDaysBefore);
