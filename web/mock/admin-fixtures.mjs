@@ -1199,6 +1199,14 @@ export function buildDatabase() {
       starts_at: null,
       ends_at: null,
       is_published: false,
+      // Created "now" (fixture load time) rather than the fixed 2026-08-01
+      // every other event defaults to: fn_event_release_at's second term is
+      // always the next Monday strictly AFTER created_at, so anchoring here
+      // on load time is what keeps this event queued no matter how long ago
+      // 2026-08-12 has since passed in real time. A fixed past created_at
+      // would eventually let the Monday drop release it, which would break
+      // the "no member may see it at all" property this fixture exists for.
+      created_at: new Date().toISOString(),
       category_id: CATEGORIES[0].id,
     },
     {
@@ -1210,6 +1218,104 @@ export function buildDatabase() {
       ends_at: null,
       is_published: true,
       category_id: CATEGORIES[2].id,
+    },
+  ];
+
+  // ---- the events page: the ways an event is queued or visible, and the one
+  // way it is not (docs/05-events-page.md) -------------------------------
+  //
+  //   visible, by hand      is_published true, shows up on /events today
+  //   visible, by the drop  is_published FALSE but is_visible true: the
+  //                         Monday release already happened on its own.
+  //                         This is the ordinary steady state for most
+  //                         events (hardly any are ever published by hand),
+  //                         and the admin card has to read exactly like the
+  //                         by-hand case: Published, solid border, no
+  //                         Unpublish button unless it would actually take
+  //                         effect (see eventPublishStatus() in
+  //                         web/src/events-model.js).
+  //   queued, future drop   not published, not yet visible; its Monday
+  //                         release has not happened yet
+  //   queued, publishes
+  //   after the event       not published, not yet visible, and created
+  //                         late enough that its Monday release lands after
+  //                         its own date; the admin list has to warn about
+  //                         this rather than silently sitting on it forever
+  //
+  // Every date but the auto-released one is computed off Date.now(), for the
+  // same reason `future` above is: a fixture that typed a literal date stops
+  // being "in two weeks" the day nobody is watching it. The auto-released
+  // fixture needs the opposite: a created_at fixed far enough in the past
+  // that its own first-Monday-after-creation has already passed, which is
+  // exactly what lets fn_event_release_at's second term stop blocking the
+  // release. Anchoring that one on load time (as e0000000-...ea2 above does,
+  // deliberately, to STAY queued) would make it flip between queued and
+  // released depending on what day the suite happens to run.
+  const daysFromNow = (n) => new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const eventsPageEvents = [
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea1',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Test Events Page Visible',
+      occurred_on: daysFromNow(14),
+      starts_at: null,
+      ends_at: null,
+      is_published: true,
+      location: 'Chemistry Building Room 101',
+      attire: 'Business casual',
+      signup: 'https://forms.example.com/events-page-visible',
+      description: 'A public description of what to expect at this event.',
+    },
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea2',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Test Events Page Queued Future Drop',
+      occurred_on: daysFromNow(90),
+      starts_at: null,
+      ends_at: null,
+      is_published: false,
+      created_at: new Date().toISOString(),
+      location: null,
+      attire: null,
+      signup: 'Sign up at GBM',
+      description: null,
+    },
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea3',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Test Events Page Publishes After Event',
+      // Close enough that the very next Monday from "now" (created_at, also
+      // now) falls after the event itself: the warn case from
+      // docs/05-events-page.md ("Not visible / Publishes after the event").
+      occurred_on: daysFromNow(2),
+      starts_at: null,
+      ends_at: null,
+      is_published: false,
+      created_at: new Date().toISOString(),
+      location: 'TBD',
+      attire: null,
+      signup: null,
+      description: null,
+    },
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea4',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Test Events Page Auto Released',
+      // occurred_on within the next two weeks makes term A (the fairness
+      // window) fall in the past; a fixed, long-past created_at makes term B
+      // (the first Monday after creation) fall in the past too. Both terms
+      // past means release_at itself is past, so is_visible reads true from
+      // the Monday drop alone, with is_published left false throughout.
+      occurred_on: daysFromNow(3),
+      starts_at: null,
+      ends_at: null,
+      is_published: false,
+      created_at: '2026-08-01T12:00:00.000Z',
+      location: null,
+      attire: null,
+      signup: null,
+      description: null,
     },
   ];
 
@@ -1359,16 +1465,24 @@ export function buildDatabase() {
       ...historyEvents.map(({ category_id, credit_mode, ...event }) => event),
       ...portalEvents.map(({ category_id, ...event }) => event),
       ...storageEvents,
+      ...eventsPageEvents,
     ].map((event) => ({
       config_version: 1,
       term_id: null,
       notes: null,
+      location: null,
+      attire: null,
+      signup: null,
+      description: null,
       review_policy: 'manual_review',
       checkin_opens_at: null,
       checkin_closes_at: null,
       token_rotated_at: null,
       created_by: null,
       created_at: '2026-08-01T12:00:00.000Z',
+      // Migration 29's default: a fixture event is already-published history
+      // unless the row below says otherwise.
+      is_published: true,
       ...event,
       checkin_token: event.checkin_token ?? CHECKIN_TOKENS[event.id] ?? `tok-${event.id.slice(-12)}`,
     })),
@@ -1412,6 +1526,7 @@ export function buildDatabase() {
       { key: 'evidence_retention_months', value: 12, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
       { key: 'storage_warn_percent', value: 75, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
       { key: 'storage_quota_bytes', value: 1073741824, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      { key: 'events_auto_publish', value: true, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
     ],
     purge_runs: purgeRuns,
     purge_run_objects: purgeRunObjects,

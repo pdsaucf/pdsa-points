@@ -6,6 +6,7 @@ import {
   ADMIN_RPC_PROBES,
   EVENTS_STARTUP_PROBE,
   PORTAL_LOOKUP_PROBE,
+  PORTAL_EVENTS_PROBE,
 } from '../scripts/check_deployed_contracts.mjs';
 
 const jsonResponse = (status, body) =>
@@ -31,6 +32,7 @@ test('the deployment guard probes the event mutation signatures without officer 
     anonKey: 'public-anon-key',
     eventsProbe: null,
     portalLookupProbe: null,
+    portalEventsProbe: null,
     fetchImpl: async (url, init) => {
       requests.push({ url, init });
       return jsonResponse(401, { code: '42501', message: 'permission denied for function' });
@@ -63,6 +65,7 @@ test('the deployment guard probes the exact Events startup GET without officer c
     anonKey: 'public-anon-key',
     adminRpcProbes: [],
     portalLookupProbe: null,
+    portalEventsProbe: null,
     fetchImpl: async (url, init) => {
       requests.push({ url, init });
       return jsonResponse(401, { code: '42501', message: 'permission denied for table events' });
@@ -77,7 +80,7 @@ test('the deployment guard probes the exact Events startup GET without officer c
   assert.equal(requests[0].init.body, undefined);
   assert.equal(
     requests[0].url,
-    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cconfig_version%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
+    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cconfig_version%2Clocation%2Cattire%2Csignup%2Cdescription%2Cis_published%2Crelease_at%2Cis_visible%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
   );
   assert.equal(EVENTS_STARTUP_PROBE.query, new URL(requests[0].url).search.slice(1));
 });
@@ -90,6 +93,7 @@ test('the deployment guard rejects the reproduced missing Events column', async 
         anonKey: 'public-anon-key',
         adminRpcProbes: [],
         portalLookupProbe: null,
+        portalEventsProbe: null,
         fetchImpl: async () =>
           jsonResponse(400, {
             code: '42703',
@@ -110,6 +114,7 @@ test('the deployment guard rejects a missing RPC or stale parameter signature', 
         anonKey: 'public-anon-key',
         eventsProbe: null,
         portalLookupProbe: null,
+        portalEventsProbe: null,
         adminRpcProbes: [ADMIN_RPC_PROBES[2]],
         fetchImpl: async () =>
           jsonResponse(404, {
@@ -129,6 +134,7 @@ test('the deployment guard rejects an anonymously callable admin RPC', async () 
         anonKey: 'public-anon-key',
         eventsProbe: null,
         portalLookupProbe: null,
+        portalEventsProbe: null,
         adminRpcProbes: [ADMIN_RPC_PROBES[1]],
         fetchImpl: async () => jsonResponse(200, []),
       }),
@@ -144,6 +150,7 @@ test('the deployment guard fails closed when the database cannot be checked', as
         anonKey: 'public-anon-key',
         eventsProbe: null,
         portalLookupProbe: null,
+        portalEventsProbe: null,
         adminRpcProbes: [ADMIN_RPC_PROBES[1]],
         fetchImpl: async () => {
           throw new Error('offline');
@@ -160,6 +167,7 @@ test('the deployment guard probes the portal lookup contract with a synthetic na
     anonKey: 'public-anon-key',
     adminRpcProbes: [],
     eventsProbe: null,
+    portalEventsProbe: null,
     fetchImpl: async (url, init) => {
       requests.push({ url, init });
       const args = JSON.parse(init.body);
@@ -192,6 +200,7 @@ test('the deployment guard rejects a missing one-arg portal lookup', async () =>
         anonKey: 'public-anon-key',
         adminRpcProbes: [],
         eventsProbe: null,
+        portalEventsProbe: null,
         fetchImpl: async (url, init) => {
           const args = JSON.parse(init.body);
           if (Object.hasOwn(args, 'p_name')) {
@@ -218,8 +227,66 @@ test('the deployment guard rejects a still-callable two-arg portal lookup', asyn
         anonKey: 'public-anon-key',
         adminRpcProbes: [],
         eventsProbe: null,
+        portalEventsProbe: null,
         fetchImpl: async () => jsonResponse(200, []),
       }),
     /portal_find_members\(p_first_name, p_last_name\) is still callable/,
+  );
+});
+
+test('the deployment guard probes portal_events, the /events page own contract', async () => {
+  const requests = [];
+  const checked = await checkDeployedContracts({
+    baseUrl: 'https://example.supabase.co/',
+    anonKey: 'public-anon-key',
+    adminRpcProbes: [],
+    eventsProbe: null,
+    portalLookupProbe: null,
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return jsonResponse(200, { year: { id: 'a0', label: '2025-2026' }, events: [] });
+    },
+  });
+
+  assert.deepEqual(checked, ['portal_events']);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://example.supabase.co/rest/v1/rpc/portal_events');
+  assert.equal(requests[0].init.method, 'POST');
+  assert.equal(requests[0].init.headers.apikey, 'public-anon-key');
+  assert.equal(requests[0].init.headers.Authorization, 'Bearer public-anon-key');
+  assert.deepEqual(JSON.parse(requests[0].init.body), PORTAL_EVENTS_PROBE.args);
+});
+
+test('the deployment guard rejects a missing portal_events RPC', async () => {
+  await assert.rejects(
+    () =>
+      checkDeployedContracts({
+        baseUrl: 'https://example.supabase.co',
+        anonKey: 'public-anon-key',
+        adminRpcProbes: [],
+        eventsProbe: null,
+        portalLookupProbe: null,
+        fetchImpl: async () =>
+          jsonResponse(404, {
+            code: 'PGRST202',
+            message: 'Could not find the function in the schema cache',
+          }),
+      }),
+    /portal_events is missing/,
+  );
+});
+
+test('the deployment guard rejects a portal_events response with the wrong shape', async () => {
+  await assert.rejects(
+    () =>
+      checkDeployedContracts({
+        baseUrl: 'https://example.supabase.co',
+        anonKey: 'public-anon-key',
+        adminRpcProbes: [],
+        eventsProbe: null,
+        portalLookupProbe: null,
+        fetchImpl: async () => jsonResponse(200, { year: null }),
+      }),
+    /Could not verify portal_events: expected an object with an events array/,
   );
 });

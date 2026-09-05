@@ -43,6 +43,7 @@ import {
   attendeeName,
   canDeleteEvent,
   collectsTypedValue,
+  eventPublishStatus,
   eventStats,
   eventStatus,
   sortAttendees,
@@ -69,6 +70,7 @@ const RECORD_SELECT = [
 // itself rather than trusting the copy it was handed. See open().
 const EVENT_SELECT = [
   'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at,config_version',
+  'location,attire,signup,description,is_published,release_at,is_visible',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');
@@ -262,12 +264,14 @@ export function createEventDetail(ctx, host) {
     title: $('event-detail-title'),
     meta: $('event-detail-meta'),
     status: $('event-detail-status'),
+    publishStatus: $('event-detail-publish-status'),
     chips: $('event-detail-chips'),
 
     qr: $('event-detail-qr'),
     preview: $('event-detail-preview'),
     edit: $('event-detail-edit'),
     duplicate: $('event-detail-duplicate'),
+    publish: $('event-detail-publish'),
     remove: $('event-detail-delete'),
 
     stats: $('event-detail-stats'),
@@ -423,6 +427,17 @@ export function createEventDetail(ctx, host) {
     el.status.dataset.status = status.toLowerCase();
 
     el.meta.textContent = shortDate(event.occurred_on);
+
+    const publish = eventPublishStatus(event, host.autoPublishEnabled?.() ?? true);
+    // Not visible: the button always offers to force it early. Visible: it
+    // is offered only when it would actually take effect, the same rule the
+    // list card follows (see eventPublishStatus's own comment).
+    const offerButton = !publish.visible || publish.canUnpublish;
+    setHidden(el.publish, !offerButton);
+    if (offerButton) el.publish.textContent = publish.visible ? 'Unpublish' : 'Publish';
+    el.publishStatus.textContent = publish.detail ? `${publish.label} · ${publish.detail}` : publish.label;
+    el.publishStatus.dataset.visible = String(publish.visible);
+    el.publishStatus.dataset.warn = String(publish.warn);
 
     const links = event.event_categories ?? [];
     el.chips.replaceChildren(
@@ -655,7 +670,7 @@ export function createEventDetail(ctx, host) {
 
   function setBusy(on) {
     state.busy = on;
-    for (const node of [el.approveAll, el.add, el.exportCsv, el.duplicate]) {
+    for (const node of [el.approveAll, el.add, el.exportCsv, el.duplicate, el.publish]) {
       node.disabled = on;
     }
     // Delete answers to the event's own state as well as to a write in
@@ -1157,6 +1172,36 @@ export function createEventDetail(ctx, host) {
   }
 
   // -------------------------------------------------------------------------
+  // Publishing: separate from saving configuration, on purpose (see the
+  // header comment in supabase/migrations/20260903120000_events_page.sql and
+  // web/src/events.js). set_event_published() is its own RPC and this button
+  // is the only thing on this screen that calls it.
+  // -------------------------------------------------------------------------
+
+  async function togglePublish() {
+    if (state.busy || !state.event) return;
+    // The button offered is always the opposite of whether the event is
+    // currently VISIBLE, not of is_published: see eventPublishStatus() for
+    // why those are different questions once the Monday drop is involved.
+    const publish = eventPublishStatus(state.event, host.autoPublishEnabled?.() ?? true);
+    const publishing = !publish.visible;
+    ctx.clearMessage();
+    setBusy(true);
+    try {
+      await callRpc('set_event_published', {
+        p_event_id: state.event.id,
+        p_published: publishing,
+      });
+      const said = publishing ? `${state.event.title} published.` : `${state.event.title} unpublished.`;
+      await refreshAfterAttendanceChange(said);
+    } catch (err) {
+      ctx.fail(err, null);
+    } finally {
+      if (!state.refreshLocked) setBusy(false);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // The event itself
   // -------------------------------------------------------------------------
 
@@ -1243,6 +1288,7 @@ export function createEventDetail(ctx, host) {
     el.preview.addEventListener('click', () => host.previewCheckin(state.event));
     el.edit.addEventListener('click', () => host.openForm(state.event));
     el.duplicate.addEventListener('click', () => host.duplicate(state.event));
+    el.publish.addEventListener('click', togglePublish);
     el.remove.addEventListener('click', askToDelete);
 
     el.approveAll.addEventListener('click', approveAllWaiting);

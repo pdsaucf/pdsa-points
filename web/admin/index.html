@@ -151,6 +151,19 @@
           <button id="event-new" type="button" class="button button-primary">New event</button>
         </div>
 
+        <!--
+          The Monday drop, global. Not per event: docs/05-events-page.md says
+          an exemptible fairness rule is not one, so this is the one place
+          app_settings.events_auto_publish is read or written.
+        -->
+        <div class="events-auto-publish">
+          <label class="event-checkbox">
+            <input id="events-auto-publish-toggle" type="checkbox" />
+            Publish queued events automatically
+          </label>
+          <p id="events-auto-publish-note" class="muted small"></p>
+        </div>
+
         <!-- One tab per category this year's events actually use, built from
              the events themselves rather than from the category table: a tab
              that filters to nothing teaches an officer nothing. -->
@@ -184,6 +197,7 @@
             <button id="event-detail-preview" type="button" class="button">Preview check-in</button>
             <button id="event-detail-edit" type="button" class="button">Edit</button>
             <button id="event-detail-duplicate" type="button" class="button">Duplicate</button>
+            <button id="event-detail-publish" type="button" class="button">Publish</button>
             <button id="event-detail-delete" type="button" class="button button-danger">Delete</button>
           </div>
 
@@ -199,6 +213,7 @@
                 <span id="event-detail-meta" class="muted small"></span>
                 <span id="event-detail-status" class="event-status"></span>
               </p>
+              <p id="event-detail-publish-status" class="event-publish-status"></p>
               <div id="event-detail-chips" class="chip-row"></div>
               <p id="event-detail-window" class="muted small"></p>
             </header>
@@ -272,6 +287,26 @@
               <label class="label" for="event-term">Term</label>
               <select id="event-term" class="select"></select>
             </div>
+
+            <h3 class="zone-title">On the public events page</h3>
+            <label class="label" for="event-location">Location</label>
+            <input id="event-location" class="input" type="text" maxlength="200" autocomplete="off" />
+
+            <label class="label" for="event-attire">Attire</label>
+            <input id="event-attire" class="input" type="text" maxlength="200" autocomplete="off" />
+
+            <label class="label" for="event-signup">Sign-up</label>
+            <input
+              id="event-signup"
+              class="input"
+              type="text"
+              maxlength="500"
+              autocomplete="off"
+              placeholder="A web address becomes a button. Anything else shows as text."
+            />
+
+            <label class="label" for="event-description">Description</label>
+            <textarea id="event-description" class="input" rows="3" maxlength="600"></textarea>
 
             <h3 class="zone-title">Counts toward</h3>
             <div id="event-categories" class="event-category-list"></div>

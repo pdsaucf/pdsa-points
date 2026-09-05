@@ -148,11 +148,24 @@ Breaking any of these reintroduces a problem the design exists to solve:
    attendance for the current year, and nothing else.** Category totals, point totals,
    the honorary verdict, the published rules, and (through `portal_attendance()`) every
    published event of the year with that member's own status against it: attended,
-   waiting, declined, upcoming, or nothing. Never an address, a student id, a note, an
-   officer's decline reason, a photo, or anybody else's records. The portal has no login,
-   so this is readable by anyone who can open the site and type a name, the same
-   decision the leaderboard already makes. Widening that surface further means editing
-   the written-out list in `test/privileges.test.mjs` on purpose.
+   waiting, declined, upcoming, or nothing. `portal_attendance()` widens this once more,
+   precisely: a member's own attendance on an event that has already happened is visible
+   even when the event itself has never been published or auto-released, because the
+   credit views never gated on publish state and an invisible event's points were
+   already counting toward that member's total. This does NOT extend to a future,
+   unannounced event: `portal_attendance()` is callable by anonymous id, so an unbounded
+   exception would let anyone read a queued event off of whoever already checked into
+   it, ahead of the Monday drop. `portal_events()` widens the surface again, for the
+   public `/events` page: with no name typed and no login at all, every published (or
+   auto-released) event of the year that has not happened yet, its date, time, location,
+   attire, sign-up and a member-facing description, and its categories. `portal_events()`
+   stays filtered on visibility alone, with no attendance-based exception. Never an
+   address, a student id, a note, an officer's decline reason, a photo, anybody else's
+   records, or (through `portal_events()`) a member, an attendance status, or
+   `events.notes`. The portal has no login, so this is readable by anyone who can open
+   the site and type a name, the same decision the leaderboard already makes, and
+   `/events` needs no name at all. Widening that surface further means editing the
+   written-out list in `test/privileges.test.mjs` on purpose.
 
 ## Multi-agent workflow
 

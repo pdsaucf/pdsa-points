@@ -254,6 +254,12 @@ insert into events (id, academic_year_id, term_id, title, occurred_on, checkin_t
   ('${EVENTS.mediaWrite}',  '${YEAR_2026}', '${TERM_SPRING}', 'Test Media Writing Piece',    date '2027-02-20', 'tok-media-write'),
   ('${EVENTS.priorGbm}',    '${YEAR_2025}', null,             'Test Prior Year GBM Block',   date '2026-03-01', 'tok-prior-gbm');
 
+-- These events are the club's already-announced history for the year, which
+-- every test file that uses this fixture assumes. The queue-and-publish
+-- workflow itself is exercised in test/events_page.test.mjs and the two
+-- fixtures named for it in test/public_portal.test.mjs, not here.
+update events set is_published = true;
+
 -- ---- what each event counts for -------------------------------------------
 -- Note fixed_credit values other than 1: one "block" event stands in for a
 -- run of real events, which is also how a genuine double-credit GBM is

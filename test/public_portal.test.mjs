@@ -354,8 +354,8 @@ test('a past event nobody checked in for reads as none, not as upcoming', async 
   // event has to be created here rather than borrowed from the fixture.
   const eventId = '22222222-0000-4000-a000-00000000ff03';
   await db.exec(`
-    insert into events (id, academic_year_id, title, occurred_on, checkin_token)
-    values ('${eventId}', '${YEAR_2026}', 'Test Already Happened', current_date - 1, 'tok-past');
+    insert into events (id, academic_year_id, title, occurred_on, checkin_token, is_published)
+    values ('${eventId}', '${YEAR_2026}', 'Test Already Happened', current_date - 1, 'tok-past', true);
     insert into event_categories (event_id, category_id, credit_mode, fixed_credit)
     values ('${eventId}', 'c0000000-0000-4000-a000-000000000001', 'fixed', 1);
   `);
@@ -434,8 +434,8 @@ test('a category retired mid year still shows if this member holds credit in it'
     values ('${memberId}', '${YEAR_2026}');
     insert into categories (id, slug, name, sort_order)
     values ('${categoryId}', 'test-retired-mid-year', 'Test Retired Category', 200);
-    insert into events (id, academic_year_id, title, occurred_on, checkin_token)
-    values ('${eventId}', '${YEAR_2026}', 'Test Retired Category Event', date '2026-09-12', 'tok-retired');
+    insert into events (id, academic_year_id, title, occurred_on, checkin_token, is_published)
+    values ('${eventId}', '${YEAR_2026}', 'Test Retired Category Event', date '2026-09-12', 'tok-retired', true);
     insert into event_categories (event_id, category_id, credit_mode, fixed_credit)
     values ('${eventId}', '${categoryId}', 'fixed', 1);
     insert into attendance_records (event_id, member_id, status, source)
@@ -595,10 +595,13 @@ test('event times are optional as a pair, ordered, and returned without changing
   await db.exec(`update events set starts_at = null, ends_at = null where id = '${EVENTS.gbmBlock}'`);
 });
 
-test('events has no location column', async () => {
+// Migration 25 dropped this column, on the stated grounds that the club does
+// not use it. Migration 29 (docs/05-events-page.md) restores it: the club
+// uses it, and the public events page needs somewhere to read it from.
+test('events has a location column again, for the public events page', async () => {
   assert.equal(
     await db.val(`select count(*)::int from information_schema.columns where table_schema = 'public' and table_name = 'events' and column_name = 'location'`),
-    0,
+    1,
   );
 });
 

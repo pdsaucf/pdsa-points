@@ -228,7 +228,9 @@ await check("review_policy on a created event is 'manual_review'", async () => {
     filters: { id: `eq.${event.id}` },
   });
   assert.equal(reread.review_policy, 'manual_review');
-  assert.equal(reread.is_published, true);
+  // Migration 29 flips the column default: a newly created event is queued
+  // until an officer publishes it or the Monday drop reaches it.
+  assert.equal(reread.is_published, false);
 });
 
 await check('a second "member types the number" category is refused by the database', async () => {
@@ -1239,13 +1241,12 @@ await check('the events list draws the year, and last year stays out of it', () 
   assert.ok(!titles.includes('Fall GBM 1'), 'last year\'s event is on this year\'s list');
 });
 
-await check('the editor requires paired, ordered actual times and has no Location field', async () => {
+await check('the editor requires paired, ordered actual times', async () => {
   const before = (await select('events', {
     select: 'id',
     filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
   })).length;
   dom.click(dom.$('event-new'));
-  assert.equal(dom.$('event-location'), null);
   dom.$('event-title').value = 'Verify Time Validation';
   dom.$('event-starts').value = '2026-09-20T18:00';
   dom.fire(dom.$('event-form'), 'submit');
@@ -1260,6 +1261,106 @@ await check('the editor requires paired, ordered actual times and has no Locatio
   })).length;
   assert.equal(after, before, 'an invalid time pair was submitted');
   dom.click(dom.$('event-cancel'));
+});
+
+// Migration 25 dropped location on the stated grounds that the club does not
+// use it; migration 29 (docs/05-events-page.md) restores it for the public
+// /events page, alongside three new fields. This is what proves the round
+// trip: typed in the form, sent by save_event_config(), and read back by the
+// next load, the way every other field on this form already is.
+await check('Location, Attire, Sign-up and Description save and reload with the event', async () => {
+  dom.click(dom.$('event-new'));
+  dom.$('event-title').value = 'Verify Public Fields';
+  dom.$('event-date').value = '2026-09-25';
+  dom.$('event-location').value = '  Student Union 218  ';
+  dom.$('event-attire').value = 'Business casual';
+  dom.$('event-signup').value = 'https://forms.example.com/verify-public-fields';
+  dom.$('event-description').value = 'What a member reads on the public events page.';
+  dom.fire(dom.$('event-form'), 'submit');
+  // The form hides the instant hideForm() runs, before the reload it kicks
+  // off has repainted the list with the new row: waiting on the form alone
+  // is a race, so this waits for the row itself.
+  await until(() => Boolean(eventRowFor('Verify Public Fields')), 'the new event never appeared in the list');
+
+  const [saved] = await select('events', {
+    select: 'id,title,location,attire,signup,description',
+    filters: { title: 'eq.Verify Public Fields' },
+  });
+  assert.ok(saved, 'the new event is missing from the table');
+  assert.equal(saved.location, 'Student Union 218');
+  assert.equal(saved.attire, 'Business casual');
+  assert.equal(saved.signup, 'https://forms.example.com/verify-public-fields');
+  assert.equal(saved.description, 'What a member reads on the public events page.');
+
+  const row = eventRowFor('Verify Public Fields');
+  dom.click(dom.buttonNamed(row, 'Edit'));
+  assert.equal(dom.$('event-location').value, 'Student Union 218');
+  assert.equal(dom.$('event-attire').value, 'Business casual');
+  assert.equal(dom.$('event-signup').value, 'https://forms.example.com/verify-public-fields');
+  assert.equal(dom.$('event-description').value, 'What a member reads on the public events page.');
+
+  // Blanked, the same way every other optional field on this form clears to
+  // null rather than to an empty string sitting in the column forever.
+  dom.$('event-location').value = '';
+  dom.$('event-attire').value = '';
+  dom.$('event-signup').value = '';
+  dom.$('event-description').value = '';
+  dom.fire(dom.$('event-form'), 'submit');
+  await until(() => dom.$('event-form-view').hidden, 'the cleared event did not save');
+
+  const [cleared] = await select('events', {
+    select: 'location,attire,signup,description',
+    filters: { title: 'eq.Verify Public Fields' },
+  });
+  assert.equal(cleared.location, null);
+  assert.equal(cleared.attire, null);
+  assert.equal(cleared.signup, null);
+  assert.equal(cleared.description, null);
+});
+
+// This is the ordinary steady state for most events (hardly any get
+// published by hand): is_published stays false forever and is_visible turns
+// true on its own from the Monday drop. A card that branched on is_published
+// first would call this "queued" with a stale drop date already in the past
+// and offer a Publish button for something the whole club can already see.
+// Unpublish must not be offered either: set_event_published(id, false) would
+// only flip a column here, since fn_event_is_visible() keeps returning true
+// from the drop alone once release_at has passed while the toggle is on, so
+// a button that cannot take effect must not be drawn as though it can.
+await check('an auto-released event reads Published, solid, with no Publish or Unpublish button', async () => {
+  const search = dom.$('events-search');
+  search.value = 'Test Events Page Auto Released';
+  dom.fire(search, 'input');
+  await until(
+    () => rowTitles().includes('Test Events Page Auto Released'),
+    'the auto-released fixture never appeared',
+  );
+
+  const row = eventRowFor('Test Events Page Auto Released');
+  assert.ok(row, 'Test Events Page Auto Released is missing from the list');
+  assert.equal(row.dataset.visible, 'true', 'an auto-released event drew as not visible');
+  const status = row.querySelector('.event-publish-status');
+  assert.equal(status?.textContent.trim(), 'Published', `status reads "${status?.textContent}"`);
+  assert.equal(dom.buttonNamed(row, 'Publish'), null, 'a visible event still offers Publish');
+  assert.equal(dom.buttonNamed(row, 'Unpublish'), null, 'Unpublish is offered where it would be a no-op');
+  assert.doesNotMatch(
+    row.querySelector('.event-actions').textContent,
+    /null/,
+    'omitting the publish button left a stray "null" in the actions row',
+  );
+
+  dom.click(dom.buttonNamed(row, 'View event'));
+  await until(() => !dom.$('event-detail-body').hidden, 'the auto-released event detail never opened');
+  assert.equal(
+    dom.$('event-detail-publish-status').textContent.trim(),
+    'Published',
+    'the detail screen disagrees with its own card',
+  );
+  assert.equal(dom.$('event-detail-publish').hidden, true, 'the detail toolbar offers a no-op Unpublish');
+  dom.click(dom.$('event-detail-back'));
+
+  search.value = '';
+  dom.fire(search, 'input');
 });
 
 await check('event cards separate headings, status metadata, counts, and actions', async () => {
@@ -1478,17 +1579,16 @@ await check('picking a tab narrows the list to that category', () => {
   assert.ok(rowTitles().includes('Spring GBM 5'), 'All did not put the list back');
 });
 
-await check('search narrows on the title and carries no location field', () => {
+await check('search narrows on the title only', () => {
   try {
     const search = dom.$('events-search');
     search.value = 'soap';
     dom.fire(search, 'input');
     assert.deepEqual(rowTitles(), ['Soap Carving']);
 
-    assert.equal(dom.$('event-location'), null, 'the removed Location input is still in the form');
     search.value = 'hpa-2';
     dom.fire(search, 'input');
-    assert.ok(!dom.$('empty-events').hidden, 'removed location data still affects search');
+    assert.ok(!dom.$('empty-events').hidden, 'a search term matching no title still returned rows');
 
     search.value = 'zzzz';
     dom.fire(search, 'input');

@@ -2181,6 +2181,27 @@ kbd {
    same spot in the list.
    --------------------------------------------------------------------------- */
 
+.events-auto-publish {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.events-auto-publish .event-checkbox {
+  font-weight: 600;
+}
+
+#events-auto-publish-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .event-list {
   display: grid;
   gap: 0.5rem;
@@ -2223,13 +2244,23 @@ kbd {
   grid-template-columns: 4.5rem minmax(10rem, 1.2fr) minmax(12rem, 1.6fr) auto;
   grid-template-areas:
     'date title categories actions'
-    'date counts status actions';
+    'date counts status actions'
+    'date publish publish actions';
   align-items: center;
   gap: 0.5rem 0.75rem;
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+/* Queued versus visible has to read without the label: a dashed edge for a
+   card nothing has announced yet, solid once it has, in border-STYLE rather
+   than colour alone so the distinction survives forced-colours and a
+   colour-blind eye. .event-publish-status below carries the same fact in
+   words, for a screen reader and for everyone else. */
+.event-row[data-visible='false'] {
+  border-style: dashed;
 }
 
 .event-date {
@@ -2311,6 +2342,30 @@ kbd {
   flex: 0 0 0.5rem;
   background: currentColor;
   border-radius: 50%;
+}
+
+.event-publish-status {
+  grid-area: publish;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.event-publish-status[data-visible='true'] {
+  color: var(--ok);
+}
+
+.event-publish-status[data-warn='true'] {
+  color: var(--danger);
+}
+
+.event-publish-detail {
+  color: inherit;
+  font-weight: 500;
 }
 
 .event-actions {
@@ -2502,6 +2557,7 @@ kbd {
       'date categories'
       'date counts'
       'date status'
+      'date publish'
       'actions actions';
     align-items: start;
   }
@@ -2530,6 +2586,7 @@ kbd {
       'categories'
       'counts'
       'status'
+      'publish'
       'actions';
   }
 

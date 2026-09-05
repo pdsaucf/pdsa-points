@@ -563,6 +563,114 @@ function totalsByMember(yearId) {
 /** fn_portal_year(): the one year with is_current set. */
 const portalYear = () => db.academic_years.find((row) => row.is_current) ?? null;
 
+/** fn_setting_bool(), in the mock. app_settings.value is stored plain (not jsonb text), matching every other settingXxx reader here. */
+const settingBool = (key, fallback) => {
+  const row = db.app_settings.find((s) => s.key === key);
+  return row ? Boolean(row.value) : fallback;
+};
+
+// ---------------------------------------------------------------------------
+// The Monday drop: fn_event_release_at() and fn_event_is_visible(), in JS
+// ---------------------------------------------------------------------------
+// docs/05-events-page.md and supabase/migrations/20260903120000_events_page.sql.
+// Reproduced here rather than shared with the SQL because the mock has no way
+// to run Postgres functions; this is the one place the arithmetic has to be
+// kept in sync by hand, and the DST test in test/events_page.test.mjs is what
+// a drifted copy of it would fail.
+//
+// The wall-clock-in-a-named-zone conversion below is the standard two-read
+// trick: format the UTC guess in America/New_York to find the offset that
+// zone actually had at that instant, then apply it. One pass is enough for
+// every case this arithmetic produces (a Monday 08:00 is never inside a DST
+// gap or fold), which is also why the SQL side needs no loop either.
+const NY_ZONE = 'America/New_York';
+
+function tzOffsetMs(utcMs, timeZone) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const parts = Object.fromEntries(
+    dtf.formatToParts(new Date(utcMs)).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]),
+  );
+  const asIfUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second),
+  );
+  return asIfUtc - utcMs;
+}
+
+/** The UTC instant for 08:00 local time, on date `y`-`m`-`d`, in `timeZone`. */
+function zonedEightAm(y, m, d, timeZone) {
+  const guess = Date.UTC(y, m - 1, d, 8, 0, 0);
+  return new Date(guess - tzOffsetMs(guess, timeZone));
+}
+
+/** The local (`timeZone`) calendar date, as {y, m, d}, of a UTC instant. */
+function zonedDateParts(utcMs, timeZone) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const parts = Object.fromEntries(dtf.formatToParts(new Date(utcMs)).map((p) => [p.type, p.value]));
+  return { y: Number(parts.year), m: Number(parts.month), d: Number(parts.day) };
+}
+
+/** date + days, in plain Y/M/D arithmetic (no time zone involved). */
+function addDaysYmd({ y, m, d }, days) {
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+}
+
+/** isodow: Monday=1 .. Sunday=7. */
+function isodowYmd({ y, m, d }) {
+  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+/** The first Monday 08:00 America/New_York on or after Y/M/D date `ymd`. */
+function mondayEightOnOrAfter(ymd) {
+  const monday = addDaysYmd(ymd, (8 - isodowYmd(ymd)) % 7);
+  return zonedEightAm(monday.y, monday.m, monday.d, NY_ZONE);
+}
+
+/**
+ * fn_event_release_at(occurred_on, created_at), in the mock. `occurredOn` is
+ * a 'YYYY-MM-DD' string; `createdAt` is anything `new Date()` accepts.
+ */
+function eventReleaseAtRaw(occurredOn, createdAt) {
+  const [oy, om, od] = occurredOn.slice(0, 10).split('-').map(Number);
+  const fourteenDaysBefore = addDaysYmd({ y: oy, m: om, d: od }, -14);
+  const a = mondayEightOnOrAfter(fourteenDaysBefore);
+
+  const createdMs = new Date(createdAt).getTime();
+  const createdLocalDate = zonedDateParts(createdMs, NY_ZONE);
+  let b = mondayEightOnOrAfter(createdLocalDate);
+  if (b.getTime() <= createdMs) {
+    b = mondayEightOnOrAfter(addDaysYmd(createdLocalDate, 7));
+  }
+
+  return a.getTime() > b.getTime() ? a : b;
+}
+
+/** release_at(events), in the mock: takes the whole row, the PostgREST convention. */
+const eventReleaseAt = (event) => eventReleaseAtRaw(event.occurred_on, event.created_at);
+
+/** fn_event_is_visible(), in the mock. */
+function eventIsVisibleRaw(isPublished, occurredOn, createdAt) {
+  return Boolean(
+    isPublished ||
+      (settingBool('events_auto_publish', true) &&
+        Date.now() >= eventReleaseAtRaw(occurredOn, createdAt).getTime()),
+  );
+}
+
+/** is_visible(events), in the mock: takes the whole row, the PostgREST convention. */
+const eventIsVisible = (event) =>
+  eventIsVisibleRaw(event.is_published, event.occurred_on, event.created_at);
+
 const publishedSetFor = (yearId) =>
   db.requirement_sets.find((row) => row.academic_year_id === yearId && row.status === 'published') ??
   null;
@@ -978,6 +1086,19 @@ function descend(filters, name) {
 const ownFilters = (filters) =>
   Object.fromEntries(Object.entries(filters).filter(([key]) => !key.includes('.')));
 
+// PostgREST computed columns: a function taking the whole row, exposed as a
+// selectable column that is NOT part of `select=*` (same as real Postgres,
+// where `*` expands only actual table columns, not functions). Officer-only
+// in the real migration, but the mock does not model per-column grants, so
+// this is gated the same way every other officer-only read is: by the
+// caller's role, in visibleRows().
+const COMPUTED_COLUMNS = {
+  events: {
+    release_at: (row) => eventReleaseAt(row).toISOString(),
+    is_visible: (row) => eventIsVisible(row),
+  },
+};
+
 function shape(table, row, nodes, auth, filters) {
   const out = {};
   let dropped = false;
@@ -989,7 +1110,8 @@ function shape(table, row, nodes, auth, filters) {
     }
 
     if (!node.children) {
-      out[node.name] = row[node.name] ?? null;
+      const computed = COMPUTED_COLUMNS[table]?.[node.name];
+      out[node.name] = computed ? computed(row) : (row[node.name] ?? null);
       continue;
     }
 
@@ -1157,12 +1279,18 @@ const INSERT_DEFAULTS = {
     starts_at: null,
     ends_at: null,
     notes: null,
+    location: null,
+    attire: null,
+    signup: null,
+    description: null,
     review_policy: 'manual_review',
     checkin_token: randomBytes(9).toString('base64url'),
     checkin_opens_at: null,
     checkin_closes_at: null,
     token_rotated_at: null,
-    is_published: true,
+    // Migration 29 flips the real column default to false: a new event is
+    // queued until an officer publishes it or the Monday drop reaches it.
+    is_published: false,
     created_by: auth?.userId ?? null,
     created_at: new Date().toISOString(),
     ...row,
@@ -2030,6 +2158,12 @@ export const ADMIN_RPC = {
     } else {
       event.config_version = Number(event.config_version ?? 1) + 1;
     }
+    // save_event_config never touches is_published: publishing is a separate
+    // action, set_event_published() below, which is why it is not read here.
+    const blankToNull = (value) => {
+      const trimmed = String(value ?? '').trim();
+      return trimmed === '' ? null : trimmed;
+    };
     Object.assign(event, {
       title: String(fields.title).trim(),
       occurred_on: fields.occurred_on,
@@ -2037,6 +2171,10 @@ export const ADMIN_RPC = {
       ends_at: fields.ends_at ?? null,
       term_id: fields.term_id ?? null,
       checkin_closes_at: fields.checkin_closes_at ?? null,
+      location: blankToNull(fields.location),
+      attire: blankToNull(fields.attire),
+      signup: blankToNull(fields.signup),
+      description: blankToNull(fields.description),
     });
 
     db.event_categories = db.event_categories.filter((row) => row.event_id !== eventId);
@@ -2076,6 +2214,46 @@ export const ADMIN_RPC = {
       checkin_token: event.checkin_token,
       config_version: event.config_version,
       created: creating,
+    });
+  },
+
+  /**
+   * set_event_published(p_event_id uuid, p_published boolean) returns jsonb.
+   * Publishing is a separate action from saving configuration, so it is not
+   * routed through save_event_config().
+   */
+  set_event_published(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      record({ fn: 'set_event_published', outcome: 'PDS07', role: auth.role ?? auth.kind });
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+
+    const eventId = body.p_event_id;
+    const published = body.p_published;
+    if (!eventId || typeof published !== 'boolean') {
+      pds(res, 'PDS03', 'Choose a publish state.');
+      return;
+    }
+
+    const event = db.events.find((row) => row.id === eventId) ?? null;
+    if (!event) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+
+    event.is_published = published;
+    event.config_version = Number(event.config_version ?? 1) + 1;
+
+    audit(auth, 'set_event_published', 'event', eventId, { is_published: published });
+    record({ fn: 'set_event_published', actor: auth.userId, eventId, published });
+
+    if (dropCommittedResponse(res, 'set_event_published')) return;
+    json(res, 200, {
+      is_published: event.is_published,
+      release_at: eventReleaseAt(event).toISOString(),
     });
   },
 
@@ -4474,8 +4652,17 @@ export const ADMIN_RPC = {
       credit.set(`${row.attendance_id}:${row.category_id}`, row.credit);
     }
 
+    // Visibility gates announcement to a member who has not engaged with an
+    // event; it does not hide a record of something this member actually
+    // did (see supabase/migrations/20260903120000_events_page.sql, the
+    // portal_attendance() where clause, for the full reasoning). An event
+    // this member has a live attendance row against is their own history
+    // and always appears; everything else appears only once visible.
     const events = db.events
-      .filter((event) => event.academic_year_id === year.id && event.is_published)
+      .filter(
+        (event) =>
+          event.academic_year_id === year.id && (eventIsVisible(event) || mine.has(event.id)),
+      )
       .sort(
         (a, b) =>
           String(b.occurred_on).localeCompare(String(a.occurred_on)) ||
@@ -4528,6 +4715,68 @@ export const ADMIN_RPC = {
       scorecard: portalScorecardSnapshot(member.id, year),
       events,
     });
+  },
+
+  /**
+   * portal_events() returns jsonb. The public /events page: every
+   * published-or-dropped event of the current year dated today or later,
+   * with the eight facts the page shows and its categories. No member, no
+   * attendance, no note, no token.
+   */
+  portal_events(res, body, req, helpers) {
+    const { json, pds } = helpers;
+    const year = portalYear();
+    if (!year) {
+      pds(res, 'PDS03', 'No academic year is set up yet.');
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const events = db.events
+      .filter(
+        (event) =>
+          event.academic_year_id === year.id &&
+          eventIsVisible(event) &&
+          event.occurred_on >= today,
+      )
+      .sort(
+        (a, b) =>
+          String(a.occurred_on).localeCompare(String(b.occurred_on)) ||
+          String(a.starts_at ?? '9999').localeCompare(String(b.starts_at ?? '9999')) ||
+          a.title.localeCompare(b.title),
+      )
+      .map((event) => {
+        const categories = db.event_categories
+          .filter((link) => link.event_id === event.id)
+          .map((link) => {
+            const category = db.categories.find((row) => row.id === link.category_id);
+            return {
+              id: link.category_id,
+              name: category?.name ?? 'Unknown category',
+              credit_mode: link.credit_mode,
+              fixed_credit: link.fixed_credit,
+              sort_order: category?.sort_order ?? 0,
+            };
+          })
+          .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
+          .map(({ sort_order, ...category }) => category);
+        return {
+          id: event.id,
+          title: event.title,
+          occurred_on: event.occurred_on,
+          starts_at: event.starts_at ?? null,
+          ends_at: event.ends_at ?? null,
+          location: event.location ?? null,
+          attire: event.attire ?? null,
+          signup: event.signup ?? null,
+          description: event.description ?? null,
+          categories,
+        };
+      });
+
+    record({ fn: 'portal_events', count: events.length });
+    json(res, 200, { year: { id: year.id, label: year.label }, events });
   },
 
   /** portal_requirements() returns jsonb */

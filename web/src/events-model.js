@@ -151,6 +151,106 @@ export function eventStatus(checkinClosesAt, now = new Date()) {
 }
 
 // ---------------------------------------------------------------------------
+// Publishing: the two independent ways an event becomes visible on /events
+// ---------------------------------------------------------------------------
+//
+// docs/05-events-page.md. An officer's own Publish action, and the Monday
+// drop, which fn_event_release_at() and fn_event_is_visible() compute in
+// Postgres and hand back on `events` as the release_at and is_visible
+// computed columns (supabase/migrations/20260903120000_events_page.sql). This
+// file never re-derives the Monday arithmetic: it only reads what the server
+// already worked out and decides what a card says about it.
+
+const releaseAtFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: NEW_YORK_ZONE,
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+/** 'Mon Sep 7, 8:00 AM', for a queued card's drop instant. */
+export function releaseAtLabel(releaseAt) {
+  if (!releaseAt) return '';
+  const date = new Date(releaseAt);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = Object.fromEntries(
+    releaseAtFormatter.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+  return `${parts.weekday} ${parts.month} ${parts.day}, ${parts.hour}:${parts.minute} ${parts.dayPeriod}`;
+}
+
+/**
+ * Whether this event's Monday release lands after the event's own date: the
+ * case docs/05-events-page.md says an officer has to resolve by hand, because
+ * the drop will never announce it in time.
+ */
+export function releasesAfterEvent(event) {
+  if (!event?.release_at || !event?.occurred_on) return false;
+  const releaseDate = todayInNewYork(event.release_at);
+  return Boolean(releaseDate) && releaseDate > String(event.occurred_on).slice(0, 10);
+}
+
+/**
+ * What a card or a detail toolbar says about publish state, without deciding
+ * how it is drawn.
+ *
+ * is_visible, NOT is_published, IS THE PRIMARY SIGNAL. is_published is only
+ * the manual flag; most events will reach the club by the Monday drop alone
+ * and sit at is_published = false, is_visible = true indefinitely, which is
+ * the ordinary steady state and has to read as Published like any other
+ * visible event. A card that branched on is_published first would call that
+ * common case "queued" with a stale drop date already in the past, and a
+ * "Publish" button for something the whole club can already see.
+ *
+ * canUnpublish answers a narrower question: would pressing Unpublish actually
+ * hide this event right now. set_event_published(id, false) only changes
+ * is_published; fn_event_is_visible() still returns true from the Monday
+ * drop alone once release_at has passed while the global toggle is on, so
+ * unpublishing an already-released event changes a column and nothing an
+ * officer or a member can see. Offering the button anyway would be a control
+ * that quietly does nothing in exactly the case it looks most useful.
+ *
+ * @param {{is_published: boolean, is_visible: boolean, release_at: string|null, occurred_on: string}} event
+ * @param {boolean} autoPublishEnabled the global toggle, read separately
+ *   because it lives in app_settings rather than on the event row
+ * @param {Date} now
+ * @returns {{visible: boolean, label: string, detail: string|null, warn: boolean, canUnpublish: boolean}}
+ */
+export function eventPublishStatus(event, autoPublishEnabled, now = new Date()) {
+  if (event?.is_visible) {
+    const releaseAt = event?.release_at ? new Date(event.release_at) : null;
+    const releaseStillFuture = Boolean(releaseAt) && !Number.isNaN(releaseAt.getTime()) && releaseAt.getTime() > now.getTime();
+    // Unpublishing takes effect only when the automatic rule is not already
+    // holding this event open on its own: the toggle is off, or the release
+    // instant has not arrived yet (an officer published early, by hand).
+    const canUnpublish = !autoPublishEnabled || releaseStillFuture;
+    return { visible: true, label: 'Published', detail: null, warn: false, canUnpublish };
+  }
+  if (!autoPublishEnabled) {
+    // The toggle is off: no drop is coming, so a card must not promise one.
+    return { visible: false, label: 'Queued', detail: null, warn: false, canUnpublish: false };
+  }
+  if (releasesAfterEvent(event)) {
+    return {
+      visible: false,
+      label: 'Not visible',
+      detail: 'Publishes after the event',
+      warn: true,
+      canUnpublish: false,
+    };
+  }
+  return {
+    visible: false,
+    label: `Publishes ${releaseAtLabel(event?.release_at)}`,
+    detail: null,
+    warn: false,
+    canUnpublish: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Category rows: what an event counts toward
 // ---------------------------------------------------------------------------
 
@@ -579,6 +679,13 @@ export function duplicateDraft(event, today) {
     starts_at: null,
     ends_at: null,
     term_id: event?.term_id ?? null,
+    // location and attire tend to repeat across a recurring event; signup is
+    // deliberately left off a duplicate, because a form URL almost always
+    // belongs to one occurrence and a stale link copied onto a new event is
+    // worse than an officer pasting it again.
+    location: event?.location ?? null,
+    attire: event?.attire ?? null,
+    description: event?.description ?? null,
     categories: (event?.event_categories ?? []).map((link) => ({
       category_id: link.category_id,
       credit_mode: link.credit_mode,

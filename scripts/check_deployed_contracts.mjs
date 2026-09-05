@@ -87,6 +87,15 @@ export const PORTAL_LOOKUP_PROBE = {
   },
 };
 
+// The public /events page calls this one RPC and nothing else (invariant 3).
+// Without a probe here, the guard could go green while portal_events() is
+// missing or shaped differently than web/events/index.html expects, and the
+// page would 404 or throw the moment it deployed.
+export const PORTAL_EVENTS_PROBE = {
+  name: 'portal_events',
+  args: {},
+};
+
 async function responseBody(response) {
   const text = await response.text();
   try {
@@ -134,6 +143,7 @@ export async function checkDeployedContracts({
   adminRpcProbes = ADMIN_RPC_PROBES,
   eventsProbe = EVENTS_STARTUP_PROBE,
   portalLookupProbe = PORTAL_LOOKUP_PROBE,
+  portalEventsProbe = PORTAL_EVENTS_PROBE,
 } = {}) {
   const base = String(baseUrl).replace(/\/+$/, '');
   const checked = [];
@@ -282,6 +292,39 @@ export async function checkDeployedContracts({
           failures.push(
             `Could not verify ${retiredLabel}: expected 404/PGRST202, got ${body?.code ?? `HTTP ${retiredResponse.status}`}`,
           );
+        }
+      }
+    }
+  }
+
+  if (portalEventsProbe) {
+    let response;
+    try {
+      const request = rpcRequest(base, anonKey, portalEventsProbe.name, portalEventsProbe.args ?? {});
+      response = await fetchImpl(request.url, request.init);
+    } catch (err) {
+      failures.push(`Could not verify ${portalEventsProbe.name}: ${err?.message ?? 'request failed'}`);
+      response = null;
+    }
+
+    if (response) {
+      const result = await readResponseBody(response, portalEventsProbe.name, failures);
+      const body = result.body;
+      if (result.ok) {
+        if (body?.code === 'PGRST202' || response.status === 404) {
+          failures.push(
+            `${portalEventsProbe.name} is missing from the deployed database or its parameters do not match the page`,
+          );
+        } else if (!response.ok) {
+          failures.push(
+            `Could not verify ${portalEventsProbe.name}: expected a successful JSON object, got ${body?.code ?? `HTTP ${response.status}`}`,
+          );
+        } else if (!body || !Array.isArray(body.events)) {
+          failures.push(
+            `Could not verify ${portalEventsProbe.name}: expected an object with an events array`,
+          );
+        } else {
+          checked.push(portalEventsProbe.name);
         }
       }
     }

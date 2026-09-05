@@ -83,6 +83,10 @@ globalThis.window = {
 const portalHtml = await readFile(`${WEB_ROOT}me/index.html`, 'utf8');
 const portalCss = await readFile(`${WEB_ROOT}assets/css/portal.css`, 'utf8');
 const checkinCss = await readFile(`${WEB_ROOT}assets/css/checkin.css`, 'utf8');
+// The fourth surface. mock/verify-events-page.mjs owns the rest of events.css;
+// this file only extends the drift guard below, the same way it already
+// guards portal.css against checkin.css.
+const eventsCss = await readFile(`${WEB_ROOT}assets/css/events.css`, 'utf8');
 const PDF_FONTS = {
   fontBytes: await readFile(`${WEB_ROOT}assets/fonts/public-sans/PublicSans-Regular.ttf`),
   fallbackFontBytes: await readFile(`${WEB_ROOT}assets/fonts/public-sans/NotoSans-Regular.ttf`),
@@ -479,9 +483,15 @@ process.stdout.write('\nthe brand\n');
 // A third stylesheet, and the third copy of one token block. There is no build
 // step that could share it, so the guard against drift is this check, exactly
 // as mock/verify-admin.mjs guards the other two.
+//
+// events.css is the fourth (docs/05-events-page.md), and it is compared here
+// against portal.css rather than checkin.css: /events is the other public
+// page, and portal.css is the copy this repo already treats as the reference
+// the public surfaces agree with.
 
 const portalTokens = schemes(portalCss);
 const checkinTokens = schemes(checkinCss);
+const eventsTokens = schemes(eventsCss);
 
 for (const scheme of ['light', 'dark']) {
   await check(`${scheme}: the portal and the check-in page declare the same brand tokens`, () => {
@@ -494,6 +504,20 @@ for (const scheme of ['light', 'dark']) {
         mine.get(token).trim().toLowerCase(),
         theirs.get(token).trim().toLowerCase(),
         `${token} is ${mine.get(token)} in portal.css and ${theirs.get(token)} in checkin.css`,
+      );
+    }
+  });
+
+  await check(`${scheme}: the events page declares the same brand tokens as the portal`, () => {
+    const mine = portalTokens[scheme];
+    const theirs = eventsTokens[scheme];
+    for (const token of BRAND_TOKENS) {
+      assert.ok(mine.has(token), `portal.css does not declare ${token} for ${scheme}`);
+      assert.ok(theirs.has(token), `events.css does not declare ${token} for ${scheme}`);
+      assert.equal(
+        mine.get(token).trim().toLowerCase(),
+        theirs.get(token).trim().toLowerCase(),
+        `${token} is ${mine.get(token)} in portal.css and ${theirs.get(token)} in events.css`,
       );
     }
   });
@@ -513,6 +537,11 @@ for (const scheme of ['light', 'dark']) {
 
 await check('gold is a fill or a bar, never a foreground', () => {
   const misuse = goldMisuse(portalCss);
+  assert.deepEqual(misuse, [], misuse.map((m) => `${m.property}: ${m.value} (${m.why})`).join('; '));
+});
+
+await check('gold is a fill or a bar on the events page too, never a foreground', () => {
+  const misuse = goldMisuse(eventsCss);
   assert.deepEqual(misuse, [], misuse.map((m) => `${m.property}: ${m.value} (${m.why})`).join('; '));
 });
 
@@ -1635,9 +1664,25 @@ process.stdout.write('\nthe emblem\n');
 await check('the emblem is a plain image, not a link to the officer screens', () => {
   const row = portalHtml.match(/<p class="brand-row">[\s\S]*?<\/p>/);
   assert.ok(row, 'there is no brand row on the member portal');
-  assert.doesNotMatch(row[0], /<a\b/, 'the emblem is wrapped in a link');
   assert.match(row[0], /pdsa-emblem-96\.png/, 'the brand row is not the emblem');
   assert.match(row[0], /alt=""/, 'the emblem names itself when the page title already does');
+  // The image itself must not be the link target: a member who mistaps the
+  // emblem must not be sent anywhere.
+  assert.doesNotMatch(row[0], /<a\b[^>]*>\s*<img/, 'the emblem is wrapped in a link');
+});
+
+// THIS PAGE DELIBERATELY DOES NOT LINK TO /events. The main club website links
+// here, so anybody at all can open the member portal, while the events page is
+// meant for members and its address goes out in the weekly email instead. A
+// link from this page would hand the events address to every visitor the main
+// site sends, which is the one thing that arrangement is trying to avoid. See
+// docs/05-events-page.md on what that does and does not amount to.
+await check('the member portal does not link to the events page', () => {
+  assert.doesNotMatch(
+    portalHtml,
+    /href="\.\.\/events\//,
+    'the member portal links to /events, which is not linked from anywhere public',
+  );
 });
 
 server.close();

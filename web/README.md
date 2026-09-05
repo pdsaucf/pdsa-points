@@ -10,6 +10,9 @@ Three surfaces, one static directory, no build step.
 - **`/me/`** the member portal, behind the same sign-in: their own progress, their own
   records, and the claim flow for an account that is not linked to a roster row yet
   (**P5**).
+- **`/events/`** the public events page: what is coming up, no name typed and no login.
+  Touches no table (invariant 3): it calls `portal_events()` and nothing else. See
+  `docs/05-events-page.md`.
 
 ```
 web/
@@ -19,6 +22,7 @@ web/
   c/index.html               the check-in page, served at /c/?e=<token>
   admin/index.html           the review queue, served at /admin/
   me/index.html              the member portal, served at /me/
+  events/index.html          the public events page, served at /events/
 
   src/api.js                 fetch against PostgREST and Storage, with retries
   src/checkin.js             the check-in flow
@@ -50,10 +54,12 @@ web/
   src/portal-claim.js        "which of these is you", waiting, declined
   src/portal-progress.js     their progress, their records, "something's missing?"
   src/member-errors.js       every PDS* code, written from the member's side
+  src/events-page.js         the public events page: date, time, location, sign-up
 
   assets/css/checkin.css     the check-in stylesheet
   assets/css/admin.css       the admin stylesheet
   assets/css/portal.css      the member portal stylesheet
+  assets/css/events.css      the public events page stylesheet
   assets/fonts/public-sans/  Public Sans goes here (see the README in that folder)
   mock/                      a local stand-in for Supabase, for development
 ```

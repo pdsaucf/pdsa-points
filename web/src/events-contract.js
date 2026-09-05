@@ -4,6 +4,7 @@
 
 export const EVENT_SELECT = [
   'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at,config_version',
+  'location,attire,signup,description,is_published,release_at,is_visible',
   'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
   'event_evidence_requirements(id,kind,is_required,prompt)',
 ].join(',');

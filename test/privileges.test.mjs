@@ -67,6 +67,35 @@ let db;
 // member. That boundary is asserted in test/public_portal.test.mjs, the same as
 // the other four.
 //
+// PORTAL_ATTENDANCE(UUID) WIDENS ONCE MORE, PRECISELY, in migration 29 (the
+// same one that adds portal_events() below). "Every published event of the
+// year" above stopped being quite true: a member's own attendance on an
+// event that has already happened is now visible even when that event has
+// never been published or auto-released, because v_attendance_credit,
+// v_member_category_totals and v_member_status never gated on publish state
+// in the first place, so an invisible event's points were already counting
+// toward that member's total with no row anywhere to explain them. This is
+// bounded to PAST events on purpose and is not "every event I have a
+// record against": check-in has no gate on occurred_on, this function is
+// callable by anonymous id, and portal_leaderboard() hands out every member
+// id there is, so an unbounded exception would let a stranger read a
+// future, unannounced event off of whoever already checked into it, ahead
+// of the Monday drop. A future event a member checked into stays hidden
+// from everyone, including that member, until its own date passes. That
+// boundary is asserted in test/events_page.test.mjs.
+//
+// PORTAL_EVENTS() IS A THIRD WIDENING (migration 29, docs/05-events-page.md),
+// and it goes further than any function above it: no member id, no name, no
+// login at all. It is the public /events page, and it hands anyone who opens
+// the site every published-and-visible event of the year that has not
+// happened yet, with location, attire, a sign-up link or line, and a
+// member-facing description alongside the fields portal_attendance() already
+// exposes. What makes that safe is what it still refuses: no member, no
+// attendance status, no events.notes (the officer-side field this is
+// deliberately not reused for), no checkin_token, and no event that is not
+// published or has not been dropped by the Monday auto-publish rule. That
+// boundary is asserted in test/events_page.test.mjs.
+//
 // Full signatures rather than bare names. Postgres identifies a function by
 // name AND argument types, so an overload is a different function with its own
 // ACL: adding `search_members(text, text)` alongside the existing one and
@@ -83,6 +112,7 @@ const ANON_MAY_EXECUTE = [
   'fn_upload_grant_is_live(text,text)',
   'get_checkin_context(text)',
   'portal_attendance(uuid)',
+  'portal_events()',
   'portal_find_members(text)',
   'portal_leaderboard()',
   'portal_requirements()',

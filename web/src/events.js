@@ -11,17 +11,28 @@
 // what lets the QR code work the instant an officer presses Save. See
 // events-model.js for the reasoning.
 //
-// review_policy AND is_published ARE NOT ON THIS SCREEN. Every event this
-// screen creates keeps review_policy at its default, manual_review: every
-// attendance record is approved by a person (invariant 6), and turning that
-// off is not a decision this form offers. is_published keeps its default of
-// true.
+// review_policy IS NOT ON THIS SCREEN. Every event this screen creates keeps
+// review_policy at its default, manual_review: every attendance record is
+// approved by a person (invariant 6), and turning that off is not a decision
+// this form offers.
+//
+// is_published IS NOT ON THIS FORM EITHER, on purpose. A new event now
+// defaults to queued (docs/05-events-page.md), and publishing is a separate
+// action, Publish/Unpublish, on the list card and on the detail toolbar,
+// wired to set_event_published() rather than saved through this form's
+// save_event_config() call. The other way an event becomes visible needs no
+// button at all: every Monday at 8:00 AM America/New_York, a queued event
+// dated within the next 14 days drops on its own, gated by the
+// events_auto_publish row this screen also reads and writes above the list.
+// Both routes land on the same is_visible computed column, which is what the
+// dashed-versus-solid card border and the release_at line below are drawn
+// from.
 //
 // Event fields, category links and the photo requirement are saved by one RPC.
 // They commit together because changing a category link immediately changes
 // the derived points for approved attendance.
 
-import { select, insert, remove, callRpc } from './rest.js';
+import { select, insert, remove, patch, callRpc } from './rest.js';
 import { eventsStartupOptions } from './events-contract.js';
 import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
@@ -35,6 +46,7 @@ import {
   defaultPromptFor,
   defaultCloseTime,
   duplicateDraft,
+  eventPublishStatus,
   filterEvents,
   sortEvents,
   todayDividerIndex,
@@ -73,6 +85,8 @@ export function createEvents(ctx) {
     status: $('events-status'),
     sort: $('events-sort'),
     tabs: $('event-category-tabs'),
+    autoPublishToggle: $('events-auto-publish-toggle'),
+    autoPublishNote: $('events-auto-publish-note'),
     loading: $('loading-events'),
     empty: $('empty-events'),
     emptyTitle: $('empty-events-title'),
@@ -96,6 +110,11 @@ export function createEvents(ctx) {
     noClose: $('event-no-close'),
     termField: $('event-term-field'),
     term: $('event-term'),
+
+    location: $('event-location'),
+    attire: $('event-attire'),
+    signup: $('event-signup'),
+    description: $('event-description'),
 
     categories: $('event-categories'),
     categoryAdd: $('event-category-add'),
@@ -129,6 +148,15 @@ export function createEvents(ctx) {
     terms: [],
     termLoad: 'loading', // 'loading' | 'ready' | 'error'
     termError: null,
+    // The global toggle above the list (app_settings.events_auto_publish).
+    // Read alongside the events themselves, because a queued card's status
+    // text depends on it: with the drop off, a card must not promise a date
+    // that is never coming.
+    autoPublishEnabled: true,
+    autoPublishBusy: false,
+    // The one card whose Publish/Unpublish button is mid-request, so its
+    // button (and no other) disables while the write is in flight.
+    publishBusyId: null,
     loaded: false,
     busy: false,
 
@@ -189,6 +217,9 @@ export function createEvents(ctx) {
     openQr: (event) => openQr(event),
     previewCheckin: (event) => previewCheckin(event),
     duplicate: (event) => duplicate(event),
+    // Read live rather than captured once: the officer can flip the toggle
+    // above the list while an event's own screen is open behind it.
+    autoPublishEnabled: () => state.autoPublishEnabled,
     backToList: () => {
       const reviewEventId = state.detailReturnReviewEventId;
       state.detailReturnReviewEventId = null;
@@ -282,10 +313,31 @@ export function createEvents(ctx) {
           throw err;
         },
       );
+      const settingsRequest = select('app_settings', {
+        select: 'value',
+        filters: { key: 'eq.events_auto_publish' },
+        limit: 1,
+      }).then(
+        (rows) => {
+          if (token === state.loadToken) {
+            // fn_setting_bool()'s own default (migration 29): the toggle
+            // reads as on when nobody has ever written the row.
+            state.autoPublishEnabled = rows?.[0] ? Boolean(rows[0].value) : true;
+          }
+        },
+        () => {
+          // The list still has to draw without this. Falling back to the
+          // server's own default is closer to the truth than refusing the
+          // whole screen over one settings row.
+          if (token === state.loadToken) state.autoPublishEnabled = true;
+        },
+      );
+
       const [eventsResult, categoriesResult, termsResult] = await Promise.allSettled([
         select('events', eventsStartupOptions(ctx.year.id)),
         categoriesRequest,
         termsRequest,
+        settingsRequest,
       ]);
 
       // Superseded while it was in flight. Nothing is written and nothing is
@@ -328,6 +380,7 @@ export function createEvents(ctx) {
       }
 
       setHidden(el.loading, true);
+      renderAutoPublishToggle();
       if (!eventsError) paint();
       if (startupError) {
         ctx.fail(startupError, () => load());
@@ -373,6 +426,55 @@ export function createEvents(ctx) {
       counts.set(record.event_id, entry);
     }
     return counts;
+  }
+
+  // -------------------------------------------------------------------------
+  // The global auto-publish toggle
+  // -------------------------------------------------------------------------
+  // One row above the list, not a per-event checkbox: docs/05-events-page.md
+  // says the Monday drop cannot be exempted per event, because an exemptible
+  // fairness rule is not one. This is the only place events_auto_publish is
+  // read or written.
+
+  function renderAutoPublishToggle() {
+    if (!el.autoPublishToggle) return;
+    el.autoPublishToggle.checked = state.autoPublishEnabled;
+    el.autoPublishToggle.disabled = state.autoPublishBusy;
+    // The checkbox label already says WHAT happens; the note's own fact is
+    // WHEN, or, off, that nothing will (CLAUDE.md: never repeat information
+    // already visible elsewhere in the same component).
+    el.autoPublishNote.textContent = state.autoPublishEnabled
+      ? 'Next drop is Monday, 8:00 AM.'
+      : 'No automatic drop. Queued events wait for Publish.';
+  }
+
+  async function changeAutoPublish(enabled) {
+    if (state.autoPublishBusy) return;
+    state.autoPublishBusy = true;
+    renderAutoPublishToggle();
+    try {
+      const rows = await patch(
+        'app_settings',
+        { key: 'eq.events_auto_publish' },
+        { value: enabled },
+      );
+      if (!rows.length) {
+        ctx.note('Nothing was changed. Reload the page.', 'warn');
+        return;
+      }
+      state.autoPublishEnabled = enabled;
+      const said = enabled ? 'Automatic publishing turned on.' : 'Automatic publishing turned off.';
+      ctx.note(said);
+      announce(said);
+      // Every queued card's status line, and which events count as visible at
+      // all, depend on this flag: reload rather than patch the list in place.
+      await load();
+    } catch (err) {
+      ctx.fail(err, null);
+    } finally {
+      state.autoPublishBusy = false;
+      renderAutoPublishToggle();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -500,8 +602,28 @@ export function createEvents(ctx) {
         : [h('span', { class: 'muted small' }, 'No categories')]),
     );
 
-    const actions = h('div', { class: 'event-actions' });
-    actions.append(
+    // No injected clock, deliberately: release_at is an absolute instant the
+    // server already computed from real wall time, and eventStatus() above
+    // makes the same choice for checkin_closes_at rather than threading
+    // ctx.now() through it.
+    const publish = eventPublishStatus(event, state.autoPublishEnabled);
+    // Not visible: Publish always offers to force it early. Visible: offered
+    // only when it would actually take effect (see eventPublishStatus's own
+    // comment) so the button is never a no-op dressed as a control.
+    const publishButton = !publish.visible
+      ? publishToggleButton(event, true, 'Publish')
+      : publish.canUnpublish
+        ? publishToggleButton(event, false, 'Unpublish')
+        : null;
+
+    // h()'s own children handling drops a null entry (publishButton is null
+    // exactly when neither Publish nor Unpublish should be offered);
+    // Node.append() does not; it stringifies null into a literal text node.
+    // So this passes the buttons AS h()'s children, not through a follow-up
+    // .append() call the way this used to read.
+    const actions = h(
+      'div',
+      { class: 'event-actions' },
       h(
         'button',
         {
@@ -532,11 +654,12 @@ export function createEvents(ctx) {
         },
         'Edit',
       ),
+      publishButton,
     );
 
     return h(
       'div',
-      { class: 'event-row', dataset: { id: event.id } },
+      { class: 'event-row', dataset: { id: event.id, visible: String(publish.visible) } },
       h('span', { class: 'event-date' }, shortDate(event.occurred_on)),
       h(
         'span',
@@ -559,8 +682,52 @@ export function createEvents(ctx) {
         h('span', { class: 'event-status-dot', 'aria-hidden': 'true' }),
         `Check-in ${status.toLowerCase()}`,
       ),
+      h(
+        'span',
+        {
+          class: 'event-publish-status',
+          dataset: { visible: String(publish.visible), warn: String(publish.warn) },
+        },
+        publish.label,
+        publish.detail ? h('span', { class: 'event-publish-detail' }, publish.detail) : null,
+      ),
       actions,
     );
+  }
+
+  function publishToggleButton(event, nextPublished, label) {
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: 'button button-small',
+        disabled: state.publishBusyId === event.id,
+        'aria-label': `${label} ${event.title}`,
+        onClick: () => toggleRowPublish(event, nextPublished),
+      },
+      label,
+    );
+  }
+
+  /** Publish or unpublish straight from the list card, no need to open the event. */
+  async function toggleRowPublish(event, nextPublished) {
+    if (state.publishBusyId) return;
+    state.publishBusyId = event.id;
+    showList();
+    ctx.clearMessage();
+    try {
+      await callRpc('set_event_published', { p_event_id: event.id, p_published: nextPublished });
+      const said = nextPublished ? `${event.title} published.` : `${event.title} unpublished.`;
+      ctx.note(said);
+      announce(said);
+      await load({ quiet: true });
+      ctx.onEventsChanged?.();
+    } catch (err) {
+      ctx.fail(err, null);
+    } finally {
+      state.publishBusyId = null;
+      if (state.view === 'list') showList();
+    }
   }
 
   function creditLabel(link) {
@@ -693,6 +860,14 @@ export function createEvents(ctx) {
       ...state.terms.map((term) => h('option', { value: term.id }, term.label)),
     );
     el.term.value = event?.term_id ?? draft?.term_id ?? '';
+
+    el.location.value = event?.location ?? draft?.location ?? '';
+    el.attire.value = event?.attire ?? draft?.attire ?? '';
+    // Not carried by Duplicate: a sign-up link is almost always specific to
+    // one occurrence, and a stale form URL copied onto a new event is worse
+    // than an officer having to paste it again.
+    el.signup.value = event?.signup ?? '';
+    el.description.value = event?.description ?? draft?.description ?? '';
 
     const links = event?.event_categories ?? draft?.categories ?? [];
     state.categoryRows = links.length
@@ -1004,6 +1179,13 @@ export function createEvents(ctx) {
       ),
       term_id: el.term.value || null,
       checkin_closes_at: el.noClose.checked ? null : fromDatetimeLocalValue(el.closes.value),
+      // save_event_config() blanks these to null itself when the box is
+      // empty (nullif(btrim(...), '')), so the trim here only keeps what the
+      // form shows in step with what the RPC will actually store.
+      location: el.location.value.trim(),
+      attire: el.attire.value.trim(),
+      signup: el.signup.value.trim(),
+      description: el.description.value.trim(),
     };
   }
 
@@ -1173,6 +1355,7 @@ export function createEvents(ctx) {
   function wire() {
     syncFormAvailability();
     el.newButton.addEventListener('click', () => openForm(null));
+    el.autoPublishToggle?.addEventListener('change', () => changeAutoPublish(el.autoPublishToggle.checked));
     el.cancel.addEventListener('click', closeForm);
 
     el.search.addEventListener('input', () => {
