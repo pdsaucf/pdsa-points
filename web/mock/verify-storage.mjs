@@ -58,6 +58,7 @@ const storageSource = await readFile(`${WEB_ROOT}src/storage.js`, 'utf8');
 let dom = installDom(adminHtml);
 
 globalThis.window = {
+  addEventListener() {},
   location: {
     origin: `http://localhost:${PORT}`,
     pathname: '/admin/',

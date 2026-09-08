@@ -86,6 +86,7 @@ Object.getPrototypeOf(dom.$('event-detail-back')).focus = function focus() {
 // prove that is to hold on to what it asked for.
 const opened = [];
 globalThis.window = {
+  addEventListener() {},
   location: {
     origin: `http://localhost:${PORT}`,
     pathname: '/admin/',

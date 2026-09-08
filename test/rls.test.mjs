@@ -1,6 +1,6 @@
 // Row-level security for the actual access model: anonymous visitors use only
-// shaped RPCs, while the one shared authenticated admin session owns the full
-// admin surface. There are no per-account application roles.
+// shaped RPCs. The shared admin session remains supported alongside profiles.
+// Officer role boundaries and refusals are exercised in privileges.test.mjs.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -74,16 +74,12 @@ test('another authenticated Auth user is not an administrator', async () => {
   assert.equal(visibleMembers, 0);
 });
 
-test('the application account layer is absent', async () => {
-  for (const relation of ['profiles', 'member_claims']) {
-    const row = await db.val(`select to_regclass($1)`, [`public.${relation}`]);
-    assert.equal(row, null, relation);
-  }
-
-  assert.equal(
-    await db.val(`select exists (select 1 from pg_type where typname = 'app_role')`),
-    false,
-  );
+test('staff profiles are restored without reviving member claims', async () => {
+  assert.equal(await db.val("select to_regclass('public.profiles')"), 'profiles');
+  assert.equal(await db.val("select to_regclass('public.member_claims')"), null);
+  assert.deepEqual((await db.q(`select enumlabel from pg_enum
+    where enumtypid='app_role'::regtype order by enumsortorder`)).map(row => row.enumlabel),
+  ['admin', 'officer', 'viewer', 'member']);
 });
 
 test('retiring an old Auth user preserves historical rows', async () => {
@@ -93,6 +89,7 @@ test('retiring an old Auth user preserves historical rows', async () => {
   await db.exec(`
     insert into auth.users (id, email)
     values ('${oldUser}', 'former-president@example.test');
+    insert into profiles(user_id,role) values ('${oldUser}','officer');
     insert into events (id, academic_year_id, title, occurred_on, created_by)
     values ('${eventId}', '${YEAR_2026}', 'Historical event', date '2026-08-18', '${oldUser}');
     insert into audit_log (actor_user_id, action, entity_type, entity_id)
@@ -100,6 +97,7 @@ test('retiring an old Auth user preserves historical rows', async () => {
     delete from auth.users where id = '${oldUser}';
   `);
 
+  assert.equal(await db.val('select count(*)::int from profiles where user_id=$1', [oldUser]), 0);
   assert.equal(await db.val(`select created_by from events where id = $1`, [eventId]), null);
   assert.equal(
     await db.val(`select actor_user_id from audit_log where entity_id = $1`, [eventId]),
@@ -114,6 +112,7 @@ test('retiring an old Auth user preserves historical rows', async () => {
         and confrelid = 'auth.users'::regclass
         and connamespace <> 'auth'::regnamespace
         and confdeltype <> 'n'
+        and not (conrelid = 'profiles'::regclass and confdeltype = 'c')
     `),
   );
   assert.equal(remainingRestrictive, 0);

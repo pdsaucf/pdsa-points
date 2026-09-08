@@ -972,7 +972,7 @@ export function createEvents(ctx) {
       },
       h('option', { value: '' }, 'Choose a category'),
       ...available.map((category) => h('option', { value: category.id, selected: category.id === row.category_id }, category.name)),
-      h('option', { value: 'new' }, 'New event category…'),
+      ctx.isAdmin === false ? null : h('option', { value: 'new' }, 'New event category…'),
     );
 
     const creditInput = h('input', {
@@ -1503,6 +1503,7 @@ export function createEvents(ctx) {
 
   return {
     mount() {
+      setHidden($('events-auto-publish'), ctx.isAdmin === false);
       wire();
       detail.mount();
       return load();

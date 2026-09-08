@@ -40,6 +40,8 @@ Design docs, signed off before implementation:
 - [docs/03-admin-ui.md](docs/03-admin-ui.md)
 - [docs/04-member-ui.md](docs/04-member-ui.md)
 - [docs/06-officer-passcode.md](docs/06-officer-passcode.md)
+- [docs/07-officer-roles.md](docs/07-officer-roles.md)
+- [docs/08-leadership-access.md](docs/08-leadership-access.md)
 
 House rules and architectural invariants are in [CLAUDE.md](CLAUDE.md). They
 are requirements, not preferences.
@@ -91,6 +93,8 @@ when the database does not match the static page.
 | `..._shared_admin_session.sql` | makes the valid shared session the complete admin authorization decision; drops `profiles`, `member_claims`, `app_role`, and the retired signed-in member RPCs |
 | `..._member_event_history.sql` | `portal_attendance()`, the fifth: a member's own event-by-event attendance for the current year, reversing migration 21's decision to withhold it |
 | `..._event_times_and_portal_attendance.sql` | optional paired actual event times, removal of event Location, and the one-row-per-event public attendance contract |
+| `..._officer_roles.sql` | restores profiles and separates admin writes from officer event management and staff reads |
+| `..._leadership_access.sql` | verified Google identity binding, admin access management and audit, immediate revocation and last-admin protection |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.
@@ -210,27 +214,29 @@ club-facing figures and nothing else, and `test/public_portal.test.mjs` holds
 that line: no address, no student id, no notes, no officer's decline reason,
 no photo, nobody else's records.
 
-Officers sign in with a passcode, which is a password on one shared account
-and is checked by GoTrue rather than by the page: on a static site out of a
-public repository a comparison in JavaScript would be readable, and worse, a
-gate that did not produce a JWT would only work if `anon` were granted the
-officer tables. See [docs/06-officer-passcode.md](docs/06-officer-passcode.md),
-including what a shared account costs the audit trail.
+Leadership signs in with Google after an admin approves an individual email as Admin
+or Officer. Postgres binds the approval to a verified Google provider identity and checks
+that binding on every protected call. Authentication alone grants no staff access. Profiles
+cannot be written directly through the public API; leadership changes use serialized,
+admin-only RPCs with a separate access audit and a last-individual-admin guard. Leadership
+accounts are separate from member records and do not add emails to the roster.
 
-The shared GoTrue user is the only signed-in identity the product offers. A
-valid `authenticated` JWT from that fixed passcode login is the complete admin
-authorization decision. There is no `profiles` table, per-account role, member
-account, or claim flow. Anonymous visitors still hold no table privileges and
-reach only the shaped check-in and public member-portal RPCs.
+The shared passcode remains an admin fallback, checked by GoTrue rather than the page.
+It can bootstrap the first individual Secretary and remains available during migration.
+See [leadership access and setup](docs/08-leadership-access.md) for the exact authorization
+boundary, deployment prerequisites and Google configuration. No member account or claim
+flow is restored. Anonymous visitors still hold no table privileges and reach only the
+shaped check-in and public portal RPCs.
 
 RPC errors carry distinct SQLSTATE codes so a client can tell them apart
 **without matching on message text**: `PDS01` bad token, `PDS02` check-in has not
 opened yet, `PDS03` bad argument, `PDS04` evidence problem, `PDS05` already
-checked in, `PDS06` cannot approve an unmatched record, `PDS07` expired or invalid admin session,
+checked in, `PDS06` cannot approve an unmatched record, `PDS07` insufficient permission or invalid session,
 `PDS08` unknown requirement set, `PDS09` rate limited, `PDS10` check-in has
 closed, `PDS11` the requirement tree is not a tree, `PDS12` a requirement set
 failed validation, `PDS13` and `PDS14` the claim codes, raised by the migration
-18 functions the client no longer calls.
+18 functions the client no longer calls, `PDS15` stale event configuration, and
+`PDS16` an access change would remove the last effective individual admin.
 
 `PDS02` and `PDS10` are separate codes on purpose. They were one code, which
 forced the page to read the message text to decide which of two screens to show,

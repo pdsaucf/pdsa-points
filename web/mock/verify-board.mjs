@@ -68,6 +68,7 @@ const adminCss = await readFile(`${WEB_ROOT}assets/css/admin.css`, 'utf8');
 const dom = installDom(adminHtml);
 
 globalThis.window = {
+  addEventListener() {},
   location: {
     origin: `http://localhost:${PORT}`,
     pathname: '/admin/',

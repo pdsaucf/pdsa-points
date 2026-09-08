@@ -18,7 +18,7 @@
 // Kept in its own file so nothing here can change how the anonymous check-in
 // mock behaves. server.mjs imports it and routes to it.
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { buildDatabase, ACCOUNTS, MOCK_PASSCODE } from './admin-fixtures.mjs';
 // The same trigram measure the review queue ranks with, so the duplicate view
 // here pairs the same people the database's pg_trgm one would.
@@ -57,6 +57,11 @@ function seedBucketObjects() {
 // path really deleted, or only claimed to be" answerable at all.
 let bucketObjects = seedBucketObjects();
 
+// Local fixtures only, not real Google identity verification.
+const googleCodes = new Map();
+const seedLeadership = () => ['admin', 'officer'].map((role) => ({ id: `access-${role}`, email: `${role}@leadership.example`, role, user_id: `google-${role}`, bound_at: new Date().toISOString(), created_at: new Date().toISOString(), revoked_at: null }));
+let leadership = seedLeadership();
+let leadershipAudit = [];
 const sessions = new Map(); // access token -> { userId, email, expiresAt }
 const refreshTokens = new Map(); // refresh token -> { userId, email }
 const auditCalls = []; // every officer-side request, for the checks to read
@@ -153,6 +158,9 @@ function refusedImportRow(line) {
 
 export function resetAdmin() {
   db = buildDatabase();
+  leadership = seedLeadership();
+  leadershipAudit = [];
+  googleCodes.clear();
   bucketObjects = seedBucketObjects();
   sessions.clear();
   refreshTokens.clear();
@@ -248,7 +256,7 @@ export function resolveAuth(req, anonKey) {
     kind: 'user',
     userId: session.userId,
     email: session.email,
-    role: 'admin',
+    role: session.email === 'officers@pdsaucf.com' ? 'admin' : leadership.find((entry) => entry.user_id === session.userId && !entry.revoked_at)?.role ?? null,
   };
 }
 
@@ -278,6 +286,24 @@ export function handleAuth(req, res, url, body, helpers) {
   const { json } = helpers;
   const path = url.pathname;
 
+  if (path === '/auth/v1/authorize') {
+    const redirect = new URL(url.searchParams.get('redirect_to'));
+    if (redirect.origin !== url.origin || !redirect.pathname.endsWith('/admin/')) { json(res, 400, { error: 'invalid_redirect' }); return true; }
+    const chosen = url.searchParams.get('mock_account');
+    if (!chosen) {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      const links = ['admin', 'officer', 'stranger'].map((role) => {
+        const href = new URL(url); href.searchParams.set('mock_account', role);
+        return `<p><a href="${href.pathname}${href.search.replaceAll('&', '&amp;')}">${role}</a></p>`;
+      }).join('');
+      res.end(`<h1>Mock Google sign-in</h1><p>Local fixtures only.</p>${links}`); return true;
+    }
+    if (!['admin', 'officer', 'stranger'].includes(chosen)) { json(res, 400, {}); return true; }
+    const code = randomBytes(24).toString('hex');
+    googleCodes.set(code, { challenge: url.searchParams.get('code_challenge'), email: `${chosen}@leadership.example`, userId: `google-${chosen}` });
+    redirect.searchParams.set('code', code);
+    res.writeHead(302, { Location: redirect.href }); res.end(); return true;
+  }
   if (path === '/auth/v1/token') {
     const grant = url.searchParams.get('grant_type');
 
@@ -308,6 +334,12 @@ export function handleAuth(req, res, url, body, helpers) {
       return true;
     }
 
+    if (grant === 'pkce') {
+      const held = googleCodes.get(body.auth_code); googleCodes.delete(body.auth_code);
+      const challenge = createHash('sha256').update(String(body.code_verifier)).digest('base64url');
+      if (!held || held.challenge !== challenge) { json(res, 400, { error: 'invalid_grant' }); return true; }
+      json(res, 200, { ...issueSession(held.userId, held.email), user: { id: held.userId, email: held.email } }); return true;
+    }
     if (grant !== 'refresh_token') {
       json(res, 400, { error: 'unsupported_grant_type', error_description: 'Unsupported grant type' });
       return true;
@@ -1003,6 +1035,8 @@ const OFFICER_VIEWS = { v_purge_runs_outstanding: purgeRunsOutstandingRows };
  * their own call sites below.
  */
 function visibleRows(table, auth) {
+  if (!isStaff(auth)) return [];
+  if (table === 'attendance_evidence' && !isAdmin(auth)) return [];
   if (OFFICER_ONLY_TABLES.has(table)) {
     return isOfficer(auth) ? (db[table] ?? []) : [];
   }
@@ -1815,6 +1849,7 @@ export function handleRest(req, res, url, body, helpers, anonKey) {
     return;
   }
 
+  if (!isStaff(auth) || (req.method !== 'GET' && !isAdmin(auth) && !(req.method === 'DELETE' && table === 'events'))) { json(res, 403, { code: 'PDS07', message: 'Not permitted.' }); return; }
   let result;
   if (req.method === 'GET') {
     result = runSelect(table, url.searchParams, auth);
@@ -2054,7 +2089,41 @@ function orphanedUploadRows() {
   );
 }
 
+function accessMutation(action) {
+  return (res, body, req, helpers, anonKey) => {
+    const auth = resolveAuth(req, anonKey);
+    if (!isAdmin(auth)) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
+    const email = String(body.p_email ?? '').trim().toLowerCase();
+    let entry = action === 'authorize' ? leadership.find((e) => e.email === email) : leadership.find((e) => e.id === body.p_access_id);
+    if ((action !== 'revoke' && !['admin', 'officer'].includes(body.p_role)) || (action === 'authorize' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) { helpers.pds(res, 'PDS03', 'Check the email and role.'); return; }
+    if (!entry && action !== 'authorize') { helpers.pds(res, 'PDS03', 'Account not found.'); return; }
+    if (entry?.role === 'admin' && entry.user_id && !entry.revoked_at && (action === 'revoke' || body.p_role !== 'admin') && leadership.filter((e) => e.role === 'admin' && e.user_id && !e.revoked_at).length === 1) { helpers.pds(res, 'PDS16', 'Keep one individual admin.'); return; }
+    const oldRole = entry?.role ?? null;
+    if (!entry) { entry = { id: randomBytes(16).toString('hex'), email, user_id: null, bound_at: null, created_at: new Date().toISOString() }; leadership.push(entry); }
+    if (action === 'revoke') entry.revoked_at = new Date().toISOString();
+    else { entry.role = body.p_role; entry.revoked_at = null; }
+    leadershipAudit.unshift({ id: randomBytes(16).toString('hex'), created_at: new Date().toISOString(), action, actor_email: auth.email, target_email: entry.email, old_role: oldRole, new_role: action === 'revoke' ? null : entry.role });
+    helpers.json(res, 200, entry);
+  };
+}
+
 export const ADMIN_RPC = {
+  leadership_session(res, body, req, helpers, anonKey) {
+    const auth = resolveAuth(req, anonKey);
+    if (auth.kind !== 'user') { helpers.pds(res, 'PDS07', 'Sign in required.'); return; }
+    helpers.json(res, 200, { role: auth.role, email: auth.email, is_shared_admin: auth.email === 'officers@pdsaucf.com' });
+  },
+  list_leadership_access(res, body, req, helpers, anonKey) {
+    if (!isAdmin(resolveAuth(req, anonKey))) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
+    helpers.json(res, 200, leadership);
+  },
+  list_leadership_audit(res, body, req, helpers, anonKey) {
+    if (!isAdmin(resolveAuth(req, anonKey))) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
+    helpers.json(res, 200, leadershipAudit);
+  },
+  authorize_leadership_access: accessMutation('authorize'),
+  set_leadership_role: accessMutation('change_role'),
+  revoke_leadership_access: accessMutation('revoke'),
   /**
    * save_event_config(event, year, fields, categories, evidence, expected version, create)
    * replaces the full event configuration in one transaction.
@@ -4869,6 +4938,24 @@ export const ADMIN_RPC = {
   },
 };
 
+// Keep the local contract aligned with stage 2. SQL tests prove the real boundary.
+for (const name of [
+  'review_records', 'add_officer_attendance', 'add_officer_attendance_batch',
+  'remove_attendance_record', 'recover_officer_attendance_batch', 'resolve_unmatched',
+  'merge_members', 'validate_requirement_set', 'preview_requirement_set',
+  'clone_requirement_set', 'purge_evidence', 'purge_orphaned_uploads', 'finish_purge_run',
+  'upsert_member_and_enroll', 'upsert_members_and_enroll', 'link_retroactive_matches',
+  'dismiss_duplicate_pair',
+]) {
+  const handler = ADMIN_RPC[name];
+  if (!handler) continue;
+  ADMIN_RPC[name] = (res, body, req, helpers, anonKey) => {
+    if (!isAdmin(resolveAuth(req, anonKey))) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
+    return handler(res, body, req, helpers, anonKey);
+  };
+}
+
+
 // ---------------------------------------------------------------------------
 // Deleting evidence objects: the purge screen's second step
 // ---------------------------------------------------------------------------
@@ -4915,7 +5002,7 @@ export function handleStorageDelete(req, res, url, body, helpers, anonKey) {
   const { json } = helpers;
   const auth = resolveAuth(req, anonKey);
 
-  if (!isOfficer(auth)) {
+  if (!isAdmin(auth)) {
     record({ fn: 'storage.delete', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, {
       statusCode: '403',
@@ -4958,7 +5045,7 @@ export function handleStorageInfo(req, res, url, helpers, anonKey) {
   const { json } = helpers;
   const auth = resolveAuth(req, anonKey);
 
-  if (!isOfficer(auth)) {
+  if (!isAdmin(auth)) {
     record({ fn: 'storage.info', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, {
       statusCode: '403',
@@ -4994,7 +5081,7 @@ export function handleStorageSign(req, res, url, body, helpers, anonKey) {
   // The evidence bucket is private. Only staff may sign a URL for it, which is
   // the storage policy evidence_read_staff, and it is why the grid cannot be
   // rebuilt by anybody who happens to know an object path.
-  if (!isStaff(auth)) {
+  if (!isAdmin(auth)) {
     record({ fn: 'storage.sign', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
     return;

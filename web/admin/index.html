@@ -52,13 +52,16 @@
         <button type="submit" class="visually-hidden">Sign in</button>
         <p id="signin-status" class="visually-hidden" role="status"></p>
       </form>
+      <button id="signin-google" type="button" class="button">Continue with Google</button>
+      <p id="google-status" class="muted small" role="status"></p>
     </main>
 
     <!-- 3. The admin surface cannot be initialized -->
     <main id="view-denied" class="view view-narrow" hidden>
       <div class="panel">
-        <h2 class="panel-title">Admin unavailable</h2>
+        <h2 class="panel-title">Access unavailable</h2>
         <p id="denied-body" class="body"></p>
+        <button id="denied-retry" type="button" class="button full">Try again</button>
         <button id="denied-signout" type="button" class="button full">Sign out</button>
       </div>
     </main>
@@ -102,6 +105,7 @@
           <button id="tab-storage" type="button" class="tab" aria-selected="false" aria-controls="panel-storage">
             Storage
           </button>
+          <button id="tab-access" type="button" class="tab" aria-selected="false" aria-controls="panel-access">Access</button>
         </nav>
 
         <div class="topbar-right">
@@ -118,6 +122,18 @@
         <button id="screen-message-action" type="button" class="button" hidden></button>
       </div>
 
+      <main id="panel-access" class="panel-view" hidden>
+        <h1 class="panel-title">Access</h1>
+        <form id="access-form" class="toolbar">
+          <div class="toolbar-field"><label class="label" for="access-email">Google email</label><input id="access-email" type="email" class="input" required autocomplete="off" maxlength="254" /></div>
+          <div class="toolbar-field"><label class="label" for="access-role">Role</label><select id="access-role" class="select"><option value="officer">Officer / Director</option><option value="admin">Secretary / Admin</option></select></div>
+          <button class="button button-primary" type="submit">Authorize</button>
+        </form>
+        <p id="access-status" class="muted" role="status"></p>
+        <div class="access-scroll"><table class="board-table"><thead><tr><th>Email</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead><tbody id="access-rows"></tbody></table></div>
+        <h2 class="panel-title">Access history</h2>
+        <div class="access-scroll"><table class="board-table"><thead><tr><th>Time</th><th>Account</th><th>Change</th><th>By</th></tr></thead><tbody id="access-audit"></tbody></table></div>
+      </main>
       <!--
         Events: what the QR code on the wall points at. The list and the form
         are one screen. The form replaces the list in place, Cancel and Save
@@ -156,7 +172,7 @@
           an exemptible fairness rule is not one, so this is the one place
           app_settings.events_auto_publish is read or written.
         -->
-        <div class="events-auto-publish">
+        <div id="events-auto-publish" class="events-auto-publish">
           <label class="event-checkbox">
             <input id="events-auto-publish-toggle" type="checkbox" />
             Publish queued events automatically

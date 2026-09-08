@@ -846,6 +846,7 @@ await signInAs('officers@pdsaucf.com');
 const dom = installDom(adminHtml);
 globalThis.CSS = { escape: (value) => String(value) };
 globalThis.window = {
+  addEventListener() {},
   location: {
     origin: `http://localhost:${PORT}`,
     pathname: '/admin/',

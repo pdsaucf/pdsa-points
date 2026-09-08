@@ -1,5 +1,10 @@
 # The officer passcode: the decision and what it costs
 
+Historical decision, retained for the shared admin fallback.
+[08-leadership-access.md](08-leadership-access.md) adds approved individual Google
+accounts and per-user roles. Its authorization boundary supersedes the single-account
+statements below; server-side passcode verification and the existing fallback remain.
+
 Supersedes an unbuilt design for Google sign-in, which was written and then dropped in
 favour of this. Magic-link sign-in is gone with it.
 

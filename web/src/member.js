@@ -207,7 +207,7 @@ export function createMember(ctx) {
       if (token !== state.loadToken) return;
 
       render();
-      await loadRetro(targetId, token);
+      if (ctx.isAdmin !== false) await loadRetro(targetId, token);
     } catch (err) {
       // A stale error must not clobber the message strip for whatever load
       // actually won the race.
@@ -295,8 +295,8 @@ export function createMember(ctx) {
 
     el.points.textContent = number(state.status?.point_total ?? 0);
     setHidden(el.honorary, !state.status?.is_honorary);
-    setHidden(el.edit, false);
-    setHidden(el.addRecord, false);
+    setHidden(el.edit, ctx.isAdmin === false);
+    setHidden(el.addRecord, ctx.isAdmin === false);
     // Hidden until loadRetro() (called right after this) says otherwise, so a
     // section left over from whoever was open before is never shown against
     // this member even for the moment it takes to fetch.

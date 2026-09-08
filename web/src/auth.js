@@ -1,66 +1,9 @@
-// Sign-in, and the session behind every request a signed-in screen makes.
-//
-// ONE SHARED OFFICER ACCOUNT, REACHED WITH A PASSCODE. The screen is a single
-// box. What it does is GoTrue's password grant against a fixed address that
-// nobody reads mail at (OFFICER_ACCOUNT_EMAIL in config.js): the passcode is
-// the password on that account, checked against a bcrypt hash in auth.users,
-// and what comes back is an ordinary `authenticated` JWT.
-//
-// WHY THE PASSCODE IS NOT CHECKED IN THIS FILE. It cannot be. This is a static
-// site on GitHub Pages out of a public repository, so any comparison written
-// here ships as readable source, and the anon key it would be guarding is
-// published in config.js on purpose. More to the point, a passcode checked in
-// the browser protects nothing: every admin table is behind RLS keyed on an
-// authenticated JWT, so a client-side gate would only work if `anon` were granted the admin
-// surface, which would put 355 members' records, writable, behind a JavaScript
-// `if`. Sending the passcode to GoTrue keeps the check on the server. Migration
-// 24 accepts that authenticated session only when its Auth user has the fixed
-// officer address; another Auth user is not an administrator.
-//
-// WHAT THIS COSTS, SAID PLAINLY. One account means one `reviewed_by` on every
-// approval, so the audit trail records that an officer did it and not which
-// officer. That is inherent in a shared passcode, not in this implementation.
-// docs/06-officer-passcode.md has the rest.
-//
-// WHY THIS IS NOT @supabase/supabase-js
-//
-// The brief allowed the real client here if it earned its place. It does not,
-// and the reason is specific rather than ideological:
-//
-//   * No CDN is allowed, so it would have to be vendored: a bundled ESM blob
-//     committed into a repository whose stated property is "nothing is
-//     compiled, bundled, minified or transpiled, so what is in the repo is
-//     exactly what runs" (web/README.md). That sentence stops being true the
-//     moment a build artifact lands in src/.
-//   * The surface actually needed is three HTTP calls:
-//     POST /auth/v1/token?grant_type=password, the same endpoint again with
-//     grant_type=refresh_token, and POST /auth/v1/logout. That is the file
-//     below.
-//   * What the library would add on top (storage, expiry-aware refresh,
-//     single-flight, sign-out) is roughly a hundred lines, and those hundred
-//     lines are the ones you actually want to be able to read when somebody is
-//     locked out at 6pm before a GBM.
-//   * It brings its own fetch policy, which would sit beside the deliberate
-//     two-budget retry ladder in api.js rather than use it.
-//
-// The tradeoff is honest: this file is the piece of the product most likely to
-// need updating if GoTrue changes its wire format. It is pinned to endpoints
-// that have been stable across the v2 line, and every one of them is asserted
-// against the mock in web/mock/verify-admin.mjs.
-//
-// SESSION STORAGE. localStorage, keyed per project URL, which is where
-// supabase-js puts it too. The access token is a short-lived JWT and the
-// refresh token is what actually matters; both are equally reachable by script
-// running in the page, so sessionStorage or a cookie without HttpOnly (which a
-// static site cannot set) would buy nothing. The mitigation that does work is
-// that this page loads no third party script at all: no CDN, no analytics, no
-// font host.
-
+// Supabase password and Google PKCE sessions. Authorization is resolved in Postgres.
 import { SUPABASE_URL, SUPABASE_ANON_KEY, OFFICER_ACCOUNT_EMAIL } from '../config.js';
 import { RpcError, NetworkError } from './errors.js';
 import { withRetries, requestOnce, API_BASE } from './api.js';
 
-const STORAGE_KEY = `pdsa:auth:${SUPABASE_URL}`;
+export const STORAGE_KEY = `pdsa:auth:${SUPABASE_URL}`;
 
 // Refresh this far before the token actually expires, so a request never goes
 // out holding one that dies in flight.
@@ -82,6 +25,7 @@ export class SessionExpiredError extends Error {
 // mock/verify-admin.mjs can install a stand-in before importing this module.
 
 const memory = new Map();
+let sessionEpoch = 0;
 
 function readRaw() {
   try {
@@ -192,7 +136,9 @@ export function adoptSession(session) {
 }
 
 export function forgetSession() {
+  sessionEpoch += 1;
   removeRaw();
+  try { globalThis.sessionStorage?.removeItem(`${STORAGE_KEY}:pkce`); } catch { /* Storage may be disabled. */ }
 }
 
 const secondsLeft = (session) =>
@@ -256,11 +202,13 @@ async function authFetch(path, { method = 'POST', body, accessToken, opts = {} }
  * to get wrong.
  */
 export async function signInWithPasscode(passcode, opts = {}) {
+  const epoch = ++sessionEpoch;
   const body = await authFetch('/auth/v1/token?grant_type=password', {
     body: { email: OFFICER_ACCOUNT_EMAIL, password: String(passcode) },
     opts,
   });
 
+  if (epoch !== sessionEpoch) throw new SessionExpiredError();
   const session = adoptSession(body);
   if (!session) {
     // A 200 with nothing usable in it. Treated as a refusal rather than as a
@@ -280,11 +228,13 @@ let refreshInFlight = null;
 async function refreshSession(session) {
   if (refreshInFlight) return refreshInFlight;
 
+  const epoch = sessionEpoch;
   refreshInFlight = (async () => {
     try {
       const body = await authFetch('/auth/v1/token?grant_type=refresh_token', {
         body: { refresh_token: session.refresh_token },
       });
+      if (epoch !== sessionEpoch) throw new SessionExpiredError();
       const next = adoptSession(body);
       if (!next) throw new SessionExpiredError();
       return next;
@@ -293,7 +243,7 @@ async function refreshSession(session) {
       // officer back to sign-in over one dropped packet is its own bug. Only a
       // refusal from GoTrue clears the stored session.
       if (err instanceof NetworkError) throw err;
-      forgetSession();
+      if (epoch === sessionEpoch) forgetSession();
       throw new SessionExpiredError('That sign-in has expired.');
     } finally {
       refreshInFlight = null;
@@ -334,4 +284,51 @@ export async function signOut() {
   } catch {
     // The token expires on its own. Nothing here is worth blocking the UI for.
   }
+}
+
+// Per-tab storage prevents overlapping tabs overwriting one another's verifier.
+// An unavailable durable store fails before redirect rather than losing the verifier.
+const PKCE_KEY = `${STORAGE_KEY}:pkce`;
+const base64url = (bytes) => btoa(String.fromCharCode(...bytes))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+export async function googleSignInUrl() {
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+  const redirect = new URL('./', window.location.href);
+  redirect.search = '';
+  redirect.hash = '';
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, createdAt: Date.now() }));
+  const url = new URL(`${API_BASE}/auth/v1/authorize`);
+  url.search = new URLSearchParams({ provider: 'google', redirect_to: redirect.href,
+    code_challenge: challenge, code_challenge_method: 's256', scopes: 'openid email profile' });
+  return url.href;
+}
+
+export async function completeGoogleSignIn() {
+  const url = new URL(window.location.href);
+  const hash = new URLSearchParams(url.hash.slice(1));
+  const code = url.searchParams.get('code');
+  const failed = url.searchParams.has('error') || hash.has('error');
+  const implicit = hash.has('access_token') || hash.has('refresh_token');
+  if (!code && !failed && !implicit) return false;
+  // Never adopt tokens or destinations from the URL, and remove sensitive callback
+  // parameters before doing any network work or rendering links.
+  window.history.replaceState(null, '', url.pathname);
+  const stored = sessionStorage.getItem(PKCE_KEY);
+  sessionStorage.removeItem(PKCE_KEY);
+  if (failed || implicit) throw new Error('Google sign-in did not complete. Try again.');
+  let pending;
+  try { pending = JSON.parse(stored); } catch { /* A missing verifier is refused below. */ }
+  if (typeof pending?.verifier !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(pending.verifier) || !Number.isFinite(pending.createdAt) || Date.now() - pending.createdAt > 10 * 60 * 1000) {
+    throw new Error('Sign-in expired. Try again in this tab.');
+  }
+  const epoch = ++sessionEpoch;
+  const body = await authFetch('/auth/v1/token?grant_type=pkce', {
+    body: { auth_code: code, code_verifier: pending.verifier },
+    opts: { attempts: 1, rateLimitAttempts: 0 },
+  });
+  if (epoch !== sessionEpoch) throw new SessionExpiredError();
+  if (!adoptSession(body)) throw new Error('Google sign-in did not complete. Try again.');
+  return true;
 }

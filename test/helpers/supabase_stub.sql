@@ -43,6 +43,17 @@ create table if not exists auth.users (
   email text
 );
 
+-- Provider-owned identity data. Authenticated clients cannot edit this table.
+alter table auth.users add column raw_user_meta_data jsonb default '{}'::jsonb;
+create table auth.identities (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  provider_id text not null,
+  provider text not null,
+  identity_data jsonb not null,
+  unique(provider_id, provider)
+);
+
 create or replace function auth.uid() returns uuid
 language sql stable
 as $$

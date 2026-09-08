@@ -15,8 +15,9 @@ Design docs, signed off before implementation:
   drop, and why the release is computed rather than scheduled
 - [docs/06-officer-passcode.md](docs/06-officer-passcode.md) - how officers sign in, and
   why the passcode is checked by the server rather than by the page
-- [docs/07-officer-roles.md](docs/07-officer-roles.md) - proposed, not built: splitting the
-  admin screen into Secretary and Officer
+- [docs/07-officer-roles.md](docs/07-officer-roles.md) - Secretary and Officer permissions
+- [docs/08-leadership-access.md](docs/08-leadership-access.md) - approved Google leadership
+  access, shared-admin fallback and deployment setup
 
 ## House rules
 

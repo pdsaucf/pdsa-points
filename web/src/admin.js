@@ -1,13 +1,6 @@
-// The admin shell: signing in and handing the screen to the admin tools.
-//
-// THE GUARD IS THE POINT OF THIS FILE. An unauthenticated visitor to /admin/
-// gets the sign-in form, never a half-drawn queue that fills with 401s. A
-// A valid session is the complete authorization decision. The page uses one
-// fixed GoTrue user behind one shared passcode, with no profiles or role layer.
-
 import { IS_CONFIGURED } from '../config.js';
-import { signInWithPasscode, currentSession, forgetSession, signOut } from './auth.js';
-import { select } from './rest.js';
+import { signInWithPasscode, currentSession, forgetSession, signOut, googleSignInUrl, completeGoogleSignIn, STORAGE_KEY } from './auth.js';
+import { select, callRpc } from './rest.js';
 import { describeOfficer, describeSignIn } from './officer-errors.js';
 import { createEvents } from './events.js';
 import { createReview } from './review.js';
@@ -16,6 +9,7 @@ import { createCategories } from './categories.js';
 import { createProgress } from './progress.js';
 import { createRoster } from './roster.js';
 import { createMember } from './member.js';
+import { createAccess } from './access.js';
 import { createStorage } from './storage.js';
 import { $, h, announce, setHidden } from './ui.js';
 import { installButtonIcons } from './icons.js';
@@ -24,7 +18,7 @@ import { installButtonIcons } from './icons.js';
 // the year changes, so switching tabs costs nothing. Events is first: it is
 // where an officer's day starts (make the event, print the code), and the
 // app lands on it (see start()).
-const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'storage'];
+const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'storage', 'access'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -40,11 +34,14 @@ const PANEL_RECOVERY = {
   roster: 'Roster',
   member: 'Member',
   storage: 'Storage',
+  access: 'Access',
 };
 
 const el = {};
 const app = {
   session: null,
+  role: null,
+  access: null,
   years: [],
   year: null,
   events: null,
@@ -138,6 +135,11 @@ function note(text, tone = 'ok') {
  */
 function fail(err, retry, context = null, refresh = null) {
   const copy = describeOfficer(err, context);
+  if (err?.code === 'PDS07' || err?.status === 403) {
+    note('This action is not permitted.', 'warn');
+    recheckAccess();
+    return;
+  }
 
   if (copy.recover === 'signin') {
     forgetSession();
@@ -229,13 +231,18 @@ async function guard() {
   app.session = session;
 
   try {
+    const identity = await callRpc('leadership_session', {});
+    app.role = identity?.role;
+    if (!['admin', 'officer'].includes(app.role)) {
+      showDenied('This account has no PDSA access. Contact the Secretary.');
+      return;
+    }
     app.years = await select('academic_years', {
       select: 'id,label,is_current,starts_on',
       order: 'starts_on.desc',
     });
   } catch (err) {
-    fail(err, guard);
-    showView('app');
+    showDenied('Sign-in could not be checked. Try again.');
     return;
   }
 
@@ -264,6 +271,7 @@ function context(panelName) {
       return app.years;
     },
     userId: app.session.user.id,
+    get isAdmin() { return app.role === 'admin'; },
     now: app.now,
     // Pass the original error through unchanged so describeOfficer can still
     // distinguish RpcError, NetworkError and an expired session. A refresh is
@@ -346,6 +354,7 @@ function showPanel(name) {
 }
 
 function selectTab(tab) {
+  if (app.role === 'officer' && !['events', 'roster', 'progress'].includes(tab)) return;
   app.tab = tab;
   showPanel(tab);
   clearMessage();
@@ -374,22 +383,29 @@ function startApp() {
   el.yearSelect.value = app.year.id;
 
   app.events = createEvents(context('events'));
-  app.review = createReview(context('review'));
-  app.requirements = createRequirements(context('requirements'));
-  app.categories = createCategories(context('categories'));
   app.progress = createProgress(context('progress'));
   app.roster = createRoster(context('roster'));
   app.member = createMember(context('member'));
-  app.storage = createStorage(context('storage'));
-
+  for (const name of ['review', 'requirements', 'storage', 'access']) {
+    setHidden(el.tabs[name], app.role !== 'admin');
+  }
+  if (app.role === 'admin') {
+    app.review = createReview(context('review'));
+    app.requirements = createRequirements(context('requirements'));
+    app.categories = createCategories(context('categories'));
+    app.storage = createStorage(context('storage'));
+    app.access = createAccess(context('access'));
+    app.review.mount();
+    app.requirements.mount();
+    app.categories.mount();
+    app.storageReloadQueue = Promise.resolve(app.storage.mount());
+    app.access.mount();
+  }
   app.events.mount();
-  app.review.mount();
-  app.requirements.mount();
-  app.categories.mount();
   app.progress.mount();
   app.roster.mount();
   app.member.mount();
-  app.storageReloadQueue = Promise.resolve(app.storage.mount());
+
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +434,7 @@ function cacheElements() {
       roster: $('tab-roster'),
       requirements: $('tab-requirements'),
       storage: $('tab-storage'),
+      access: $('tab-access'),
     },
     panels: {
       events: $('panel-events'),
@@ -426,6 +443,7 @@ function cacheElements() {
       roster: $('panel-roster'),
       requirements: $('panel-requirements'),
       storage: $('panel-storage'),
+      access: $('panel-access'),
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),
@@ -445,6 +463,17 @@ async function endSession() {
 }
 
 function wire() {
+  $('signin-google').addEventListener('click', async () => {
+    const button = $('signin-google');
+    button.disabled = true;
+    try { window.location.assign(await googleSignInUrl()); }
+    catch { $('google-status').textContent = 'Google sign-in could not start. Try again.'; button.disabled = false; }
+  });
+  $('denied-retry').addEventListener('click', guard);
+  window.addEventListener('focus', recheckAccess);
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY || event.key === null) window.location.reload();
+  });
   el.signinForm.addEventListener('submit', onSignInSubmit);
   el.deniedSignout.addEventListener('click', endSession);
   el.signout.addEventListener('click', endSession);
@@ -493,5 +522,20 @@ export function start({ now = () => new Date() } = {}) {
     return;
   }
 
-  guard();
+  completeGoogleSignIn().then(guard).catch(() => {
+    showSignIn();
+    $('google-status').textContent = 'Google sign-in did not complete. Try again.';
+  });
+}
+
+let checkingAccess = false;
+async function recheckAccess() {
+  if (checkingAccess || !app.role || !currentSession()) return;
+  checkingAccess = true;
+  try {
+    const identity = await callRpc('leadership_session', {});
+    if (identity?.role !== app.role) window.location.replace(window.location.pathname);
+  } catch (err) {
+    if (err?.status === 401) { forgetSession(); showSignIn(); }
+  } finally { checkingAccess = false; }
 }

@@ -22,7 +22,7 @@ import { SessionExpiredError } from './auth.js';
 /** Said in two places, so it is written once. */
 const SESSION_EXPIRED = {
   title: 'Sign-in expired',
-  body: 'Enter the passcode again. Nothing you have approved is affected.',
+  body: 'Sign in again.',
   recover: 'signin',
 };
 

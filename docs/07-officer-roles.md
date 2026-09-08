@@ -1,6 +1,7 @@
 # Officer roles: what a Secretary may do and an Officer may not
 
-Status: proposed, not built. Supersedes nothing. It reopens exactly one decision from
+Status: implemented locally for review. The Google leadership transition is described
+in [08-leadership-access.md](08-leadership-access.md); production configuration is pending. It reopens exactly one decision from
 [06-officer-passcode.md](06-officer-passcode.md), the single shared account, and keeps the
 rest of that document intact.
 
@@ -46,7 +47,8 @@ something like it: one row per officer, carrying a role.
 
 ## The roles
 
-The existing `app_role` enum already has what this needs. No new role type.
+The historical `app_role` enum has the values this needs. Migration 24 dropped it,
+so the database stage restores that enum alongside `profiles`.
 
 | Person | Role | Reasoning |
 | --- | --- | --- |
@@ -89,13 +91,13 @@ admin row.
 
 ### Two decisions to make on purpose
 
-**Publishing an event.** `set_event_published()` is proposed as officer, on the grounds
-that an officer who may create an event may announce it. The opposite reading is that
-publication is the fairness-sensitive half and belongs with the Secretary alongside the
-toggle. Pick one before building, not during.
+**Publishing an event.** Confirmed: `set_event_published()` is an officer action.
+The auto-publish setting remains admin-only.
 
-**Seeing photos.** Evidence photos are attached to attendance records an officer may read
-but not act on. Reading proposed for staff, deleting for admin only.
+**Seeing photos.** Confirmed: officers cannot view evidence photos. Reading evidence
+metadata and storage objects, and deleting photos, are admin-only. Officers still read
+attendance records, upload grants and purge history; those paths do not grant access to
+photo bytes. Existing signed URLs remain bearer URLs until their expiry.
 
 ## The trap in `app_settings`
 
@@ -162,3 +164,39 @@ first, and the choice above stays swappable.
 
 Check-in and the member portal are anonymous `SECURITY DEFINER` RPCs and are outside all
 of this. `/c`, `/me` and `/events` behave identically before and after.
+
+
+## Database stage audit
+
+Migration `20260905100000_officer_roles.sql` applies this boundary. The shared GoTrue
+identity remains admin without a profile row. Other users need an explicit profile;
+`viewer`, `member` and missing profiles confer no staff access. Profiles are readable by
+their owner and admins. The leadership migration restricts all management to admin RPCs. Role lookup is a pinned definer function over
+`auth.uid()`, with no caller-supplied role or user id. Deleting a profile revokes its role
+on the next database call. Anonymous pages keep their existing RPC grants and payloads.
+
+| Surface | Read | Write or action |
+| --- | --- | --- |
+| Academic years, terms, categories | Staff | Admin |
+| Members, enrollments, attendance records | Staff | Admin |
+| Event configuration and evidence requirements | Staff | Officer via `save_event_config()` |
+| Empty event deletion | Staff | Officer, with attendance protected by foreign-key restriction |
+| Requirement sets, nodes, category links | Staff | Admin, existing draft and publication constraints retained |
+| Settings | Staff | Admin |
+| Attendance evidence metadata and storage objects | Admin | Admin; anonymous granted uploads unchanged |
+| Audit, merge, duplicate-dismissal and purge history, upload grants | Staff | Existing internal RPC writes only |
+| Nonces and rate-limit counters | No client grant | Internal functions only |
+
+The RPC pass also covers entry points absent from the original list: batch attendance
+entry, retroactive linking, duplicate dismissal and batch roster import now require
+admin. Requirement publication already required admin. Read-only duplicate and
+retroactive-match candidates, storage usage and purge preview remain staff operations;
+the latter two expose aggregate counts, not images. Member progress evaluation permits
+staff and the trusted anonymous portal definers. Internal helpers remain ungranted.
+Event saving and publication keep officer assertions. No anonymous RPC is widened.
+
+`test/privileges.test.mjs` exercises officer refusals for all admin RPCs and direct
+insert, update and delete paths, self-escalation, role revocation, roleless and unused
+roles, evidence reads and writes, and shared-passcode compatibility. Its visibility
+regression sets auto-publish false and verifies the officer's computed event visibility
+before and after an admin enables it.
