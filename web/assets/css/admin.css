@@ -159,50 +159,16 @@ body {
   min-height: 60vh;
 }
 
-/* ---------------------------------------------------------------------------
-   The passcode screen
-
-   One box on an empty page. No wordmark, no heading, no button: everything
-   that would tell a passer-by what this is has been taken off, so the layout
-   is just "centre the one thing that is left".
-
-   Kept narrow rather than full width, because a text field stretched across a
-   desktop reads as a search bar somebody forgot to style, which draws more
-   attention than a small box does.
-   --------------------------------------------------------------------------- */
-.view-passcode {
+/* Leadership sign-in. */
+.view-signin {
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 1rem;
   min-height: 100vh;
   min-height: 100svh;
   padding: 1rem;
-}
-
-.passcode {
-  width: min(15rem, 100%);
   text-align: center;
-  /* The one place in this product where digits are not in a column, and where
-     a masked field looks wrong with the tabular spacing body sets. */
-  font-variant-numeric: normal;
-  letter-spacing: 0.15em;
-}
-
-/* A refused passcode says so by turning the box, not by adding a sentence.
-   The screen reader hears it from #signin-status instead. */
-.passcode[aria-invalid='true'] {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 1px var(--danger);
-}
-
-/* THE RING HAS TO TURN TOO, or the refusal is invisible. Submitting is Enter,
-   so the field is focused every time this state is reached, and the 3px
-   focus-visible outline sits directly outside a 1px border and swamps it: the
-   officer sees an ordinary blue focused box and no sign that anything was
-   refused. Recolouring the ring keeps the focus indicator exactly where it was
-   and makes it carry the refusal, rather than adding a second thing to look
-   at. */
-.passcode[aria-invalid='true']:focus-visible {
-  outline-color: var(--danger);
 }
 
 .view-narrow {
@@ -2211,6 +2177,24 @@ kbd {
   gap: 0.5rem;
 }
 
+.event-past-group {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.event-past-toggle {
+  justify-self: start;
+}
+
+.event-past-chevron {
+  display: inline-block;
+}
+
+.event-past-toggle[aria-expanded='true'] .event-past-chevron {
+  transform: rotate(90deg);
+}
+
 .event-today-divider {
   display: flex;
   align-items: center;
@@ -2793,8 +2777,7 @@ kbd {
   text-align: center;
 }
 
-/* Leadership sign-in and access management. */
-.view-passcode { flex-direction: column; gap: 1rem; }
+/* Leadership access management. */
 .access-scroll { overflow-x: auto; margin: 1.5rem 0 2rem; }
 .access-scroll table { width: 100%; text-align: left; border-collapse: collapse; }
 .access-scroll td, .access-scroll th { padding: .75rem; border-bottom: 1px solid var(--line); }

@@ -3,7 +3,9 @@
 Historical decision, retained for the shared admin fallback.
 [08-leadership-access.md](08-leadership-access.md) adds approved individual Google
 accounts and per-user roles. Its authorization boundary supersedes the single-account
-statements below; server-side passcode verification and the existing fallback remain.
+statements below. The public `/admin/` screen now offers only `Continue with Google`.
+Server-side passcode verification and `signInWithPasscode()` remain available as a
+low-level shared-admin fallback; no password field or passcode form is rendered.
 
 Supersedes an unbuilt design for Google sign-in, which was written and then dropped in
 favour of this. Magic-link sign-in is gone with it.
@@ -66,25 +68,16 @@ implementation avoids them.
   `profiles`, per-account roles and member claims were removed after the member portal
   became public by name.
 
-## The screen
+## The screen, then and now
 
-`web/admin/index.html`, view 2. One `type="password"` field, centred on an empty page.
-No wordmark, no emblem, no heading, no label, no button, no helper text. The page paints
-nothing at all until the JavaScript has decided which state it is in, so a stranger who
-loads `/admin/` never sees a flash of anything that names the club.
+The original screen had one masked passcode field, a hidden label and live region, and
+an invalid-state border and focus ring. That UI has been removed.
 
-Three things are deliberately kept, and `verify-admin.mjs` checks all three:
-
-- a `visually-hidden` label, so the field is not an unexplained box to a screen reader
-- a `visually-hidden` live region, which is where "Incorrect passcode." is said
-- a `visually-hidden` submit button, so Enter submits everywhere rather than relying on
-  the single-input implicit-submission default
-
-The only visible signal is the box itself: refused, it turns red. **Including its focus
-ring.** Submitting is Enter, so the field is always focused when it is refused, and a 3px
-focus ring outside a 1px red border reads as an ordinary focused box. On a screen with no
-text on it that left nothing at all saying the passcode was wrong. That was caught in the
-browser rather than in review, and there is now a check for it.
+`web/admin/index.html` now offers only `Continue with Google`. A visible status region
+announces sign-in errors, and the button supports keyboard focus and retry. The page
+controller has no passcode import, form handler or field. `verify-admin.mjs` checks that
+no password input is rendered, while its auth tests still verify the low-level shared
+password grant, wrong-passcode refusal, session handling and sign-out.
 
 ## What was purged
 

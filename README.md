@@ -221,7 +221,8 @@ cannot be written directly through the public API; leadership changes use serial
 admin-only RPCs with a separate access audit and a last-individual-admin guard. Leadership
 accounts are separate from member records and do not add emails to the roster.
 
-The shared passcode remains an admin fallback, checked by GoTrue rather than the page.
+The public `/admin/` screen offers only `Continue with Google`. The low-level shared
+passcode function remains an admin fallback, checked by GoTrue rather than the page.
 It can bootstrap the first individual Secretary and remains available during migration.
 See [leadership access and setup](docs/08-leadership-access.md) for the exact authorization
 boundary, deployment prerequisites and Google configuration. No member account or claim

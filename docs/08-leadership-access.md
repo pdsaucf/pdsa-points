@@ -39,7 +39,9 @@ Privileged operator SQL remains a recovery path and must preserve these invarian
 
 Access changes have a separate admin-only audit history. Leadership email addresses never
 enter the ordinary staff-readable audit log. The unchanged shared passcode account remains
-an admin fallback and can approve the first individual Secretary. Its actions still name
+an admin fallback and can approve the first individual Secretary. The public `/admin/`
+screen offers only `Continue with Google`; the low-level `signInWithPasscode()` helper
+and shared-account authorization remain, with no passcode field on the page. Its actions still name
 the shared identity; Google-bound accounts provide individual attribution.
 
 Officers may create/edit/duplicate events, delete empty events, publish/unpublish events,
@@ -87,8 +89,9 @@ Keep the existing shared user and password grant functioning throughout.
 5. Permit new OAuth users so first-time approved leaders can sign in. Keep email signup
    disabled separately if supported, and leave manual identity linking disabled. A newly
    created Auth user still has no staff role until approved and provider-verified.
-6. Sign in with the existing shared passcode, approve the first individual Secretary's
-   Google email as Admin, and have that person complete Google sign-in. Confirm the
+6. Use an existing shared-admin session or the low-level shared password-grant fallback
+   to approve the first individual Secretary's Google email as Admin, then have that
+   person choose `Continue with Google`. The public page has no passcode form. Confirm the
    binding before handing over management. Approve officers with the Officer role.
 
 Official references: [Google login](https://supabase.com/docs/guides/auth/social-login/auth-google)

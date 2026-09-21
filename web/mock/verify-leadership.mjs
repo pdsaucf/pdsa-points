@@ -32,6 +32,25 @@ async function callback(role) {
   return window.location.href;
 }
 try {
+  const signedOutDom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
+  const { start } = await import('../src/admin.js');
+  start();
+  await until(() => !signedOutDom.$('view-signin').hidden);
+  assert.equal(signedOutDom.$('signin-passcode'), null);
+  assert.equal(signedOutDom.$('signin-form'), null);
+  assert.equal(signedOutDom.$('signin-google').textContent, 'Continue with Google');
+  assert.equal(signedOutDom.$('signin-google').disabled, false);
+  window.location.assign = () => { throw new Error('Navigation failed'); };
+  signedOutDom.$('signin-google').click();
+  await until(() => signedOutDom.$('google-status').textContent === 'Google sign-in failed. Try again.');
+  assert.equal(signedOutDom.$('signin-google').disabled, false, 'Google sign-in can be retried');
+  let destination = null;
+  window.location.assign = (url) => { destination = url; };
+  signedOutDom.$('signin-google').click();
+  await until(() => destination !== null);
+  assert.equal(new URL(destination).searchParams.get('provider'), 'google');
+  assert.equal(signedOutDom.$('google-status').textContent, '', 'retry clears the earlier error');
+  assert.equal(auth.currentSession(), null);
   await callback('officer');
   await auth.completeGoogleSignIn();
   assert.equal(window.location.href, `${base}/admin/`);
@@ -42,7 +61,6 @@ try {
   await assert.rejects(signPhotoUrls(['photo.jpg']));
   await assert.rejects(callRpc('review_records', { p_record_ids: [], p_decision: 'approve' }), (e) => e.code === 'PDS07');
   const dom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
-  const { start } = await import('../src/admin.js');
   start();
   await until(() => !dom.$('view-app').hidden && dom.$('event-list').childNodes.length);
   for (const id of ['tab-review','tab-requirements','tab-storage','tab-access','events-auto-publish','roster-add','roster-paste','roster-import']) {
@@ -101,5 +119,5 @@ try {
     assert.equal(auth.currentSession(), null);
     globalThis.fetch = originalFetch;
   }
-  console.log('Leadership mock checks passed: PKCE, refresh, refusals, role-aware shell, access changes, callback rejection and logout races.');
+  console.log('Leadership mock checks passed: Google-only entry, sign-in retry, shared fallback, PKCE, refresh, refusals, role-aware shell, access changes, callback rejection and logout races.');
 } finally { await new Promise((resolve) => server.close(resolve)); }

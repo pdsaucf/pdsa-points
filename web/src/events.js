@@ -186,6 +186,7 @@ export function createEvents(ctx) {
     query: '',
     status: 'all',
     sort: 'date_asc',
+    pastExpanded: false,
     editingEvent: null, // the row being edited, or the row Save just created
     formReturn: 'list', // where Cancel and Save go back to: 'list' or 'detail'
     // Set only by Duplicate: the fields a new event opens with, copied from
@@ -379,6 +380,7 @@ export function createEvents(ctx) {
       // the caller that knows a form was open is the one that says so.
       const movedYear = state.viewYearId !== null && state.viewYearId !== yearId;
       state.viewYearId = yearId;
+      if (movedYear) state.pastExpanded = false;
       if (movedYear && state.view !== 'list') {
         detail.dismiss();
         hideForm();
@@ -521,17 +523,25 @@ export function createEvents(ctx) {
 
     setHidden(el.empty, true);
     setHidden(el.list, false);
-    const dividerIndex = todayDividerIndex(
-      shown,
-      state.sort,
-      todayInNewYork(ctx.now?.() ?? new Date()),
-    );
+    const today = todayInNewYork(ctx.now?.() ?? new Date());
+    const groupPast = state.tab === 'all' && state.status === 'all'
+      && !state.query.trim() && state.sort === 'date_asc';
+    const past = groupPast ? shown.filter((event) => event.occurred_on < today) : [];
+    const previousToggle = el.list.querySelector('.event-past-toggle');
+    const restoreDisclosureFocus = previousToggle && document.activeElement === previousToggle;
+    if (restoreDetailFocus && past.some((event) => event.id === state.detailOriginEventId)) {
+      state.pastExpanded = true;
+    }
+    const dividerIndex = todayDividerIndex(shown, state.sort, today);
     const children = [];
+    if (past.length) children.push(renderPastEvents(past));
     shown.forEach((event, index) => {
       if (index === dividerIndex) children.push(renderTodayDivider());
+      if (groupPast && event.occurred_on < today) return;
       children.push(renderRow(event));
     });
     el.list.replaceChildren(...children);
+    if (restoreDisclosureFocus) el.list.querySelector('.event-past-toggle')?.focus();
 
     if (restoreDetailFocus) {
       const originId = state.detailOriginEventId;
@@ -542,6 +552,25 @@ export function createEvents(ctx) {
         ?.querySelector('.event-view')
         ?.focus();
     }
+  }
+
+  function renderPastEvents(events) {
+    const rows = h('div', { id: 'events-past-list', class: 'event-list', hidden: !state.pastExpanded },
+      ...events.map(renderRow));
+    const toggle = h('button', {
+      type: 'button',
+      class: 'button event-past-toggle',
+      'aria-label': `Past events (${events.length})`,
+      'aria-expanded': String(state.pastExpanded),
+      'aria-controls': 'events-past-list',
+      onClick: () => {
+        state.pastExpanded = !state.pastExpanded;
+        toggle.setAttribute('aria-expanded', String(state.pastExpanded));
+        setHidden(rows, !state.pastExpanded);
+      },
+    }, h('span', { class: 'event-past-chevron', 'aria-hidden': 'true' }, '›'),
+    'Past events', h('span', { class: 'pill' }, String(events.length)));
+    return h('div', { class: 'event-past-group' }, toggle, rows);
   }
 
   function renderTodayDivider() {
@@ -1487,6 +1516,7 @@ export function createEvents(ctx) {
    */
   function yearChanged() {
     const wasEditing = state.view === 'form';
+    state.pastExpanded = false;
     detail.dismiss();
     hideForm();
     state.view = 'list';

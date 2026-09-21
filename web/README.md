@@ -1,15 +1,14 @@
 # web/ · the frontend
 
-Three surfaces, one static directory, no build step.
+Four surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
   This is **P1**.
-- **`/admin/`** the officer screens, behind a passcode: the review queue and
-  account claims (**P2**), the requirements editor and categories (**P3**), and the
-  progress board, member detail and roster (**P4**).
-- **`/me/`** the member portal, behind the same sign-in: their own progress, their own
-  records, and the claim flow for an account that is not linked to a roster row yet
-  (**P5**).
+- **`/admin/`** the leadership screens, entered through `Continue with Google`.
+  Postgres grants approved Admin or Officer access. No password field is rendered;
+  the low-level shared-passcode auth fallback remains available.
+- **`/me/`** the public member portal: name lookup, points and current-year attendance.
+  No member sign-in or claim flow.
 - **`/events/`** the public events page: what is coming up, no name typed and no login.
   Touches no table (invariant 3): it calls `portal_events()` and nothing else. See
   `docs/05-events-page.md`.
@@ -31,13 +30,12 @@ web/
   src/format.js              dates, labels, units
 
   src/admin.js               sign-in, the role guard, the tabs
-  src/auth.js                the session: passcode, refresh, sign out
+  src/auth.js                Google PKCE, shared fallback, refresh, sign out
   src/rest.js                authenticated PostgREST reads and writes
   src/events.js              the events list: tabs, search, order, the form
   src/event-detail.js        one event: the numbers, and every attendance record
   src/events-model.js        events as data, with no DOM in it
   src/review.js              the review queue
-  src/claims.js              account claims
   src/requirements.js        the rule editor, with the live preview
   src/requirement-model.js   the rule tree as data, with no DOM in it
   src/categories.js          what the rules measure
@@ -50,9 +48,10 @@ web/
   src/officer-errors.js      every PDS* code, written from the officer's side
   src/ui.js                  the DOM helpers
 
-  src/portal.js              the member portal shell: sign-in, and which screen
-  src/portal-claim.js        "which of these is you", waiting, declined
-  src/portal-progress.js     their progress, their records, "something's missing?"
+  src/portal.js              the public member portal shell and name lookup
+  src/portal-scorecard.js    category totals and honorary progress
+  src/portal-history.js      current-year attendance
+  src/portal-leaderboard.js  public member standings
   src/member-errors.js       every PDS* code, written from the member's side
   src/events-page.js         the public events page: date, time, location, sign-up
 
@@ -163,7 +162,7 @@ npm run verify               # the check-in checks
 npm run verify:admin         # the review queue checks
 npm run verify:requirements  # the rule editor checks
 npm run verify:board         # the board, member, roster and merge checks
-npm run verify:portal        # the member portal: four screens, claims, missing credit
+npm run verify:portal        # public member lookup, points and attendance
 npm run verify:storage       # the storage screen: usage, the purge dialog, roles
 npm run verify:events        # the events screen, the event detail, and the QR encoder
 npm run verify:categories    # the category manager
@@ -216,38 +215,18 @@ record filed, any nonce violations, and the officer-side audit trail.
 http://localhost:8787/admin/
 ```
 
-The passcode box takes `mock-passcode`, which signs in as admin. That is the mock's
-passcode and not the club's: the real one is a bcrypt hash in `auth.users` and is in no
-file here (docs/06-officer-passcode.md). Anything else is refused, which is the half
-worth looking at, because the refusal is the only thing that screen ever draws.
+Choose `Continue with Google` to open the local mock account chooser. This exercises
+Google PKCE-shaped redirects without contacting Google or production Supabase.
 
-The product signs in to one shared account. The checks need more than one, because half
-of what they prove is that the database tells the roles apart, so `mock/sign-in.mjs`
-names an account and posts to the same endpoint the box does:
-
-| address | role | what it can do |
-|---|---|---|
-| `officers@pdsaucf.com` | admin | the shared account the passcode box itself signs in to |
-| `sara@pdsaucf.com` | officer | the whole queue |
-| `ben@pdsaucf.com` | admin | the queue, and publishing a requirement set |
-| `advisor@ucf.edu` | viewer | reads the queue, decides nothing, and sees no account claims |
-| `priya@knights.ucf.edu` | member | refused, and told where their own points are |
+The verification helpers also retain the low-level shared password grant. Calling
+`signInWithPasscode('mock-passcode')` against the mock signs in as the shared admin;
+the page itself does not expose that input. The real passcode remains a hash in
+`auth.users`, never a repository value. Wrong-passcode refusal and shared-admin
+compatibility remain covered by `verify-admin.mjs` and `verify-leadership.mjs`.
 
 ### The member portal, locally
 
-Same sign-in, at `http://localhost:8787/me/`, and the address decides which of the
-four screens opens:
-
-| address | screen |
-|---|---|
-| `priya@knights.ucf.edu` | matches a roster row by email, so it links itself: progress and records |
-| `a.catto.2027@knights.ucf.edu` | a claim already waiting for an officer |
-| `ewallace99@gmail.com` | a claim, until an officer declines it from `/admin/`, then the reason |
-| anything else | no account yet. One is created, and the screen asks which name is theirs |
-
-The last row is the difference from the queue: the portal signs in with
-`create_user`, so an address nobody provisioned gets an account with no roster row
-attached and sees nothing but the claim screen until an officer confirms it.
+Open `http://localhost:8787/me/` and look up a fixture member by name. No sign-in is required.
 
 The fixtures put 43 routine check-ins and one of every triage flag into the
 queue, so no branch of the card renderer is unexercised.
@@ -389,10 +368,6 @@ The live case is the requirements editor: `req_sets_write` admits an officer for
 drafts only, so an officer's edit to a published set comes back as a 200 with
 nothing in it, and without the count the screen would report a save that never
 happened.
-
-Account claims used to be the example here. They are not any more: `Confirm` and
-`Decline` both go through `review_member_claim()`, which returns what it did,
-and `src/claims.js` writes no table at all.
 
 ## House rules
 

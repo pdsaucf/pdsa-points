@@ -1,7 +1,7 @@
 import { IS_CONFIGURED } from '../config.js';
-import { signInWithPasscode, currentSession, forgetSession, signOut, googleSignInUrl, completeGoogleSignIn, STORAGE_KEY } from './auth.js';
+import { currentSession, forgetSession, signOut, googleSignInUrl, completeGoogleSignIn, STORAGE_KEY } from './auth.js';
 import { select, callRpc } from './rest.js';
-import { describeOfficer, describeSignIn } from './officer-errors.js';
+import { describeOfficer } from './officer-errors.js';
 import { createEvents } from './events.js';
 import { createReview } from './review.js';
 import { createRequirements } from './requirements.js';
@@ -80,17 +80,11 @@ function showView(name) {
   setHidden(el.appView, name !== 'app');
 }
 
-/**
- * The passcode screen. `status` is said only to a screen reader: the visible
- * signal is the box itself, because a sentence on this page would undo the
- * reason it looks the way it does.
- */
-function showSignIn(status) {
+function showSignIn(status = '') {
   showView('signin');
-  el.signinPasscode.setAttribute('aria-invalid', String(Boolean(status)));
-  el.signinStatus.textContent = status ?? '';
-  if (status) announce(status);
-  el.signinPasscode.focus({ preventScroll: true });
+  el.googleStatus.textContent = status;
+  el.signinGoogle.disabled = false;
+  el.signinGoogle.focus({ preventScroll: true });
 }
 
 function showDenied(body) {
@@ -186,34 +180,6 @@ function fail(err, retry, context = null, refresh = null) {
 function setCount(node, count) {
   node.textContent = String(count);
   node.dataset.zero = String(count === 0);
-}
-
-// ---------------------------------------------------------------------------
-// Sign in
-// ---------------------------------------------------------------------------
-
-async function onSignInSubmit(event) {
-  event.preventDefault();
-  const passcode = el.signinPasscode.value;
-  if (!passcode) {
-    showSignIn('Enter the passcode.');
-    return;
-  }
-
-  // No "Signing in…" label to change, because there is no button. The box goes
-  // read-only for the round trip so a second Enter cannot start a second one.
-  el.signinPasscode.readOnly = true;
-  el.signinPasscode.setAttribute('aria-invalid', 'false');
-  try {
-    await signInWithPasscode(passcode);
-    el.signinPasscode.value = '';
-    guard();
-  } catch (err) {
-    el.signinPasscode.select();
-    showSignIn(describeSignIn(err));
-  } finally {
-    el.signinPasscode.readOnly = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -419,9 +385,8 @@ function cacheElements() {
     denied: $('view-denied'),
     appView: $('view-app'),
 
-    signinForm: $('signin-form'),
-    signinPasscode: $('signin-passcode'),
-    signinStatus: $('signin-status'),
+    signinGoogle: $('signin-google'),
+    googleStatus: $('google-status'),
 
     deniedBody: $('denied-body'),
     deniedSignout: $('denied-signout'),
@@ -463,18 +428,20 @@ async function endSession() {
 }
 
 function wire() {
-  $('signin-google').addEventListener('click', async () => {
-    const button = $('signin-google');
-    button.disabled = true;
-    try { window.location.assign(await googleSignInUrl()); }
-    catch { $('google-status').textContent = 'Google sign-in could not start. Try again.'; button.disabled = false; }
+  el.signinGoogle.addEventListener('click', async () => {
+    el.signinGoogle.disabled = true;
+    el.googleStatus.textContent = '';
+    try {
+      window.location.assign(await googleSignInUrl());
+    } catch {
+      showSignIn('Google sign-in failed. Try again.');
+    }
   });
   $('denied-retry').addEventListener('click', guard);
   window.addEventListener('focus', recheckAccess);
   window.addEventListener('storage', (event) => {
     if (event.key === STORAGE_KEY || event.key === null) window.location.reload();
   });
-  el.signinForm.addEventListener('submit', onSignInSubmit);
   el.deniedSignout.addEventListener('click', endSession);
   el.signout.addEventListener('click', endSession);
   for (const name of TABS) {
@@ -523,8 +490,7 @@ export function start({ now = () => new Date() } = {}) {
   }
 
   completeGoogleSignIn().then(guard).catch(() => {
-    showSignIn();
-    $('google-status').textContent = 'Google sign-in did not complete. Try again.';
+    showSignIn('Google sign-in did not complete. Try again.');
   });
 }
 

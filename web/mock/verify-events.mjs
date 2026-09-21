@@ -599,6 +599,8 @@ const eventRowFor = (title) =>
 const rowTitles = () =>
   dom.$('event-list').querySelectorAll('.event-title').map((node) => node.textContent.trim());
 const todayDivider = () => dom.$('event-list').querySelector('.event-today-divider');
+const pastToggle = () => dom.$('event-list').querySelector('.event-past-toggle');
+const pastRows = () => dom.$('event-list').querySelector('#events-past-list');
 const tabLabels = () =>
   dom.$('event-category-tabs').querySelectorAll('.filter-tab').map((node) => node.textContent.trim());
 const attendeeNames = () =>
@@ -821,9 +823,8 @@ function captureRequests() {
 const initialStorageLoad = holdNextRestResponse('v_purge_runs_outstanding');
 const initialEventsFailure = failInitialEventsStartupOnce();
 const SCREEN_NOW = new Date('2026-08-10T16:00:00.000Z');
+await auth.signInWithPasscode('mock-passcode');
 start({ now: () => new Date(SCREEN_NOW) });
-dom.$('signin-passcode').value = 'mock-passcode';
-dom.fire(dom.$('signin-form'), 'submit');
 await until(() => !dom.$('view-app').hidden, 'the app never opened');
 await until(
   () => dom.$('screen-message-title').textContent === 'Events unavailable',
@@ -921,10 +922,75 @@ await check('Events opens oldest first with Today between past and current event
 
   const children = dom.$('event-list').children;
   const at = children.indexOf(divider);
-  assert.equal(children[at - 1].querySelector('.event-title').textContent, 'Give Kids A Smile');
+  assert.equal(children[at - 1].querySelectorAll('.event-title').at(-1).textContent, 'Give Kids A Smile');
   assert.equal(children[at + 1].querySelector('.event-title').textContent, 'Soap Carving');
   const rowCount = dom.$('event-list').querySelectorAll('.event-row').length;
   assert.equal(dom.$('events-count').textContent, `${rowCount} events`);
+});
+
+await check('the default list collapses only past events and exposes the count', async () => {
+  const events = await select('events', {
+    select: 'title,occurred_on',
+    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+  });
+  const today = todayInNewYork(SCREEN_NOW);
+  const expectedPast = sortEvents(events).filter((event) => event.occurred_on < today);
+  const expectedCurrent = sortEvents(events).filter((event) => event.occurred_on >= today);
+  assert.ok(expectedPast.length && expectedCurrent.length, 'fixture needs both sides of Today');
+  assert.equal(pastToggle().tagName, 'BUTTON', 'native button supplies Enter and Space activation');
+  assert.equal(pastToggle().getAttribute('type'), 'button');
+  assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(pastToggle().getAttribute('aria-controls'), pastRows().id);
+  assert.equal(pastToggle().getAttribute('aria-label'), `Past events (${expectedPast.length})`);
+  assert.equal(pastToggle().querySelector('.pill').textContent, String(expectedPast.length));
+  assert.equal(pastRows().hidden, true);
+  assert.deepEqual(pastRows().querySelectorAll('.event-title').map((node) => node.textContent),
+    expectedPast.map((event) => event.title));
+  const immediateRows = dom.$('event-list').children.filter((node) => node.classList.contains('event-row'));
+  assert.deepEqual(immediateRows.map((row) => row.querySelector('.event-title').textContent),
+    expectedCurrent.map((event) => event.title));
+  assert.ok(immediateRows.every((row) => !row.hidden), 'a current event was hidden');
+});
+
+await check('Past events toggles locally and retains state and focus across list repaints', async () => {
+  const captured = captureRequests();
+  try {
+    const toggle = pastToggle();
+    toggle.focus();
+    dom.click(toggle);
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(pastRows().hidden, false);
+    assert.equal(document.activeElement, toggle, 'toggle moved keyboard focus');
+    // Ordinary list rendering must not collapse or lose the disclosure focus.
+    dom.fire(dom.$('events-search'), 'input');
+    assert.equal(pastToggle().getAttribute('aria-expanded'), 'true');
+    assert.equal(pastRows().hidden, false);
+    assert.equal(document.activeElement, pastToggle());
+    dom.click(pastToggle());
+    assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+    assert.equal(pastRows().hidden, true);
+    dom.fire(dom.$('events-search'), 'input');
+    assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+    assert.equal(captured.requests.length, 0, 'disclosure sent a server request');
+  } finally {
+    captured.restore();
+  }
+});
+
+await check('a past event keeps its actions and return focus inside the expanded group', async () => {
+  dom.click(pastToggle());
+  assert.equal(pastRows().hidden, false);
+  const view = dom.buttonNamed(eventRowFor('Give Kids A Smile'), 'View event');
+  view.focus();
+  dom.click(view);
+  await until(() => !dom.$('event-detail-body').hidden, 'past event did not open');
+  assert.equal(dom.$('event-detail-title').textContent, 'Give Kids A Smile');
+  dom.click(dom.$('event-detail-back'));
+  await until(() => !dom.$('event-list').hidden, 'Back did not return to the list');
+  assert.equal(pastToggle().getAttribute('aria-expanded'), 'true');
+  assert.equal(pastRows().hidden, false);
+  assert.equal(document.activeElement, dom.buttonNamed(eventRowFor('Give Kids A Smile'), 'View event'));
+  dom.click(pastToggle());
 });
 
 await check('search recomputes Today without server reads', async () => {
@@ -934,6 +1000,8 @@ await check('search recomputes Today without server reads', async () => {
     search.value = 'Give Kids';
     dom.fire(search, 'input');
     assert.deepEqual(rowTitles(), ['Give Kids A Smile']);
+    assert.equal(pastToggle(), null, 'search hid its past result behind a disclosure');
+    assert.equal(eventRowFor('Give Kids A Smile').parentNode, dom.$('event-list'));
     assert.equal(Boolean(todayDivider()), false, 'a past-only search left Today behind');
 
     search.value = 'Soap';
@@ -1711,6 +1779,7 @@ await check('picking a tab narrows the list to that category', () => {
     dom.click(socials);
 
     const titles = rowTitles();
+    assert.equal(pastToggle(), null, 'category filtering kept the disclosure');
     assert.ok(titles.includes('Soap Carving'), `Socials left out a Socials event: ${titles.join(', ')}`);
     assert.ok(!titles.includes('Spring GBM 5'), 'a GBM is showing under Socials');
     assert.ok(todayDivider(), 'a category spanning the boundary lost Today');
@@ -1775,6 +1844,7 @@ await check('Show narrows to what is still open for check-in', () => {
     status.value = 'pending';
     dom.fire(status, 'change');
     const waiting = rowTitles();
+    assert.equal(pastToggle(), null, 'status filtering kept the disclosure');
     assert.ok(waiting.includes('Spring GBM 5'), `the event with a queue is missing: ${waiting.join(', ')}`);
     assert.ok(!waiting.includes('Field Day'), 'an event with nothing waiting is under the waiting filter');
     assert.ok(todayDivider(), 'the waiting list spanning the boundary lost Today');
@@ -1790,12 +1860,14 @@ await check('the order picker reorders the list without re-reading the server', 
 
     sort.value = 'title';
     dom.fire(sort, 'change');
+    assert.equal(pastToggle(), null, 'Title kept the disclosure');
     assert.equal(Boolean(todayDivider()), false, 'Title displayed a misleading Today divider');
     const byTitle = rowTitles();
     assert.deepEqual(byTitle, [...byTitle].sort((a, b) => a.localeCompare(b)), 'Title did not sort by title');
 
     sort.value = 'attendance';
     dom.fire(sort, 'change');
+    assert.equal(pastToggle(), null, 'Most check-ins kept the disclosure');
     assert.equal(Boolean(todayDivider()), false, 'Most check-ins displayed a misleading Today divider');
     // Read off the rows rather than named against a fixture, so this stays
     // true whichever event happens to be the busiest.
@@ -1815,6 +1887,7 @@ await check('the order picker reorders the list without re-reading the server', 
 
     sort.value = 'date_desc';
     dom.fire(sort, 'change');
+    assert.equal(pastToggle(), null, 'Newest first kept the disclosure');
     assert.equal(Boolean(todayDivider()), false, 'Newest first displayed a misleading Today divider');
 
     sort.value = 'date_asc';
@@ -3202,6 +3275,20 @@ const switchYear = async (label) => {
   dom.fire(yearSelect(), 'change');
   await until(() => !dom.$('event-list').hidden, `the list never came back on ${label}`);
 };
+
+await check('changing academic year resets Past events to collapsed', async () => {
+  clearListFilters();
+  if (pastToggle().getAttribute('aria-expanded') === 'false') dom.click(pastToggle());
+  assert.equal(pastRows().hidden, false);
+  await switchYear('2025-2026');
+  assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(pastRows().hidden, true);
+  assert.equal(todayDivider(), null, 'a past-only year must not have a Today divider');
+  dom.click(pastToggle());
+  await switchYear('2026-2027');
+  assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(pastRows().hidden, true);
+});
 
 await check('changing the year closes the event that was open, and lands on the list', async () => {
   await clearListFilters();

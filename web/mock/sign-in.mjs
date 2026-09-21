@@ -1,14 +1,8 @@
 // Signing in, for the checks.
 //
-// The product signs in exactly one way: the passcode box posts the passcode to
-// GoTrue's password grant against one shared account, and web/src/auth.js names
-// that account itself so no caller can pick a different one
-// (signInWithPasscode). That is deliberate, and it is checked in verify-admin.
-//
-// The verification files use that same fixed address and post to the same
-// endpoint the passcode box does.
-//
-// Four verify files had a copy of this, all four identical.
+// The public admin screen offers Google sign-in. These checks retain the
+// low-level shared password-grant fallback, including its fixed account and
+// server-side passcode verification. No passcode form is exposed by the page.
 
 import assert from 'node:assert/strict';
 

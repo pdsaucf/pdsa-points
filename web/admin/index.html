@@ -22,39 +22,10 @@
       <p class="muted">Checking sign-in…</p>
     </section>
 
-    <!--
-      2. Sign in.
-
-      Deliberately bare: no wordmark, no heading, no label, no button, no
-      instructions. Somebody who does not already know what this box is has
-      nothing here to work with, which is the point.
-
-      What is NOT decoration and stays: a visually hidden label, so the box is
-      not a mystery to a screen reader, and a hidden live region, so a refused
-      passcode is announced to somebody who cannot see the field turn red.
-      Discreet means nothing is drawn, not that nothing is said.
-
-      type="password" so it is masked. Officers type this in a room.
-    -->
-    <main id="view-signin" class="view view-passcode" hidden>
-      <form id="signin-form" novalidate>
-        <label class="visually-hidden" for="signin-passcode">Passcode</label>
-        <input
-          id="signin-passcode"
-          class="input passcode"
-          type="password"
-          autocomplete="current-password"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-          enterkeyhint="go"
-          required
-        />
-        <button type="submit" class="visually-hidden">Sign in</button>
-        <p id="signin-status" class="visually-hidden" role="status"></p>
-      </form>
-      <button id="signin-google" type="button" class="button">Continue with Google</button>
-      <p id="google-status" class="muted small" role="status"></p>
+    <!-- 2. Leadership sign-in. Authorization is checked by Postgres. -->
+    <main id="view-signin" class="view view-signin" hidden>
+      <button id="signin-google" type="button" class="button" aria-describedby="google-status">Continue with Google</button>
+      <p id="google-status" class="muted small" role="status" aria-live="polite"></p>
     </main>
 
     <!-- 3. The admin surface cannot be initialized -->

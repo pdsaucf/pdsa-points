@@ -109,6 +109,7 @@ process.stdout.write('\nhouse rules\n');
 
 const adminHtml = await readFile(`${WEB_ROOT}admin/index.html`, 'utf8');
 const adminCss = await readFile(`${WEB_ROOT}assets/css/admin.css`, 'utf8');
+const adminJs = await readFile(`${WEB_ROOT}src/admin.js`, 'utf8');
 const reviewSource = await readFile(`${WEB_ROOT}src/review.js`, 'utf8');
 const restSource = await readFile(`${WEB_ROOT}src/rest.js`, 'utf8');
 
@@ -231,7 +232,7 @@ await check('the focus ring is drawn clear of the control, not on top of it', ()
 });
 
 // ---------------------------------------------------------------------------
-process.stdout.write('\nthe emblem, and the sign-in screen that carries nothing\n');
+process.stdout.write('\nthe emblem, and Google-only sign-in\n');
 // ---------------------------------------------------------------------------
 
 await check('the emblem is in the brand bar, and says nothing a screen reader already heard', () => {
@@ -242,48 +243,28 @@ await check('the emblem is in the brand bar, and says nothing a screen reader al
   assert.match(bar[1], /PDSA Points/, 'the wordmark left the brand bar');
 });
 
-await check('the sign-in screen is a box and nothing else', () => {
+await check('Google is the only sign-in entry on the admin page', () => {
   const signin = /<main id="view-signin"[\s\S]*?<\/main>/.exec(adminHtml);
   assert.ok(signin, 'there is no sign-in screen');
-
-  // No wordmark, no emblem, no lockup: nothing that names the club to somebody
-  // who does not already know what this page is.
-  assert.equal(images(signin[0]).length, 0, 'there is an image on the sign-in screen');
-  assert.doesNotMatch(signin[0], /PDSA/, 'the sign-in screen names the club');
-  assert.doesNotMatch(signin[0], /<h1|<h2/, 'the sign-in screen has a heading');
-
-  // One visible control, and it is masked.
-  const inputs = signin[0].match(/<input\b[^>]*>/g) ?? [];
-  assert.equal(inputs.length, 1, 'the sign-in screen has more than one field');
-  assert.match(inputs[0], /type="password"/, 'the passcode is typed in the clear');
+  assert.doesNotMatch(adminHtml, /type=["']password["']|id="signin-form"|id="signin-passcode"/);
+  assert.doesNotMatch(signin[0], /<input\b|<form\b/);
+  const buttons = signin[0].match(/<button\b[\s\S]*?<\/button>/g) ?? [];
+  assert.equal(buttons.length, 1, 'the sign-in screen has another entry path');
+  assert.match(buttons[0], /id="signin-google"/);
+  assert.match(buttons[0], /type="button"/);
+  assert.match(buttons[0], />Continue with Google<\/button>/);
+  assert.doesNotMatch(buttons[0], /hidden|disabled/);
 });
 
-await check('a refused passcode is visible, and not hidden under the focus ring', () => {
-  // The regression this exists for: submitting is Enter, so the field is
-  // focused every time it is refused, and a 3px focus ring outside a 1px red
-  // border reads as an ordinary focused box. On a screen with no text on it,
-  // that leaves nothing at all saying the passcode was wrong.
-  const border = declarations(rule(adminCss, ".passcode[aria-invalid='true']"));
-  assert.match(border.get('border-color') ?? '', /var\(--danger\)/, 'a refused passcode does not turn the box');
-
-  const ring = declarations(rule(adminCss, ".passcode[aria-invalid='true']:focus-visible"));
-  assert.ok(ring.size, 'the focus ring keeps its usual colour when the passcode was refused');
-  assert.match(ring.get('outline-color') ?? '', /var\(--danger\)/, 'the ring is not drawn in --danger');
-});
-
-await check('discreet is not the same as unusable', () => {
+await check('Google sign-in has a visible accessible status and a keyboard focus target', () => {
   const signin = /<main id="view-signin"[\s\S]*?<\/main>/.exec(adminHtml)[0];
-
-  // Nothing is drawn, but everything is still said. A label a screen reader can
-  // read, and a live region for the refusal that the red border is the only
-  // visible sign of.
-  assert.match(signin, /<label class="visually-hidden" for="signin-passcode"/, 'the field has no label');
-  assert.match(signin, /id="signin-status"[^>]*role="status"/, 'nothing announces a refused passcode');
-
-  // The form has no visible button, so Enter is the only way to submit it. A
-  // hidden submit keeps that working everywhere rather than relying on the
-  // single-input default.
-  assert.match(signin, /<button type="submit" class="visually-hidden"/, 'there is no way to submit');
+  assert.match(signin, /aria-describedby="google-status"/);
+  const status = /<p id="google-status"[^>]*>/.exec(signin)?.[0] ?? '';
+  assert.match(status, /role="status"/);
+  assert.match(status, /aria-live="polite"/);
+  assert.doesNotMatch(status, /visually-hidden|hidden/);
+  assert.match(adminJs, /signinGoogle\.focus\(/);
+  assert.doesNotMatch(adminJs, /signInWithPasscode|signinPasscode|signinForm|onSignInSubmit|describeSignIn/);
 });
 
 await check('the lockup is gone from the product, not merely unreferenced', async () => {
@@ -457,7 +438,7 @@ process.stdout.write('\nsigning in\n');
 
 await reset();
 
-await check('the passcode signs in, and the screen never chooses the account', async () => {
+await check('the low-level shared passcode fallback still signs in to the fixed account', async () => {
   // signInWithPasscode takes one argument. The address is config, not input, so
   // there is no form field anywhere that can aim this at another account.
   assert.equal(auth.signInWithPasscode.length, 1, 'signInWithPasscode takes more than a passcode');
