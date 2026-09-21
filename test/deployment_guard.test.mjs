@@ -25,7 +25,7 @@ test('the deployed event mutation contract is revision-aware save_event_config',
   assert.equal(eventMutations[0].args.p_create, false);
 });
 
-test('the deployment guard probes the event mutation signatures without officer credentials', async () => {
+test('the deployment guard probes event and leadership signatures without officer credentials', async () => {
   const requests = [];
   const checked = await checkDeployedContracts({
     baseUrl: 'https://example.supabase.co/',
@@ -45,6 +45,12 @@ test('the deployment guard probes the event mutation signatures without officer 
     'remove_attendance_record',
     'add_officer_attendance_batch',
     'recover_officer_attendance_batch',
+    'leadership_session',
+    'list_leadership_access',
+    'authorize_leadership_access',
+    'set_leadership_role',
+    'revoke_leadership_access',
+    'list_leadership_audit',
   ]);
   assert.equal(requests.length, ADMIN_RPC_PROBES.length);
   for (let index = 0; index < ADMIN_RPC_PROBES.length; index += 1) {
@@ -55,6 +61,48 @@ test('the deployment guard probes the event mutation signatures without officer 
     assert.equal(request.init.headers.apikey, 'public-anon-key');
     assert.equal(request.init.headers.Authorization, 'Bearer public-anon-key');
     assert.deepEqual(JSON.parse(request.init.body), probe.args);
+  }
+});
+
+test('leadership probes match all six frontend RPC signatures', () => {
+  assert.deepEqual(ADMIN_RPC_PROBES.filter(probe => probe.name.includes('leadership')), [
+    { name: 'leadership_session', args: {} },
+    { name: 'list_leadership_access', args: {} },
+    {
+      name: 'authorize_leadership_access',
+      args: { p_email: 'deployment-contract-probe@example.invalid', p_role: 'officer' },
+    },
+    {
+      name: 'set_leadership_role',
+      args: { p_access_id: '00000000-0000-4000-a000-000000000001', p_role: 'officer' },
+    },
+    {
+      name: 'revoke_leadership_access',
+      args: { p_access_id: '00000000-0000-4000-a000-000000000001' },
+    },
+    { name: 'list_leadership_audit', args: {} },
+  ]);
+});
+
+test('each leadership contract must resolve and refuse anonymous access', async () => {
+  for (const probe of ADMIN_RPC_PROBES.filter(probe => probe.name.includes('leadership'))) {
+    const check = (status, body) => checkDeployedContracts({
+      baseUrl: 'https://example.supabase.co',
+      anonKey: 'public-anon-key',
+      adminRpcProbes: [probe],
+      eventsProbe: null,
+      portalLookupProbe: null,
+      portalEventsProbe: null,
+      fetchImpl: async () => jsonResponse(status, body),
+    });
+    for (const code of ['42501', 'PDS07']) {
+      assert.deepEqual(await check(401, { code }), [probe.name]);
+    }
+    await assert.rejects(check(404, { code: 'PGRST202' }), /is missing/, probe.name);
+    await assert.rejects(check(400, { code: 'PGRST202' }), /is missing/, probe.name);
+    await assert.rejects(check(404, {}), /is missing/, probe.name);
+    await assert.rejects(check(200, {}), /accepted an anonymous request/, probe.name);
+    await assert.rejects(check(400, { code: 'PDS03' }), /expected an authorization refusal/, probe.name);
   }
 });
 

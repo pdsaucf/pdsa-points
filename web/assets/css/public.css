@@ -1,0 +1,18 @@
+@font-face {
+  font-family: 'Public Sans';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/public-sans/PublicSans-VariableFont.woff2') format('woff2');
+}
+.public-page { margin: 0; background: #faf9f6; color: #2a2721; font-family: 'Public Sans', ui-sans-serif, system-ui, sans-serif; line-height: 1.65; }
+.public-main { max-width: 720px; margin: 0 auto; padding: 40px 24px 24px; }
+.public-brand { display: inline-flex; align-items: center; gap: 12px; color: #59328f; font-weight: 700; text-decoration: none; }
+.public-page h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.15; margin: 40px 0 16px; }
+.public-page h2 { font-size: 1.25rem; line-height: 1.3; margin-top: 32px; }
+.public-page a { color: #59328f; text-underline-offset: 3px; }
+.public-page a:focus-visible, .policy-links a:focus-visible { outline: 3px solid #1573c4; outline-offset: 4px; }
+.public-page li + li { margin-top: 8px; }
+.public-date { color: #6b6456; font-variant-numeric: tabular-nums; }
+.policy-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 24px; padding: 20px 24px; font-family: 'Public Sans', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+.policy-links a { color: #59328f; padding: 8px 0; text-underline-offset: 3px; }

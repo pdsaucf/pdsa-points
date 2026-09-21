@@ -435,7 +435,7 @@ test('a category retired mid year still shows if this member holds credit in it'
     insert into categories (id, slug, name, sort_order)
     values ('${categoryId}', 'test-retired-mid-year', 'Test Retired Category', 200);
     insert into events (id, academic_year_id, title, occurred_on, checkin_token, is_published)
-    values ('${eventId}', '${YEAR_2026}', 'Test Retired Category Event', date '2026-09-12', 'tok-retired', true);
+    values ('${eventId}', '${YEAR_2026}', 'Test Retired Category Event', current_date + 1, 'tok-retired', true);
     insert into event_categories (event_id, category_id, credit_mode, fixed_credit)
     values ('${eventId}', '${categoryId}', 'fixed', 1);
     insert into attendance_records (event_id, member_id, status, source)

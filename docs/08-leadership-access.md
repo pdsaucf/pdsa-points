@@ -98,6 +98,31 @@ Observed read-only project settings on September 7, 2026: Google disabled, email
 global signup disabled, and email autoconfirm disabled. Those settings need the operator
 changes above. Actual Google login has not been verified against the live provider.
 
+## Public Google Branding pages
+
+The feature branch includes these static public pages, available without sign-in:
+
+| Google Branding field | URL after deployment |
+| --- | --- |
+| Application home page | `https://points.pdsaucf.com/me/` |
+| Application privacy policy | `https://points.pdsaucf.com/privacy/` |
+| Application terms of service | `https://points.pdsaucf.com/terms/` |
+
+The application home page is the existing member points portal at `/me/`. The bare
+domain continues to redirect there, while bare-domain `?e=` check-in links redirect to
+`/c/` with their query preserved. Policy navigation links back to the member portal;
+existing app pages link to the policies.
+
+The organization and public contact are the same as the existing member/events footers:
+Pre-Dental Student Association at UCF, `pdsa.ucf@gmail.com`. The public contact email was
+confirmed for this change. Club leadership should review these draft policies before
+publication. The text
+describes implemented behavior; it does not establish a fixed deletion deadline or claim
+legal compliance or Google verification approval.
+
+These URLs must be deployed and reachable before using them in Google Branding. This
+change does not deploy the site, apply migrations, or change Google configuration.
+
 ## Validation scope
 
 `test/privileges.test.mjs` exercises refused officer and stranger operations, Google-only

@@ -55,6 +55,21 @@ const ADMIN_RPC_PROBES = [
       p_batch_key: 'deployment-contract-probe',
     },
   },
+  { name: 'leadership_session', args: {} },
+  { name: 'list_leadership_access', args: {} },
+  {
+    name: 'authorize_leadership_access',
+    args: { p_email: 'deployment-contract-probe@example.invalid', p_role: 'officer' },
+  },
+  {
+    name: 'set_leadership_role',
+    args: { p_access_id: '00000000-0000-4000-a000-000000000001', p_role: 'officer' },
+  },
+  {
+    name: 'revoke_leadership_access',
+    args: { p_access_id: '00000000-0000-4000-a000-000000000001' },
+  },
+  { name: 'list_leadership_audit', args: {} },
 ];
 
 const EXPECTED_DENIALS = new Set(['42501', 'PDS07']);
