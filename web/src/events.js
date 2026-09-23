@@ -63,7 +63,7 @@ import {
   releasesAfterEvent,
   releaseAtLabel,
 } from './events-model.js';
-import { $, h, announce, setHidden, shortDate, plural } from './ui.js';
+import { $, h, chevron, announce, setHidden, shortDate, plural } from './ui.js';
 
 
 // Thrown when a write comes back refused. PostgREST answers a write the
@@ -77,6 +77,10 @@ const rowKey = () => {
   rowKeySeq += 1;
   return `row-${rowKeySeq}`;
 };
+
+// Past events: rows drawn on first open, then added a page at a time.
+const PAST_FIRST = 5;
+const PAST_STEP = 10;
 
 export function createEvents(ctx) {
   const el = {
@@ -187,6 +191,8 @@ export function createEvents(ctx) {
     status: 'all',
     sort: 'date_asc',
     pastExpanded: false,
+    // How many past events, counted back from today, have rows in the DOM.
+    pastRevealed: PAST_FIRST,
     editingEvent: null, // the row being edited, or the row Save just created
     formReturn: 'list', // where Cancel and Save go back to: 'list' or 'detail'
     // Set only by Duplicate: the fields a new event opens with, copied from
@@ -380,7 +386,7 @@ export function createEvents(ctx) {
       // the caller that knows a form was open is the one that says so.
       const movedYear = state.viewYearId !== null && state.viewYearId !== yearId;
       state.viewYearId = yearId;
-      if (movedYear) state.pastExpanded = false;
+      if (movedYear) resetPast();
       if (movedYear && state.view !== 'list') {
         detail.dismiss();
         hideForm();
@@ -531,6 +537,9 @@ export function createEvents(ctx) {
     const restoreDisclosureFocus = previousToggle && document.activeElement === previousToggle;
     if (restoreDetailFocus && past.some((event) => event.id === state.detailOriginEventId)) {
       state.pastExpanded = true;
+      // The row the officer came back from must exist to take focus.
+      const fromEnd = past.length - past.findIndex((event) => event.id === state.detailOriginEventId);
+      state.pastRevealed = Math.max(state.pastRevealed, fromEnd);
     }
     const dividerIndex = todayDividerIndex(shown, state.sort, today);
     const children = [];
@@ -554,12 +563,41 @@ export function createEvents(ctx) {
     }
   }
 
+  function resetPast() {
+    state.pastExpanded = false;
+    state.pastRevealed = PAST_FIRST;
+  }
+
+  // Past rows are built only when the group is open, and only the ones nearest
+  // today. Everything older is reached with Show earlier, which sits above
+  // the rows so the older ones it adds appear right under it. With a search, a
+  // filter or another sort the group is not used at all (see render), so every
+  // match is in the list and no cap can hide one.
   function renderPastEvents(events) {
-    const rows = h('div', { id: 'events-past-list', class: 'event-list', hidden: !state.pastExpanded },
-      ...events.map(renderRow));
+    const rows = h('div', { id: 'events-past-list', class: 'event-list', hidden: !state.pastExpanded });
+    const more = h('button', {
+      type: 'button',
+      class: 'button event-past-more',
+      onClick: () => {
+        state.pastRevealed += PAST_STEP;
+        fill();
+      },
+    }, 'Show earlier');
+    function fill() {
+      const shownCount = state.pastExpanded ? Math.min(state.pastRevealed, events.length) : 0;
+      rows.replaceChildren(...events.slice(events.length - shownCount).map(renderRow));
+      const remaining = state.pastExpanded && shownCount < events.length;
+      const hadFocus = document.activeElement === more;
+      setHidden(more, !remaining);
+      if (hadFocus && !remaining) toggle.focus();
+    }
+    const arrow = chevron('down');
+    arrow.setAttribute('class', 'event-past-chevron');
+    arrow.setAttribute('width', '20');
+    arrow.setAttribute('height', '20');
     const toggle = h('button', {
       type: 'button',
-      class: 'button event-past-toggle',
+      class: 'event-past-toggle',
       'aria-label': `Past events (${events.length})`,
       'aria-expanded': String(state.pastExpanded),
       'aria-controls': 'events-past-list',
@@ -567,10 +605,12 @@ export function createEvents(ctx) {
         state.pastExpanded = !state.pastExpanded;
         toggle.setAttribute('aria-expanded', String(state.pastExpanded));
         setHidden(rows, !state.pastExpanded);
+        fill();
       },
-    }, h('span', { class: 'event-past-chevron', 'aria-hidden': 'true' }, '›'),
-    'Past events', h('span', { class: 'pill' }, String(events.length)));
-    return h('div', { class: 'event-past-group' }, toggle, rows);
+    }, h('span', { class: 'event-past-label' },
+      'Past events', h('span', { class: 'pill' }, String(events.length))), arrow);
+    fill();
+    return h('div', { class: 'event-past-group' }, toggle, more, rows);
   }
 
   function renderTodayDivider() {
@@ -1516,7 +1556,7 @@ export function createEvents(ctx) {
    */
   function yearChanged() {
     const wasEditing = state.view === 'form';
-    state.pastExpanded = false;
+    resetPast();
     detail.dismiss();
     hideForm();
     state.view = 'list';

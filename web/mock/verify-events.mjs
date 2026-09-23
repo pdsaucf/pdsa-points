@@ -591,11 +591,25 @@ async function until(predicate, message, timeout = 4000) {
 }
 
 const adminAudit = () => api('/__mock/audit').then((body) => body.admin);
-const eventRowFor = (title) =>
+const drawnRowFor = (title) =>
   dom
     .$('event-list')
     .querySelectorAll('.event-row')
     .find((row) => row.querySelector('.event-title')?.textContent.trim() === title) ?? null;
+// Past rows are drawn lazily, so a lookup that misses opens the Past events
+// group and pages through it before it concludes the event is not listed.
+const eventRowFor = (title) => {
+  let row = drawnRowFor(title);
+  const toggle = dom.$('event-list').querySelector('.event-past-toggle');
+  if (row || !toggle) return row;
+  if (toggle.getAttribute('aria-expanded') === 'false') dom.click(toggle);
+  for (;;) {
+    row = drawnRowFor(title);
+    const more = dom.$('event-list').querySelector('.event-past-more');
+    if (row || !more || more.hidden) return row;
+    dom.click(more);
+  }
+};
 const rowTitles = () =>
   dom.$('event-list').querySelectorAll('.event-title').map((node) => node.textContent.trim());
 const todayDivider = () => dom.$('event-list').querySelector('.event-today-divider');
@@ -907,7 +921,9 @@ await check('Events opens oldest first with Today between past and current event
   });
   assert.deepEqual(
     rowTitles(),
-    sortEvents(loadedEvents).map((event) => event.title),
+    sortEvents(loadedEvents)
+      .filter((event) => event.occurred_on >= todayInNewYork(SCREEN_NOW))
+      .map((event) => event.title),
     'initial rows are not ascending by calendar date',
   );
 
@@ -922,9 +938,14 @@ await check('Events opens oldest first with Today between past and current event
 
   const children = dom.$('event-list').children;
   const at = children.indexOf(divider);
+  assert.ok(children[at - 1].classList.contains('event-past-group'), 'Today does not follow the past group');
+  dom.click(pastToggle());
   assert.equal(children[at - 1].querySelectorAll('.event-title').at(-1).textContent, 'Give Kids A Smile');
+  dom.click(pastToggle());
   assert.equal(children[at + 1].querySelector('.event-title').textContent, 'Soap Carving');
-  const rowCount = dom.$('event-list').querySelectorAll('.event-row').length;
+  const rowCount = dom.$('event-list').querySelectorAll('.event-row').length
+    - pastRows().querySelectorAll('.event-row').length
+    + Number(pastToggle().querySelector('.pill').textContent);
   assert.equal(dom.$('events-count').textContent, `${rowCount} events`);
 });
 
@@ -944,12 +965,31 @@ await check('the default list collapses only past events and exposes the count',
   assert.equal(pastToggle().getAttribute('aria-label'), `Past events (${expectedPast.length})`);
   assert.equal(pastToggle().querySelector('.pill').textContent, String(expectedPast.length));
   assert.equal(pastRows().hidden, true);
-  assert.deepEqual(pastRows().querySelectorAll('.event-title').map((node) => node.textContent),
-    expectedPast.map((event) => event.title));
+  assert.equal(pastRows().querySelectorAll('.event-row').length, 0, 'collapsed Past events built rows');
   const immediateRows = dom.$('event-list').children.filter((node) => node.classList.contains('event-row'));
   assert.deepEqual(immediateRows.map((row) => row.querySelector('.event-title').textContent),
     expectedCurrent.map((event) => event.title));
   assert.ok(immediateRows.every((row) => !row.hidden), 'a current event was hidden');
+});
+
+await check('Past events is one full-width section header with a single SVG chevron', () => {
+  const toggle = pastToggle();
+  assert.equal(toggle.classList.contains('button'), false, 'disclosure inherited the action-button shell');
+  assert.ok(toggle.querySelector('.event-past-label .pill'), 'count is not grouped with the label');
+  const arrows = toggle.querySelectorAll('svg');
+  assert.equal(arrows.length, 1, 'disclosure must have one real SVG chevron');
+  assert.equal(toggle.children.at(-1), arrows[0], 'chevron is not the trailing control indicator');
+  assert.ok(Number(arrows[0].getAttribute('width')) >= 20);
+  assert.ok(Number(arrows[0].getAttribute('height')) >= 20);
+  assert.equal(arrows[0].getAttribute('aria-hidden'), 'true');
+  assert.equal(arrows[0].getAttribute('focusable'), 'false');
+  assert.ok(arrows[0].querySelector('path'));
+  const shell = /\.event-past-toggle\s*\{([^}]+)\}/.exec(adminCss)?.[1] ?? '';
+  assert.match(shell, /width: 100%/);
+  assert.match(shell, /min-height: 3rem/);
+  assert.match(shell, /background: transparent/);
+  assert.match(shell, /border: 0/);
+  assert.match(adminCss, /\.event-past-toggle\[aria-expanded='true'\] \.event-past-chevron\s*\{\s*transform: rotate\(180deg\)/);
 });
 
 await check('Past events toggles locally and retains state and focus across list repaints', async () => {
@@ -1015,7 +1055,9 @@ await check('search recomputes Today without server reads', async () => {
 
     const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
     assert.equal(eventReads.length, 0, 'search re-read events from the server');
-    const rowCount = dom.$('event-list').querySelectorAll('.event-row').length;
+    const rowCount = dom.$('event-list').querySelectorAll('.event-row').length
+      - pastRows().querySelectorAll('.event-row').length
+      + Number(pastToggle().querySelector('.pill').textContent);
     assert.equal(dom.$('events-count').textContent, `${rowCount} events`);
   } finally {
     captured.restore();
@@ -1083,7 +1125,7 @@ await check('Edit saves a retired link unchanged and reloads after a stale confl
     p_note: null,
   });
   dom.fire(dom.$('year-select'), 'change');
-  await until(() => rowTitles().includes('Retired Category History'), 'the historical event did not load');
+  await until(() => Boolean(eventRowFor('Retired Category History')), 'the historical event did not load');
 
   const historicalRow = eventRowFor('Retired Category History');
   dom.click(dom.buttonNamed(historicalRow, 'View event'));
@@ -1183,8 +1225,8 @@ await check('Edit saves a retired link unchanged and reloads after a stale confl
     'the stale save did not show the conflict',
   );
   assert.ok(dom.$('event-form-view').hidden, 'the stale form stayed open');
-  assert.ok(rowTitles().includes('Retired Category Concurrent'), 'the authoritative event was not reloaded');
-  assert.ok(!rowTitles().includes('Retired Category Stale'), 'the stale edit overwrote the event');
+  assert.ok(Boolean(eventRowFor('Retired Category Concurrent')), 'the authoritative event was not reloaded');
+  assert.ok(!Boolean(eventRowFor('Retired Category Stale')), 'the stale edit overwrote the event');
 
   [savedEvent] = await select('events', {
     select: EVENT_SELECT,
@@ -1195,7 +1237,7 @@ await check('Edit saves a retired link unchanged and reloads after a stale confl
   await remove('attendance_records', { id: `eq.${approved.id}` });
   await remove('events', { id: `eq.${event.id}` });
   dom.fire(dom.$('year-select'), 'change');
-  await until(() => !rowTitles().includes('Retired Category History'), 'the test event stayed on screen');
+  await until(() => !Boolean(eventRowFor('Retired Category History')), 'the test event stayed on screen');
 });
 
 await check('category loading and failure cannot look like an empty picker', async () => {
@@ -1316,7 +1358,7 @@ await check('attendance batch recovery is a retryable authoritative read', async
 await check('the events list draws the year, and last year stays out of it', () => {
   const titles = rowTitles();
   assert.ok(titles.includes('Spring GBM 5'), `Spring GBM 5 is missing: ${titles.join(', ')}`);
-  assert.ok(titles.includes('Health Fair'), 'Health Fair is missing');
+  assert.ok(eventRowFor('Health Fair'), 'Health Fair is missing');
   assert.ok(!titles.includes('Fall GBM 1'), 'last year\'s event is on this year\'s list');
 });
 
@@ -1350,7 +1392,10 @@ await check('the editor requires paired, ordered actual times', async () => {
 await check('Location, Attire, Sign-up and Description save and reload with the event', async () => {
   dom.click(dom.$('event-new'));
   dom.$('event-title').value = 'Verify Public Fields';
-  dom.$('event-date').value = '2026-09-25';
+  // Far enough out that the Monday drop always lands on or before it, on any
+  // day this suite runs. A fixed date goes stale: once the drop falls after
+  // it, saving opens the publish-after-save dialog and stalls every later save.
+  dom.$('event-date').value = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
   dom.$('event-location').value = '  Student Union 218  ';
   dom.$('event-attire').value = 'Business casual';
   dom.$('event-signup').value = 'https://forms.example.com/verify-public-fields';
@@ -1553,7 +1598,7 @@ await check('an auto-released event reads Published, solid, with no Publish or U
   search.value = 'Test Events Page Auto Released';
   dom.fire(search, 'input');
   await until(
-    () => rowTitles().includes('Test Events Page Auto Released'),
+    () => Boolean(eventRowFor('Test Events Page Auto Released')),
     'the auto-released fixture never appeared',
   );
 
@@ -1798,7 +1843,7 @@ await check('picking a tab narrows the list to that category', () => {
   } finally {
     clearListFilters();
   }
-  assert.ok(rowTitles().includes('Spring GBM 5'), 'All did not put the list back');
+  assert.ok(Boolean(eventRowFor('Spring GBM 5')), 'All did not put the list back');
 });
 
 await check('search narrows on the title only', () => {
@@ -3229,7 +3274,7 @@ await check('an event nobody checked in to can be deleted, and takes its categor
   dom.$('event-categories').querySelectorAll('select')[0].value = IDS.CATEGORY_GBMS;
   dom.fire(dom.$('event-categories').querySelectorAll('select')[0], 'change');
   dom.fire(dom.$('event-form'), 'submit');
-  await until(() => rowTitles().includes('Verify Deletable Event'), 'the event was never created');
+  await until(() => Boolean(eventRowFor('Verify Deletable Event')), 'the event was never created');
 
   const [made] = await select('events', {
     select: 'id',
@@ -3244,7 +3289,7 @@ await check('an event nobody checked in to can be deleted, and takes its categor
   dom.click(dom.$('event-detail-delete'));
   dom.fire(dom.$('event-delete-form'), 'submit');
   await until(() => !dom.$('event-list').hidden, 'the screen never went back to the list');
-  await until(() => !rowTitles().includes('Verify Deletable Event'), 'the event is still on the list');
+  await until(() => !Boolean(eventRowFor('Verify Deletable Event')), 'the event is still on the list');
 
   const gone = await select('events', { select: 'id', filters: { id: `eq.${made.id}` } });
   assert.equal(gone.length, 0, 'the event is still in the database');
@@ -3299,10 +3344,10 @@ await check('changing the year closes the event that was open, and lands on the 
   assert.ok(dom.$('event-detail-view').hidden, "last year's screen is still showing this year's event");
   assert.ok(!dom.$('events-toolbar').hidden, 'the toolbar did not come back');
   assert.ok(
-    !rowTitles().includes('Spring GBM 5'),
+    !Boolean(eventRowFor('Spring GBM 5')),
     'an event from the other year is on the list',
   );
-  assert.ok(rowTitles().includes('Fall GBM 1'), `the other year's events are missing: ${rowTitles().join(', ')}`);
+  assert.ok(Boolean(eventRowFor('Fall GBM 1')), `the other year's events are missing: ${rowTitles().join(', ')}`);
 
   await switchYear('2026-2027');
 });
@@ -3545,6 +3590,92 @@ await check('the database vocabulary never reaches the events screen', () => {
       );
     }
   }
+});
+
+// Past events draw lazily: nothing while collapsed, the 5 nearest today when
+// opened, then 10 more per Show earlier. 27 old events make that visible.
+await check('Past events builds 5 rows on open, then 10 more at a time, and never the rest', async () => {
+  clearListFilters();
+  const old = Array.from({ length: 27 }, (_, i) => ({
+    academic_year_id: IDS.YEAR_CURRENT,
+    title: `Verify Old ${String(i + 1).padStart(2, '0')}`,
+    occurred_on: `2026-08-${String(1 + (i % 9)).padStart(2, '0')}`,
+  }));
+  await insert('events', old);
+  const pillNow = () => Number(pastToggle()?.querySelector('.pill').textContent ?? 0);
+  const before = pillNow();
+  yearSelect().value = IDS.YEAR_CURRENT;
+  dom.fire(yearSelect(), 'change');
+  await until(() => pillNow() >= before + 27,
+    'the old events did not load');
+  const total = Number(pastToggle().querySelector('.pill').textContent);
+  const more = () => dom.$('event-list').querySelector('.event-past-more');
+  const built = () => pastRows().querySelectorAll('.event-row').length;
+
+  assert.equal(pastToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(built(), 0, 'collapsed group built rows');
+  assert.equal(more().hidden, true, 'Show earlier offered while collapsed');
+
+  dom.click(pastToggle());
+  assert.equal(built(), 5);
+  assert.equal(more().hidden, false);
+  assert.equal(more().textContent, 'Show earlier');
+  { const kids = [...more().parentNode.children]; assert.equal(kids.indexOf(more()) + 1, kids.findIndex((n) => n.id === 'events-past-list'), 'Show earlier is not above the rows it adds to'); }
+  assert.ok(more().classList.contains('button'));
+  // The five nearest today, in the list's own order.
+  const events = await select('events', {
+    select: 'title,occurred_on',
+    filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
+  });
+  const today = todayInNewYork(SCREEN_NOW);
+  const past = sortEvents(events).filter((event) => event.occurred_on < today);
+  assert.equal(past.length, total);
+  assert.deepEqual(pastRows().querySelectorAll('.event-title').map((n) => n.textContent),
+    past.slice(-5).map((event) => event.title));
+  assert.equal(drawnRowFor(past[0].title), null, 'an unrevealed row exists in the DOM');
+
+  // A repaint keeps the revealed count.
+  dom.click(more());
+  assert.equal(built(), 15);
+  dom.fire(dom.$('events-search'), 'input');
+  assert.equal(built(), 15, 'a repaint lost the revealed count');
+
+  let clicks = 1;
+  while (!more().hidden) {
+    dom.click(more());
+    clicks += 1;
+    assert.ok(clicks < 20, 'Show earlier never ran out');
+  }
+  assert.equal(built(), total, 'the end of the list did not reveal every event');
+  assert.equal(more().hidden, true);
+  assert.equal(built(), pastRows().children.length);
+
+  // Collapsing and reopening does not forget the count; a year change does.
+  dom.click(pastToggle());
+  assert.equal(built(), 0);
+  dom.click(pastToggle());
+  assert.equal(built(), total);
+  await switchYear('2025-2026');
+  await switchYear('2026-2027');
+  dom.click(pastToggle());
+  assert.equal(built(), 5, 'the year change kept the revealed count');
+  dom.click(pastToggle());
+});
+
+await check('search reaches an old event that is not among the revealed rows', async () => {
+  clearListFilters();
+  assert.equal(drawnRowFor('Verify Old 01'), null, 'the old event is already drawn');
+  const search = dom.$('events-search');
+  search.value = 'Verify Old';
+  dom.fire(search, 'input');
+  assert.equal(pastToggle(), null, 'search kept the paged group');
+  assert.equal(rowTitles().filter((title) => title.startsWith('Verify Old')).length, 27,
+    'search did not reveal every match');
+  search.value = 'Verify Old 01';
+  dom.fire(search, 'input');
+  assert.deepEqual(rowTitles(), ['Verify Old 01']);
+  search.value = '';
+  dom.fire(search, 'input');
 });
 
 // ---------------------------------------------------------------------------

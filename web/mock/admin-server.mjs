@@ -4800,7 +4800,8 @@ export const ADMIN_RPC = {
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    // New York calendar date, matching the SQL's (now() at time zone 'America/New_York')::date.
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
     const events = db.events
       .filter(

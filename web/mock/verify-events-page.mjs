@@ -280,7 +280,10 @@ process.stdout.write('\nthe eight facts, and the ones that are missing\n');
 
 await signInAs('officers@pdsaucf.com');
 
-const daysFromNow = (n) => new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// New York calendar date, as the page computes it. A UTC date is already
+// tomorrow after 8 PM Eastern, which made the Today check fail every evening.
+const daysFromNow = (n) =>
+  new Date(Date.now() + n * 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 /** Creates and publishes a fixture event through the same RPCs the admin screen uses. */
 async function makeVisibleEvent(fields, categories = []) {
