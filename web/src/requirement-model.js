@@ -286,7 +286,7 @@ export function statusTitle(set) {
 /** 'Honorary Member · version 2', for the line under the heading. */
 export function setMeta(set) {
   if (!set) return '';
-  return [set.name, `version ${set.version}`].filter(Boolean).join(' · ');
+  return [set.name, `version ${set.version}`].filter(Boolean).join(', ');
 }
 
 export const isEditable = (set) => Boolean(set) && set.status === 'draft';

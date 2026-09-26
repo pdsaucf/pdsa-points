@@ -479,6 +479,10 @@ body {
   overflow-wrap: anywhere;
 }
 
+.footer-meta + .footer-meta {
+  margin-top: 0.125rem;
+}
+
 @media (min-width: 40rem) {
   .footer-inner {
     max-width: 36rem;

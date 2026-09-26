@@ -500,7 +500,7 @@ export function createRoster(ctx) {
         h(
           'li',
           { class: 'problem' },
-          [`Row ${entry.row}`, entry.name, entry.message].filter(Boolean).join(' · '),
+          [`Row ${entry.row}`, entry.name, entry.message].filter(Boolean).join(', '),
         ),
       ),
     );
@@ -524,7 +524,7 @@ export function createRoster(ctx) {
         h(
           'li',
           { class: 'retro-import-row' },
-          h('span', {}, `${row.name} · ${plural(row.count, 'earlier check-in')}`),
+          h('span', {}, `${row.name}, ${plural(row.count, 'earlier check-in')}`),
           h(
             'button',
             { type: 'button', class: 'button button-small', onClick: () => ctx.openMember(row.id) },
@@ -591,7 +591,7 @@ export function createRoster(ctx) {
               joined ? `joined ${monthYear(joined)}` : null,
             ]
               .filter(Boolean)
-              .join(' · '),
+              .join(', '),
           ),
         ),
       );
@@ -1002,7 +1002,7 @@ export function createRoster(ctx) {
 
   function askRemove(member) {
     state.removing = member;
-    el.removeMeta.textContent = `${member.display_name} · ${ctx.year.label}`;
+    el.removeMeta.textContent = `${member.display_name}, ${ctx.year.label}`;
     el.removeDialog.showModal();
   }
 
@@ -1116,7 +1116,7 @@ export function createRoster(ctx) {
       waiting ? `${waiting} to decide` : null,
     ]
       .filter(Boolean)
-      .join(' · ');
+      .join(', ');
 
     el.importSkipped.replaceChildren(
       ...state.skipped.map((entry) =>
@@ -1161,7 +1161,7 @@ export function createRoster(ctx) {
         h(
           'div',
           { class: 'import-choice' },
-          h('span', { class: 'muted small' }, `${row.match.display_name} · ${row.why}`),
+          h('span', { class: 'muted small' }, `${row.match.display_name}, ${row.why}`),
           h(
             'div',
             { class: 'import-buttons' },

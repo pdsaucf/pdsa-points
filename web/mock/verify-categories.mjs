@@ -151,7 +151,7 @@ await check('a category with zero events but a requirement link is not delete-el
   // canDelete() exercised directly against that shape.
   const eligible = canDelete(
     { archived_at: null },
-    { allEventCount: 0, requirementUses: [{ label: 'Speaking', where: '2026-2027 · Published' }] },
+    { allEventCount: 0, requirementUses: [{ label: 'Speaking', where: '2026-2027, Published' }] },
   );
   assert.equal(eligible, false);
 });

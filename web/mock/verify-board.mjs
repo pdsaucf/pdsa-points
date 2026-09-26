@@ -938,7 +938,7 @@ await check('the same member shows one join date on the roster and on their own 
 
   const part = dom
     .$('member-meta')
-    .textContent.split(' · ')
+    .textContent.split(', ')
     .find((piece) => piece.startsWith('Joined '));
   assert.ok(part, 'her own screen carries no join date at all');
   const onDetail = part.slice('Joined '.length).trim();
@@ -1449,7 +1449,7 @@ await check('a member on the banner and on the roster shows one join date, not t
       const name = sideNode.querySelector('.dupe-name').textContent.trim();
       const part = sideNode
         .querySelector('.dupe-meta')
-        .textContent.split(' · ')
+        .textContent.split(', ')
         .find((piece) => piece.startsWith('joined '));
       assert.ok(part, `${name} is on the banner with no join date to compare`);
 

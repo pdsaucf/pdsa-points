@@ -244,7 +244,7 @@ export function createRequirements(ctx) {
   function renderHeader() {
     setHidden(el.header, false);
     el.status.textContent = statusTitle(state.set);
-    el.meta.textContent = state.set ? `${ctx.year.label} · ${setMeta(state.set)}` : ctx.year.label;
+    el.meta.textContent = state.set ? `${ctx.year.label}, ${setMeta(state.set)}` : ctx.year.label;
 
     // The picker only appears when a year holds more than one, which is the
     // state a year is in between starting a draft and publishing it.
@@ -1097,7 +1097,7 @@ export function createRequirements(ctx) {
     const problems = [...state.problems.values()].flat();
 
     el.publishTitle.textContent = `Publish version ${state.set.version}`;
-    el.publishMeta.textContent = `${ctx.year.label} · ${state.set.name}`;
+    el.publishMeta.textContent = `${ctx.year.label}, ${state.set.name}`;
     el.publishPreview.textContent = root
       ? `${root.passing} of ${root.total} members would qualify.`
       : '';
@@ -1121,7 +1121,7 @@ export function createRequirements(ctx) {
     const published = state.sets.find(
       (row) => row.status === 'published' && row.id !== state.set.id,
     );
-    el.discardMeta.textContent = `${ctx.year.label} · ${setMeta(state.set)}`;
+    el.discardMeta.textContent = `${ctx.year.label}, ${setMeta(state.set)}`;
     el.discardEffect.textContent = published
       ? `Members stay judged by version ${published.version}.`
       : 'Nothing is published for this year, so nobody qualifies until one is.';

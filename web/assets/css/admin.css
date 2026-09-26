@@ -478,8 +478,17 @@ kbd {
 }
 
 .zone-count {
+  padding: 0 0.5rem;
   color: var(--ink-muted);
+  font-size: 0.875rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+
+.zone-count:empty {
+  display: none;
 }
 
 .zone-note {
@@ -497,6 +506,9 @@ kbd {
 }
 
 .shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
   margin: 2rem 0 0;
   color: var(--ink-muted);
   font-size: 0.8125rem;

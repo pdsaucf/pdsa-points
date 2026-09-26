@@ -96,7 +96,7 @@ export function createCandidatePicker(ctx) {
       h(
         'span',
         { class: 'muted small' },
-        `${candidate.event_title} · ${shortDate(candidate.occurred_on)}`,
+        `${candidate.event_title}, ${shortDate(candidate.occurred_on)}`,
       ),
     );
 

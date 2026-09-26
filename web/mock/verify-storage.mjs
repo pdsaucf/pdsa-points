@@ -227,7 +227,7 @@ await check('the usage bar is the server figure, rendered, not a client sum', as
   const [usage] = await callRpc('fn_storage_usage');
   assert.equal(
     dom.$('storage-usage-count').textContent,
-    `${plural(usage.photo_count, 'photo')} · ${formatBytes(usage.bytes_held)}`,
+    `${plural(usage.photo_count, 'photo')}, ${formatBytes(usage.bytes_held)}`,
   );
   assert.equal(
     dom.$('storage-usage-line').textContent,

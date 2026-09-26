@@ -435,7 +435,7 @@ export function createEventDetail(ctx, host) {
     const offerButton = !publish.visible || publish.canUnpublish;
     setHidden(el.publish, !offerButton);
     if (offerButton) el.publish.textContent = publish.visible ? 'Unpublish' : 'Publish';
-    el.publishStatus.textContent = publish.detail ? `${publish.label} · ${publish.detail}` : publish.label;
+    el.publishStatus.textContent = publish.detail ? `${publish.label}, ${publish.detail}` : publish.label;
     el.publishStatus.dataset.visible = String(publish.visible);
     el.publishStatus.dataset.warn = String(publish.warn);
 
@@ -449,7 +449,7 @@ export function createEventDetail(ctx, host) {
               h(
                 'span',
                 {},
-                `${link.categories?.name ?? 'Unknown category'} · ${
+                `${link.categories?.name ?? 'Unknown category'}, ${
                   link.credit_mode === 'from_submission'
                     ? 'member types the number'
                     : String(Number(link.fixed_credit ?? 0))
@@ -499,7 +499,7 @@ export function createEventDetail(ctx, host) {
 
     const parts = [];
     if (stats.sources.length) {
-      parts.push(stats.sources.map((source) => `${source.label} ${source.count}`).join(' · '));
+      parts.push(stats.sources.map((source) => `${source.label} ${source.count}`).join(', '));
     }
     if (stats.firstAt && stats.lastAt) {
       parts.push(
@@ -508,7 +508,7 @@ export function createEventDetail(ctx, host) {
           : `${clockTime(stats.firstAt)} to ${clockTime(stats.lastAt)}`,
       );
     }
-    el.sources.textContent = parts.join(' · ');
+    el.sources.textContent = parts.join(', ');
     setHidden(el.sources, !parts.length);
 
     // Deleting an event Postgres would refuse is not a button worth offering:
@@ -775,7 +775,7 @@ export function createEventDetail(ctx, host) {
 
   function askToRemove(record) {
     state.removing = record;
-    el.removeWho.textContent = `${attendeeName(record)} · ${
+    el.removeWho.textContent = `${attendeeName(record)}, ${
       ATTENDANCE_STATUS[record.status] ?? record.status
     }`;
     el.removeNote.textContent = photoPathsOf(record).length
@@ -846,7 +846,7 @@ export function createEventDetail(ctx, host) {
         if (err instanceof NetworkError && (await recordWasRemoved(record.id))) {
           const photoWaiting = paths.length > 0;
           const said = photoWaiting
-            ? `${attendeeName(record)} removed · Photo waiting on Storage`
+            ? `${attendeeName(record)} removed, photo waiting on Storage`
             : `${attendeeName(record)} removed`;
           await refreshAfterAttendanceChange(said, photoWaiting ? 'warn' : 'ok');
           // With the response gone, the purge run id is unavailable. The saved
@@ -889,7 +889,7 @@ export function createEventDetail(ctx, host) {
       }
 
       const said = photoWaiting
-        ? `${attendeeName(record)} removed · Photo waiting on Storage`
+        ? `${attendeeName(record)} removed, photo waiting on Storage`
         : `${attendeeName(record)} removed`;
       await refreshAfterAttendanceChange(said, photoWaiting ? 'warn' : 'ok');
       if (storageChanged) await ctx.onStorageChanged?.();
@@ -1035,7 +1035,7 @@ export function createEventDetail(ctx, host) {
       `${unmatched} not on roster`,
       `${recorded} already recorded`,
       `${review} needs review`,
-    ].join(' · ');
+    ].join(', ');
     const unresolved = state.addRows.some((row) => row.status === 'choice');
     const actionable = state.addRows.some((row) => ['member', 'unmatched'].includes(row.status));
     el.addSubmit.disabled = unresolved || !actionable;
@@ -1111,7 +1111,7 @@ export function createEventDetail(ctx, host) {
       const added = outcomes.filter((row) => row.outcome === 'added').length;
       const waiting = outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length;
       await refreshAfterAttendanceChange(
-        `${added} added · ${waiting} waiting for member links`,
+        `${added} added, ${waiting} waiting for member links`,
         waiting ? 'warn' : 'ok',
       );
       showAddResults(outcomes);
@@ -1154,7 +1154,7 @@ export function createEventDetail(ctx, host) {
     };
     const added = outcomes.filter((row) => row.outcome === 'added').length;
     const waiting = outcomes.filter((row) => row.outcome === 'waiting_for_member_link').length;
-    el.addResultSummary.textContent = `${added} added · ${waiting} waiting for member links`;
+    el.addResultSummary.textContent = `${added} added, ${waiting} waiting for member links`;
     el.addResultList.replaceChildren(
       ...outcomes.map((row) =>
         h(
@@ -1209,7 +1209,7 @@ export function createEventDetail(ctx, host) {
 
   function askToDelete() {
     if (!canDeleteEvent(state.records)) return;
-    el.deleteWhat.textContent = `${state.event.title} · ${shortDate(state.event.occurred_on)}`;
+    el.deleteWhat.textContent = `${state.event.title}, ${shortDate(state.event.occurred_on)}`;
     el.deleteDialog.showModal();
   }
 

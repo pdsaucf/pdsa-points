@@ -200,7 +200,7 @@ export function createProgress(ctx) {
     const honorary = rows.filter((member) => state.status.get(member.id)?.is_honorary).length;
 
     el.count.textContent = state.members.length
-      ? `${plural(rows.length, 'member')} · ${honorary} honorary`
+      ? `${plural(rows.length, 'member')}, ${honorary} honorary`
       : '';
 
     setHidden(el.empty, rows.length > 0);
@@ -283,7 +283,7 @@ export function createProgress(ctx) {
             { class: 'board-number' },
             status.is_honorary
               ? h('span', { class: 'board-star', title: 'Honorary' }, '★')
-              : h('span', { class: 'board-blank', 'aria-label': 'Not honorary' }, '·'),
+              : h('span', { class: 'board-blank', 'aria-label': 'Not honorary' }, ''),
           ),
         );
       }),

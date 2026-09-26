@@ -344,7 +344,7 @@ export function createReview(ctx) {
     const kept = parts.filter(Boolean);
     const children = [];
     for (const part of kept) {
-      if (children.length) children.push(' · ');
+      if (children.length) children.push(', ');
       children.push(part);
     }
     return h('p', { class: 'card-meta' }, children);
@@ -384,11 +384,11 @@ export function createReview(ctx) {
     setHidden(el.empty, true);
 
     setHidden(el.flaggedZone, flaggedRows.length === 0);
-    el.flaggedCount.textContent = flaggedRows.length ? `· ${flaggedRows.length}` : '';
+    el.flaggedCount.textContent = flaggedRows.length ? String(flaggedRows.length) : '';
     el.flaggedList.replaceChildren(...flaggedRows.map(renderCard));
 
     setHidden(el.routineZone, routineRows.length === 0);
-    el.routineCount.textContent = routineRows.length ? `· ${routineRows.length}` : '';
+    el.routineCount.textContent = routineRows.length ? String(routineRows.length) : '';
     // Rebuilt even when the zone is about to be hidden. Leaving the last
     // batch of tiles in the DOM behind a hidden attribute is how a cleared
     // grid comes back from the dead the next time a filter unhides the zone.
@@ -1047,7 +1047,7 @@ export function createReview(ctx) {
           'figcaption',
           {},
           h('strong', {}, nameOf(record)),
-          `${eventLabel(record)} · ${clockTime(record.submitted_at)}`,
+          `${eventLabel(record)}, ${clockTime(record.submitted_at)}`,
         ),
       ),
     );
@@ -1127,13 +1127,13 @@ export function createReview(ctx) {
         figure(
           evidence.object_path,
           'This check-in',
-          `${nameOf(record)} · ${eventLabel(record)}`,
+          `${nameOf(record)}, ${eventLabel(record)}`,
         ),
         ...others.map((other) => {
           const rec = other.attendance_records ?? {};
           const who = rec.members?.display_name ?? 'No name on file';
           const where = `${shortDate(rec.events?.occurred_on)} ${rec.events?.title ?? ''}`.trim();
-          return figure(other.object_path, 'Earlier check-in', `${who} · ${where} · ${rec.status}`);
+          return figure(other.object_path, 'Earlier check-in', `${who}, ${where}, ${rec.status}`);
         }),
       );
       el.photoHint.textContent = others.length

@@ -117,7 +117,7 @@ function pointsLabel(categories) {
         category.credit_mode === 'from_submission' ? 'Varies' : String(Number(category.fixed_credit ?? 0));
       return `${category.name} ${value}`;
     })
-    .join(' · ');
+    .join(', ');
 }
 
 function eventCard(event) {

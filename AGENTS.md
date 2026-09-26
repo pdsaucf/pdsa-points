@@ -40,6 +40,15 @@ Do not substitute `printf '\u2014'`; it is not portable, and when it fails it ex
 an empty pattern that matches every line, which reads as a catastrophic failure rather
 than a clean pass.
 
+### No middle dots
+
+**Never use a middle dot (U+00B7) as a separator** in UI copy, metadata lines, counts,
+labels or footers. A `·` between facts is a hallmark of AI-generated interfaces. Join
+facts in running text with a comma, use a sentence break where a comma reads badly, and
+where two facts sit side by side as layout, separate them with spacing or a thin CSS rule
+between elements rather than a glyph. The one exception is code that strips bullets from
+pasted input (`web/src/name-parser.js`).
+
 ### Public Sans, self-hosted
 
 **Public Sans is the typeface throughout**, for the admin UI, the check-in page and the
@@ -80,7 +89,7 @@ is not obvious, then **what to do**. Then stop.
 - Headings name the state or issue. They are not sentences about a person.
   Write `Duplicate photo`, not `Marcus Bell sent the same photo as another event`.
 - Names, event titles, dates and times go in metadata or subtext, not inside the
-  heading: `Marcus Bell · Aug 10 Soap Carving · 3:10 PM`.
+  heading: `Marcus Bell, Aug 10 Soap Carving, 3:10 PM`.
 - Descriptions are one sentence, ideally under 15 words. Omit them entirely when the
   heading and metadata already say it.
 - Buttons are 1 to 3 words.
@@ -97,9 +106,9 @@ is not obvious, then **what to do**. Then stop.
 
 **Established terms, used consistently**
 
-`Approve` · `Decline` · `Edit` · `Remove` · `Link member` · `Compare photos` ·
-`Try again` · `Late check-in` · `Duplicate photo` · `Previously declined` ·
-`Member not matched` · `Needs review`
+`Approve`, `Decline`, `Edit`, `Remove`, `Link member`, `Compare photos`,
+`Try again`, `Late check-in`, `Duplicate photo`, `Previously declined`,
+`Member not matched`, `Needs review`
 
 Avoid conversational labels such as `Approve anyway`, `Turn it down` or
 `Yes, continue`. Use `Approve anyway` only where overriding a specific rule genuinely
@@ -115,7 +124,7 @@ sentence.
 
 ```
 Late check-in
-Grace Okonkwo · Aug 9 Give Kids A Smile · 7:40 PM
+Grace Okonkwo, Aug 9 Give Kids A Smile, 7:40 PM
 Check-in closed at 7:35 PM.
 [ Approve ]  [ Decline ]
 ```
@@ -172,8 +181,8 @@ Breaking any of these reintroduces a problem the design exists to solve:
    `/events` needs no name at all. Widening that surface further means editing the
    written-out list in `test/privileges.test.mjs` on purpose.
 
-## Multi-agent workflow
+## Review workflow
 
-Per the global AGENTS.md: orchestrator plans, `implementer` subagent builds,
-`/codex:adversarial-review` and `/codex:rescue` check the work. Nobody signs off on
-their own work.
+Per the global AGENTS.md: write the code directly in the main session, without spawning
+orchestrator or implementer agents, then run a Codex adversarial review of the change.
+Fix P0 and P1 findings; log the rest.

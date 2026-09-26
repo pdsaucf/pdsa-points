@@ -670,7 +670,7 @@ export function createEvents(ctx) {
               h(
                 'span',
                 {},
-                `${link.categories?.name ?? 'Unknown category'} · ${creditLabel(link)}`,
+                `${link.categories?.name ?? 'Unknown category'}, ${creditLabel(link)}`,
               ),
             ),
           )
@@ -746,7 +746,7 @@ export function createEvents(ctx) {
       h(
         'span',
         { class: 'event-counts muted small' },
-        `${event.counts.approved} approved · ${event.counts.pending} waiting`,
+        `${event.counts.approved} approved, ${event.counts.pending} waiting`,
       ),
       h(
         'span',
@@ -1480,7 +1480,7 @@ export function createEvents(ctx) {
     // Monday drop for any event, so there is no drop to promise here either.
     if (!event || event.is_visible || !state.autoPublishEnabled || !releasesAfterEvent(event)) return;
     el.publishAfterMeta.textContent =
-      `${shortDate(event.occurred_on)} ${event.title} · Next drop is ${releaseAtLabel(event.release_at)}`;
+      `${shortDate(event.occurred_on)} ${event.title}. Next drop is ${releaseAtLabel(event.release_at)}.`;
     const confirmed = await decideDialog(el.publishAfterDialog, el.publishAfterForm);
     if (!confirmed) return;
     try {

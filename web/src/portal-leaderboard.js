@@ -64,7 +64,7 @@ export function createLeaderboard(ctx) {
 
     el.meta.textContent = [board?.year?.label, plural(members.length, 'member')]
       .filter(Boolean)
-      .join(' · ');
+      .join(', ');
 
     if (!members.length) {
       el.list.replaceChildren(h('li', { class: 'muted small' }, 'Nobody on the roster yet.'));

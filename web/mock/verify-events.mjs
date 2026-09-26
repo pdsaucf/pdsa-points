@@ -644,7 +644,7 @@ const detailSnapshot = () => {
   const sources = Object.fromEntries(
     dom
       .$('event-detail-sources')
-      .textContent.split(' · ')
+      .textContent.split(', ')
       .map((part) => /^(.*) (\d+)$/.exec(part.trim()))
       .filter(Boolean)
       .map((match) => [match[1], Number(match[2])]),
@@ -1674,7 +1674,7 @@ await check('event cards separate headings, status metadata, counts, and actions
     statuses.add(status.textContent.trim());
 
     const counts = row.querySelector('.event-counts')?.textContent.trim() ?? '';
-    assert.match(counts, /^\d+ approved · \d+ waiting$/);
+    assert.match(counts, /^\d+ approved, \d+ waiting$/);
     assert.doesNotMatch(counts, /pending/i);
   }
 
@@ -1924,7 +1924,7 @@ await check('the order picker reorders the list without re-reading the server', 
         // ending in a credit runs straight into the count beside it, and
         // "Socials · 1" plus "64 approved" reads as 164.
         const [, approved, waiting] =
-          /(\d+) approved · (\d+) waiting/.exec(row.querySelector('.event-counts').textContent) ?? [];
+          /(\d+) approved, (\d+) waiting/.exec(row.querySelector('.event-counts').textContent) ?? [];
         return Number(approved ?? 0) + Number(waiting ?? 0);
       });
     assert.deepEqual(live, [...live].sort((a, b) => b - a), 'Most check-ins is not in order');
@@ -2443,7 +2443,7 @@ await check('every pasted line has a visible outcome, including ambiguity and an
   dom.click(dom.buttonNamed(rows[4], 'Not on roster'));
   assert.equal(attendancePasteRows()[4].dataset.status, 'unmatched');
   assert.equal(dom.$('attendee-add-submit').disabled, false);
-  assert.match(dom.$('attendee-add-count').textContent, /1 member · 2 not on roster · 1 already recorded · 2 needs review/);
+  assert.match(dom.$('attendee-add-count').textContent, /1 member, 2 not on roster, 1 already recorded, 2 needs review/);
 });
 
 await check("the number an event collects is labelled by the category, not by the word 'hours'", () => {
@@ -2490,7 +2490,7 @@ await check('adding goes through one call, not an insert the approval can be los
   const names = attendeeNames();
   assert.ok(names.some((name) => name.includes('Marcus Bell')), `Marcus Bell is not on the list: ${names.join(', ')}`);
   assert.equal(dom.$('attendee-add-result-list').querySelectorAll('.attendance-paste-result').length, 6);
-  assert.equal(dom.$('attendee-add-result-summary').textContent, '1 added · 2 waiting for member links');
+  assert.equal(dom.$('attendee-add-result-summary').textContent, '1 added, 2 waiting for member links');
   dom.$('attendee-add-result-dialog').close();
 });
 
@@ -2597,7 +2597,7 @@ await check('Add reconciles a committed call whose response was lost', async () 
     beforeFiled + 2,
     'Add did not leave exactly two new records',
   );
-  assert.equal(dom.$('screen-message-title').textContent, '1 added · 1 waiting for member links');
+  assert.equal(dom.$('screen-message-title').textContent, '1 added, 1 waiting for member links');
   const resultOutcomes = dom.$('attendee-add-result-list')
     .querySelectorAll('.attendance-paste-result')
     .map((row) => row.dataset.outcome);
@@ -2718,7 +2718,7 @@ await check('Add reconciles a committed call whose response body was lost', asyn
   );
   assert.equal(added.length, 1, 'Add body loss did not leave exactly one new record');
   assert.equal(Number(added[0].submitted_value), 1.25);
-  assert.equal(dom.$('screen-message-title').textContent, '1 added · 0 waiting for member links');
+  assert.equal(dom.$('screen-message-title').textContent, '1 added, 0 waiting for member links');
   dom.$('attendee-add-result-dialog').close();
 });
 
@@ -2926,7 +2926,7 @@ await check('Remove reconciles a committed call whose response was lost', async 
   assert.equal(await evidenceObjectExists(path), true, 'response loss unexpectedly deleted the photo');
   assert.equal(
     dom.$('screen-message-title').textContent,
-    `${name} removed · Photo waiting on Storage`,
+    `${name} removed, photo waiting on Storage`,
   );
   assert.ok(
     after.calls.slice(beforeCalls).some((call) => call.fn === 'rest.v_possible_duplicate_members'),
@@ -2994,7 +2994,7 @@ await check('Remove reconciles a committed call whose response body was lost', a
   assert.equal(await evidenceObjectExists(path), true, 'body loss unexpectedly deleted the photo');
   assert.equal(
     dom.$('screen-message-title').textContent,
-    `${name} removed · Photo waiting on Storage`,
+    `${name} removed, photo waiting on Storage`,
   );
 
   const outstanding = await select('v_purge_runs_outstanding', {

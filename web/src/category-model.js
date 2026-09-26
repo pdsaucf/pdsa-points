@@ -87,7 +87,7 @@ export function groupRequirementUses(rows, years) {
     if (!node || !row.category_id) continue;
     const set = node.requirement_sets ?? {};
     const year = (years ?? []).find((entry) => entry.id === set.academic_year_id);
-    const use = { label: node.label, where: [year?.label, set.status].filter(Boolean).join(' · ') };
+    const use = { label: node.label, where: [year?.label, set.status].filter(Boolean).join(', ') };
     if (!map.has(row.category_id)) map.set(row.category_id, []);
     map.get(row.category_id).push(use);
   }

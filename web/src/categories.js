@@ -159,7 +159,7 @@ export function createCategories(ctx) {
     const parts = [];
     if (events) parts.push(plural(events, 'event'));
     if (requirements) parts.push(plural(requirements, 'requirement'));
-    return parts.length ? parts.join(' · ') : null;
+    return parts.length ? parts.join(', ') : null;
   }
 
   function render() {
@@ -397,7 +397,7 @@ export function createCategories(ctx) {
   function confirmRetire(category, uses) {
     return new Promise((resolve) => {
       el.dialogTitle.textContent = 'Category in use';
-      el.dialogMeta.textContent = `${category.name} · ${plural(uses.length, 'requirement')}`;
+      el.dialogMeta.textContent = `${category.name}, ${plural(uses.length, 'requirement')}`;
       el.dialogUses.replaceChildren(
         ...uses.map((use) =>
           h(

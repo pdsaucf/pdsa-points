@@ -171,7 +171,7 @@ export function createStorage(ctx) {
     const percent = Number(usage.percent_used ?? 0);
     const warn = Number(usage.warn_percent ?? 75);
 
-    el.usageCount.textContent = `${plural(count, 'photo')} · ${formatBytes(bytes)}`;
+    el.usageCount.textContent = `${plural(count, 'photo')}, ${formatBytes(bytes)}`;
     el.usageFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
     el.usageBar.dataset.warn = String(percent >= warn);
     el.usageLine.textContent = `${formatBytes(bytes)} of ${formatBytes(quota)}`;
@@ -398,7 +398,7 @@ export function createStorage(ctx) {
           h(
             'span',
             { class: 'storage-purge-meta' },
-            `${shortDate(row.occurred_on)} · ${plural(Number(row.photo_count ?? 0), 'photo')}`,
+            `${shortDate(row.occurred_on)}, ${plural(Number(row.photo_count ?? 0), 'photo')}`,
           ),
         ),
       ),

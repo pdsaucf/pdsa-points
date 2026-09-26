@@ -291,7 +291,7 @@ export function createMember(ctx) {
       ctx.year.label,
     ]
       .filter(Boolean)
-      .join(' · ');
+      .join(', ');
 
     el.points.textContent = number(state.status?.point_total ?? 0);
     setHidden(el.honorary, !state.status?.is_honorary);
@@ -409,7 +409,7 @@ export function createMember(ctx) {
             : Number(record.submitted_value ?? 0);
         return `${number(credit)} ${category.name ?? ''}`.trim();
       })
-      .join(' · ');
+      .join(', ');
   }
 
   // -------------------------------------------------------------------------
