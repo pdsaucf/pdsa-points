@@ -110,16 +110,23 @@
         </section>
 
         <section id="scorecard" class="panel" hidden aria-labelledby="score-name">
-          <h1 id="score-name" class="title score-name" tabindex="-1">
-            <span id="score-name-text"></span>
-            <span id="score-name-star" class="board-star score-name-star" aria-hidden="true" hidden>★</span>
-          </h1>
-          <p id="score-year" class="muted"></p>
-          <dl class="summary-grid">
+          <div class="score-head">
+            <h1 id="score-name" class="title score-name" tabindex="-1">
+              <span id="score-name-text"></span>
+              <span id="score-name-star" class="board-star score-name-star" aria-hidden="true" hidden>★</span>
+            </h1>
+            <button id="score-change" type="button" class="button button-secondary">Not you?</button>
+          </div>
+          <p class="muted score-meta">
+            <span id="score-year"></span>
+            <span class="score-points"><span id="score-points"></span> <span id="score-points-unit">points</span></span>
+          </p>
+          <!-- Earned gets the gold band. The words carry the verdict either way. -->
+          <dl id="score-status" class="score-status" data-earned="false">
             <div>
               <dt>
-                Honorary Status
-                <span id="score-label-star" class="board-star summary-star" aria-hidden="true">★</span>
+                <span id="score-label-star" class="board-star summary-star" aria-hidden="true" hidden>★</span>
+                Honorary Member
               </dt>
               <dd id="score-state"></dd>
             </div>
@@ -127,38 +134,21 @@
               <dt>Requirements met</dt>
               <dd id="score-figures"></dd>
             </div>
-            <div>
-              <dt>Total points</dt>
-              <dd id="score-points"></dd>
-            </div>
           </dl>
-          <div class="score-actions">
-            <button id="score-download" type="button" class="button button-primary" disabled>
-              Download PDF
-            </button>
-            <button id="score-change" type="button" class="button button-secondary">Not you?</button>
-          </div>
-          <div id="download-error" class="inline-error" role="alert" hidden>
-            <span>Download failed</span>
-            <button id="download-retry" type="button" class="button button-quiet">Try again</button>
-          </div>
           <h2 class="panel-title requirement-progress-title">Requirement progress</h2>
           <ul id="score-list" class="checklist"></ul>
         </section>
 
         <!-- One event per row from portal_attendance(), loaded after the scorecard. -->
         <section id="history" class="panel history" hidden aria-labelledby="history-title">
-          <div class="progress-head">
-            <h2 id="history-title" class="panel-title">Attendance record</h2>
-            <p id="history-meta" class="muted small"></p>
-          </div>
+          <h2 id="history-title" class="panel-title">Attendance record</h2>
           <div id="history-filters" class="record-filters" role="group" aria-label="Attendance status"></div>
           <p id="history-loading" class="muted" role="status" hidden>Loading attendance…</p>
           <div id="history-error" class="inline-error" role="alert" hidden>
             <span>Attendance unavailable</span>
             <button id="history-retry" type="button" class="button button-quiet">Try again</button>
           </div>
-          <p id="history-empty" class="muted" hidden>No records in this view.</p>
+          <p id="history-empty" class="muted" hidden>No events yet.</p>
           <div id="history-table-wrap" class="record-table-wrap">
             <table class="record-table">
               <thead>
@@ -166,15 +156,26 @@
                   <th scope="col">Event</th>
                   <th scope="col">Date</th>
                   <th scope="col">Time</th>
-                  <th scope="col">Duration</th>
-                  <th scope="col">Categories and credit</th>
-                  <th scope="col">Status</th>
+                  <th scope="col">Credit</th>
                 </tr>
               </thead>
               <tbody id="history-table-body"></tbody>
             </table>
           </div>
           <div id="history-cards" class="record-cards"></div>
+          <p class="history-contact">
+            Missing an event? Contact the Secretary at
+            <a href="mailto:pdsa.ucf@gmail.com">pdsa.ucf@gmail.com</a>.
+          </p>
+          <div class="score-actions">
+            <button id="score-download" type="button" class="button button-secondary" disabled>
+              Download PDF
+            </button>
+          </div>
+          <div id="download-error" class="inline-error" role="alert" hidden>
+            <span>Download failed</span>
+            <button id="download-retry" type="button" class="button button-quiet">Try again</button>
+          </div>
         </section>
 
         <!--
@@ -320,7 +321,8 @@
             </svg>
           </a>
         </nav>
-        <p class="footer-meta">© <span id="footer-year">2026</span> Pre-Dental Student Association at UCF · PDSA Points website originally built by Benjamin Le</p>
+        <p class="footer-meta">© <span id="footer-year">2026</span> Pre-Dental Student Association at UCF</p>
+        <p class="footer-meta">PDSA Points website originally built by Benjamin Le</p>
       </div>
     </footer>
 

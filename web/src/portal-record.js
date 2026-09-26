@@ -7,6 +7,12 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
+const shortDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: EASTERN,
+  month: 'short',
+  day: 'numeric',
+});
+
 const timeFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: EASTERN,
   hour: 'numeric',
@@ -22,6 +28,13 @@ export function eventDate(value) {
   const [year, month, day] = String(value ?? '').slice(0, 10).split('-').map(Number);
   if (!year || !month || !day) return String(value ?? '');
   return dateFormatter.format(new Date(Date.UTC(year, month - 1, day, 12)));
+}
+
+// The screen already names the academic year, so a row carries month and day.
+export function shortEventDate(value) {
+  const [year, month, day] = String(value ?? '').slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return String(value ?? '');
+  return shortDateFormatter.format(new Date(Date.UTC(year, month - 1, day, 12)));
 }
 
 export function easternTime(value) {

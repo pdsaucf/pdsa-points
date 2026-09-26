@@ -47,6 +47,9 @@ export function createScorecard(ctx) {
     nameText: $('score-name-text'),
     nameStar: $('score-name-star'),
     year: $('score-year'),
+    status: $('score-status'),
+    labelStar: $('score-label-star'),
+    pointsUnit: $('score-points-unit'),
     figures: $('score-figures'),
     state: $('score-state'),
     list: $('score-list'),
@@ -156,21 +159,25 @@ export function createScorecard(ctx) {
     }));
 
     const { root } = buildTree(requirements, card?.root_node_id ?? null);
-    const rows = root
-      ? flatten(root)
-          .slice(1)
-          .filter(({ item }) => item.type !== 'group')
-      : [];
+    const rows = root ? flatten(root).slice(1) : [];
 
     const progress = measuredRequirementSummary(card?.requirements);
     el.figures.textContent = `${progress.met} of ${progress.total}`;
 
     el.state.textContent = honorary ? 'Earned' : 'Not yet';
     setHidden(el.state, false);
+    el.status.dataset.earned = String(honorary);
+    setHidden(el.labelStar, !honorary);
 
-    el.list.replaceChildren(...rows.map(({ item, depth }) => memberRow(item, depth)));
+    el.list.replaceChildren(
+      ...rows.map(({ item, depth }) =>
+        item.type === 'group' ? groupRow(item, depth) : memberRow(item, depth),
+      ),
+    );
 
-    el.points.textContent = number(card?.point_total ?? 0);
+    const total = Number(card?.point_total ?? 0);
+    el.points.textContent = number(total);
+    el.pointsUnit.textContent = total === 1 ? 'point' : 'points';
     setHidden(el.card, false);
     if (focus) el.name.focus();
     if (announceStatus) {
@@ -182,7 +189,23 @@ export function createScorecard(ctx) {
     }
   }
 
+  // A group left over from an older set. Without its heading, the rows under it
+  // read as part of whichever requirement happens to sit above them. It says
+  // "any N" only when the rule is some of these, as the Requirements box does.
+  function groupRow(item, depth) {
+    const children = item.children?.length ?? 0;
+    return h(
+      'li',
+      { class: 'check-group', dataset: { depth: String(depth) } },
+      h('span', {}, item.label),
+      item.target < children ? h('span', { class: 'check-group-need' }, `any ${number(item.target)}`) : null,
+    );
+  }
+
   function memberRow(item, depth) {
+    const target = item.target;
+    const share = target > 0 ? Math.min(item.value / target, 1) : 1;
+    const remaining = Math.max(target - item.value, 0);
     return h(
       'li',
       { class: 'check-row', dataset: { met: String(item.passed), depth: String(depth) } },
@@ -191,7 +214,20 @@ export function createScorecard(ctx) {
       h(
         'span',
         { class: 'check-figures' },
-        `${number(item.value)} of ${number(item.target)}`,
+        `${number(item.value)} of ${number(target)}`,
+      ),
+      h(
+        'span',
+        { class: 'check-meter' },
+        h(
+          'span',
+          { class: 'check-bar', 'aria-hidden': 'true' },
+          h('span', { class: 'check-bar-fill', style: `width: ${Math.round(share * 100)}%` }),
+        ),
+        // The server's verdict decides Met. This is only the gap on screen.
+        !item.passed && remaining > 0
+          ? h('span', { class: 'check-remaining' }, `${number(remaining)} to go`)
+          : null,
       ),
       // Never the colour alone, and never the glyph alone either.
       h('span', { class: 'visually-hidden' }, item.passed ? 'Met' : 'Not met'),
@@ -207,6 +243,8 @@ export function createScorecard(ctx) {
     el.figures.textContent = '';
     el.points.textContent = '';
     setHidden(el.state, true);
+    el.status.dataset.earned = 'false';
+    setHidden(el.labelStar, true);
   }
 
   return { loadRequirements, render, clear };

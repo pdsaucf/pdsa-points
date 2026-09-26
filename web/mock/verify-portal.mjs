@@ -156,7 +156,7 @@ function lookUp(name) {
 }
 
 const scorecardShown = () => !dom.$('scorecard').hidden;
-const checklistRows = () => dom.$('score-list').querySelectorAll('li');
+const checklistRows = () => dom.$('score-list').querySelectorAll('.check-row');
 const honoraryRows = () => dom.$('honorary-list').querySelectorAll('li');
 const boardRows = () => dom.$('board-list').querySelectorAll('.board-row');
 const live = () => dom.$('live').textContent;
@@ -774,9 +774,44 @@ await check('a name on the roster draws that members own figures', async () => {
   assert.equal(dom.$('score-state').textContent, card.is_honorary ? 'Earned' : 'Not yet');
   assert.equal(
     dom.$('score-state').parentNode.querySelector('dt').textContent.replace('★', '').trim(),
-    'Honorary Status',
+    'Honorary Member',
   );
+  assert.equal(dom.$('score-points-unit').textContent, Number(card.point_total) === 1 ? 'point' : 'points');
   assert.ok(checklistRows().length > 0, 'the requirement list is empty');
+});
+
+await check('a group keeps its heading, so its rows do not read as part of the row above', async () => {
+  mountPortal();
+  lookUp('Abigail Catto');
+  await until(scorecardShown, 'the scorecard never drew');
+  const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  const nested = card.requirements.filter((row) => row.type === 'group' && row.node_id !== card.root_node_id);
+  assert.ok(nested.length > 0, 'the fixture lost its nested group');
+  const headings = dom.$('score-list').querySelectorAll('.check-group');
+  assert.deepEqual(headings.map((node) => node.textContent.trim()), nested.map((row) => row.label));
+  const items = dom.$('score-list').children;
+  for (const group of nested) {
+    const at = items.findIndex((node) => node.classList.contains('check-group') && node.textContent.trim() === group.label);
+    const children = card.requirements.filter((row) => row.parent_id === group.node_id);
+    for (let i = 1; i <= children.length; i += 1) {
+      assert.equal(items[at + i].dataset.depth, '2', `${children[i - 1].label} is not under ${group.label}`);
+    }
+  }
+});
+
+await check('an unmet requirement shows what is left, and a met one does not', async () => {
+  mountPortal();
+  lookUp('Abigail Catto');
+  await until(scorecardShown, 'the scorecard never drew');
+  const card = await rpc('portal_scorecard', { p_member_id: IDS.MEMBER_ABIGAIL });
+  for (const requirement of card.requirements.filter((row) => row.type !== 'group')) {
+    const row = [...checklistRows()].find((node) => node.querySelector('.check-label').textContent === requirement.label);
+    const left = row.querySelector('.check-remaining');
+    const gap = Number(requirement.target) - Number(requirement.value);
+    if (requirement.passed || gap <= 0) assert.equal(left, null, `${requirement.label} shows a gap it does not have`);
+    else assert.equal(left?.textContent, `${gap} to go`);
+    assert.equal(row.querySelector('.check-bar').getAttribute('aria-hidden'), 'true');
+  }
 });
 
 await check('Honorary status and name stars follow only the servers verdict', async () => {
@@ -787,7 +822,8 @@ await check('Honorary status and name stars follow only the servers verdict', as
   assert.equal(notYet.is_honorary, false, 'the non-honorary fixture changed');
   assert.equal(dom.$('score-state').textContent, 'Not yet');
   assert.equal(dom.$('score-name-star').hidden, true, 'a non-honorary name has a star');
-  assert.equal(dom.$('score-label-star').hidden, false, 'the status label lost its star');
+  assert.equal(dom.$('score-label-star').hidden, true, 'a non-honorary status label has a star');
+  assert.equal(dom.$('score-status').dataset.earned, 'false');
   assert.ok(dom.$('score-label-star').classList.contains('board-star'));
 
   mountPortal();
@@ -800,6 +836,7 @@ await check('Honorary status and name stars follow only the servers verdict', as
   assert.ok(dom.$('score-name-star').classList.contains('board-star'));
   assert.equal(dom.$('score-name-star').getAttribute('aria-hidden'), 'true');
   assert.equal(dom.$('score-label-star').hidden, false, 'the earned status label lost its star');
+  assert.equal(dom.$('score-status').dataset.earned, 'true', 'Earned looks the same as Not yet');
   assert.equal(dom.$('score-label-star').getAttribute('aria-hidden'), 'true');
   assert.match(dom.$('score-state').textContent, /^(Earned|Not yet)$/);
 });
@@ -827,6 +864,24 @@ await check('the form is put away, and Not you? brings it back with the name sti
     'Abigail Catto',
     'the name was cleared, so a typo means typing it all again',
   );
+});
+
+await check('the address carries the name on screen, and Not you? clears it', async () => {
+  const calls = [];
+  const original = window.history.replaceState;
+  window.history.replaceState = (state, title, url) => calls.push(String(url));
+  try {
+    mountPortal();
+    lookUp('abigail catto');
+    await until(scorecardShown, 'the scorecard never drew');
+    const named = new URL(calls.at(-1));
+    assert.equal(named.searchParams.get('name'), 'Abigail Catto');
+    assert.equal(named.pathname, '/me/');
+    dom.click(dom.$('score-change'));
+    assert.equal(new URL(calls.at(-1)).searchParams.has('name'), false);
+  } finally {
+    window.history.replaceState = original;
+  }
 });
 
 await check('the checklist is what the server said, line for line', async () => {
@@ -1066,8 +1121,20 @@ await check('the history draws approved events once with grouped category credit
     for (const category of event.categories) {
       assert.ok(row.textContent.includes(category.name), `${event.title} lost ${category.name}`);
     }
-    assert.match(row.textContent, /Approved/);
+    assert.equal(row.dataset.status, 'attended');
   }
+  const pressed = dom.$('history-filters').querySelectorAll('button').filter((b) => b.getAttribute('aria-pressed') === 'true');
+  assert.deepEqual(pressed.map((b) => b.textContent), [`Approved ${approved.length}`]);
+  for (const status of ['waiting', 'declined']) {
+    const count = answer.events.filter((event) => event.status === status).length;
+    const label = status === 'waiting' ? 'Waiting' : 'Declined';
+    const button = dom.$('history-filters').querySelectorAll('button').find((b) => b.textContent.startsWith(label));
+    assert.equal(Boolean(button), count > 0, `${label} filter shown with ${count} events`);
+  }
+  assert.match(
+    dom.$('history').textContent.replace(/\s+/g, ' '),
+    /Missing an event\? Contact the Secretary at pdsa\.ucf@gmail\.com\./,
+  );
 });
 
 await check('the final screen and PDF use the attendance RPCs atomic scorecard snapshot', async () => {
@@ -1149,7 +1216,8 @@ await check('actual Eastern times, duration and missing times are rendered witho
   assert.equal(durationMinutes(timed), (new Date(timed.ends_at) - new Date(timed.starts_at)) / 60000);
   assert.ok(rowFor(timed.title).textContent.includes(easternTime(timed.starts_at)));
   assert.ok(rowFor(timed.title).textContent.includes(timeDetails(timed).duration));
-  assert.ok(rowFor(missing.title).textContent.includes('Time not recorded'));
+  assert.ok(!rowFor(missing.title).textContent.includes('Time not recorded'));
+  assert.ok(!rowFor(missing.title).textContent.includes(' to '), 'an untimed row shows a time');
   assert.ok(!('checkin_closes_at' in missing), 'the public response exposed the check-in window');
 });
 
@@ -1162,7 +1230,8 @@ await check('waiting and declined records stay separate from approved attendance
   const row = rowFor('Spring GBM 5');
   assert.ok(row, 'the waiting record is unavailable');
   assert.equal(row.dataset.status, 'waiting');
-  assert.match(row.textContent, /Waiting/);
+  const pressed = dom.$('history-filters').querySelectorAll('button').find((b) => b.getAttribute('aria-pressed') === 'true');
+  assert.ok(pressed?.textContent.startsWith('Waiting'), 'the shown list is not labelled Waiting');
 });
 
 await check('attendance failure leaves the scorecard visible with retry and download disabled', async () => {

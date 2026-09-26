@@ -1,7 +1,9 @@
 import { rpc } from './api.js';
 import { $, h, announce, setHidden } from './ui.js';
-import { categoryCredit, eventDate, timeDetails } from './portal-record.js';
+import { categoryCredit, shortEventDate, timeDetails } from './portal-record.js';
 
+// Only statuses with at least one event get a filter, so the list below is
+// always labelled by exactly one pressed filter and rows carry no status pill.
 const FILTERS = [
   { value: 'attended', label: 'Approved' },
   { value: 'waiting', label: 'Waiting' },
@@ -17,7 +19,6 @@ const STATUS = {
 export function createHistory() {
   const el = {
     card: $('history'),
-    meta: $('history-meta'),
     filters: $('history-filters'),
     loading: $('history-loading'),
     error: $('history-error'),
@@ -47,57 +48,52 @@ export function createHistory() {
           String(a.title ?? '').localeCompare(String(b.title ?? '')),
       );
 
-  function creditList(event, className) {
+  function creditList(event) {
     return h(
       'ul',
-      { class: className },
+      { class: 'credit-list' },
       ...(event.categories ?? []).map((category) => h('li', {}, categoryCredit(category))),
     );
   }
 
-  function tableRow(event) {
+  // Blank when either actual instant is missing: the check-in window is never
+  // used to infer one.
+  function timeText(event) {
     const time = timeDetails(event);
+    return time.recorded ? `${time.range} (${time.duration})` : '';
+  }
+
+  function tableRow(event) {
     return h(
       'tr',
       { dataset: { status: event.status } },
       h('th', { scope: 'row' }, event.title),
-      h('td', { class: 'record-number' }, eventDate(event.occurred_on)),
-      h('td', { class: 'record-number' }, time.range),
-      h('td', { class: 'record-number' }, time.duration),
-      h('td', {}, creditList(event, 'credit-list')),
-      h('td', {}, h('span', { class: 'record-status', dataset: { status: event.status } }, STATUS[event.status])),
+      h('td', { class: 'record-number' }, shortEventDate(event.occurred_on)),
+      h('td', { class: 'record-number' }, timeText(event)),
+      h('td', {}, creditList(event)),
     );
   }
 
   function card(event) {
-    const time = timeDetails(event);
+    const time = timeText(event);
     return h(
       'article',
       { class: 'record-card', dataset: { status: event.status } },
+      h('h3', {}, event.title),
+      creditList(event),
       h(
-        'div',
-        { class: 'record-card-head' },
-        h('h3', {}, event.title),
-        h('span', { class: 'record-status', dataset: { status: event.status } }, STATUS[event.status]),
-      ),
-      h(
-        'dl',
-        { class: 'record-details' },
-        h('div', {}, h('dt', {}, 'Date'), h('dd', { class: 'record-number' }, eventDate(event.occurred_on))),
-        h('div', {}, h('dt', {}, 'Time'), h('dd', { class: 'record-number' }, time.range)),
-        time.recorded
-          ? h('div', {}, h('dt', {}, 'Duration'), h('dd', { class: 'record-number' }, time.duration))
-          : null,
-        h('div', {}, h('dt', {}, 'Categories and credit'), h('dd', {}, creditList(event, 'credit-list'))),
+        'p',
+        { class: 'record-when record-number' },
+        time ? `${shortEventDate(event.occurred_on)}, ${time}` : shortEventDate(event.occurred_on),
       ),
     );
   }
 
-  function paintFilters() {
-    const rows = recordEvents();
+  function paintFilters(rows) {
     el.filters.replaceChildren(
       ...FILTERS.map((item) => {
         const count = rows.filter((event) => event.status === item.value).length;
+        if (!count) return null;
         return h(
           'button',
           {
@@ -111,16 +107,22 @@ export function createHistory() {
           },
           `${item.label} ${count}`,
         );
-      }),
+      }).filter(Boolean),
     );
   }
 
   function paint() {
-    paintFilters();
-    const shown = recordEvents().filter((event) => event.status === filter);
-    el.meta.textContent = `${shown.length} ${shown.length === 1 ? 'event' : 'events'}`;
+    const rows = recordEvents();
+    // Approved first. A member with nothing approved yet opens on whatever
+    // they do have, rather than an empty list above a filter that has it.
+    if (!rows.some((event) => event.status === filter)) {
+      filter = FILTERS.find((item) => rows.some((event) => event.status === item.value))?.value ?? 'attended';
+    }
+    paintFilters(rows);
+    const shown = rows.filter((event) => event.status === filter);
     el.tableBody.replaceChildren(...shown.map(tableRow));
     el.cards.replaceChildren(...shown.map(card));
+    setHidden(el.filters, rows.length === 0);
     setHidden(el.empty, shown.length > 0);
     setHidden(el.tableWrap, shown.length === 0);
     setHidden(el.cards, shown.length === 0);

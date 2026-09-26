@@ -154,13 +154,20 @@ for somebody who followed a link from a group chat.
 
 ## Attendance record
 
-The successful result starts with the member name, academic year, server-computed
-Honorary Status, number of published requirements met, total points, Download PDF, and
-Not you?. The status value is `Earned` or `Not yet`, directly from the server verdict.
-The Honorary Status label always carries the same small star used by the leaderboard;
-an honorary member's name carries it as well. The visible status words remain the
-accessible signal. Every published requirement follows with its current value, target,
-and explicit Met or Not met status. None of those rules are calculated in the client.
+The successful result starts with the member name and Not you?, then the academic year
+and total points on one line, then a status band: Honorary Member (`Earned` or `Not
+yet`, directly from the server verdict) and the number of published requirements met.
+When the verdict is Earned the band turns gold and its label and the member's name carry
+the leaderboard's small star; otherwise neither has a star. The visible status words
+remain the accessible signal. Every published requirement follows with its current
+value, target, a decorative progress bar, how much is left when the server says Not
+met, and explicit Met or Not met status. A group left in an older published set is
+drawn as a heading over its rows, with `any N` when it asks for only some of them.
+None of those rules are calculated in the client: the bar and the remaining figure are
+the server's value and target drawn, and never decide Met.
+
+After a lookup the address carries `?name=` with the member's display name, so a
+bookmark or a home screen icon reopens the same points. Not you? removes it.
 The summary count is the number of non-group requirement rows whose server verdict is
 Met out of all non-group requirement rows. It never substitutes a root group's N-of-M
 value and never determines Honorary status.
@@ -181,20 +188,28 @@ successful results already carry the member-specific Requirement progress.
 ```
 ┌────────────────────────────────────────┐
 │ [Approved 8] [Waiting 1] [Declined 1] │
-│ Fall GBM 1  Sep 4  6:00 to 7:30 PM    │
-│ 1 hr 30 min  GBMs: 1        Approved  │
-│ Give Kids A Smile  Sep 2               │
-│ Time not recorded  Volunteering: 5     │
+│ Fall GBM 1                    GBMs: 1  │
+│ Sep 4 · 6:00 to 7:30 PM · 1 hr 30 min  │
+│ Give Kids A Smile     Volunteering: 5  │
+│ Sep 2                                  │
+│                                        │
+│ Missing an event? Contact the          │
+│ Secretary at pdsa.ucf@gmail.com.       │
+│ [ Download PDF ]                       │
 └────────────────────────────────────────┘
 ```
 
 Approved records are the default. Waiting and declined records remain available through
-status filters and are never presented as completed attendance. Each event renders once,
-newest first, with title, date, actual Eastern start and end times, duration, grouped
-category credit, and attendance status. Desktop uses a semantic table and mobile uses
-stacked cards. An event linked to two categories remains one row with both credits.
+status filters and are never presented as completed attendance. A filter appears only
+when it has events, and the list opens on the first one that does, so exactly one pressed
+filter always names the status of every row shown and rows carry no status pill of their
+own. Each event renders once, newest first, with title, month and day, actual Eastern
+start and end times, duration, and grouped category credit. Desktop uses a semantic table
+and mobile uses compact two-line rows. An event linked to two categories remains one row
+with both credits. The record ends with who to contact about a missing event, then
+Download PDF.
 
-When either actual instant is missing, the row says `Time not recorded`. The check-in
+When either actual instant is missing, the row shows no time. The check-in
 window is never used to infer a schedule or duration. Event duration is informational
 and does not enter points, requirement progress, or Honorary status. Event Location no
 longer exists and appears nowhere in the response or page.

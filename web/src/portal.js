@@ -254,6 +254,7 @@ async function show(memberId, { isCurrent = null } = {}) {
     app.card = card;
     app.attendance = null;
     app.scorecard.render(card);
+    syncNameParam(card?.member?.display_name ?? '');
     el.app.classList.add('results-view');
     el.download.disabled = true;
     setHidden(el.downloadError, true);
@@ -291,8 +292,23 @@ async function show(memberId, { isCurrent = null } = {}) {
   }
 }
 
+// The address carries the name on screen, so a bookmark or a home screen icon
+// opens straight to these points. The check-in page already links here the
+// same way.
+function syncNameParam(name) {
+  try {
+    const url = new URL(window.location.href);
+    if (name) url.searchParams.set('name', name);
+    else url.searchParams.delete('name');
+    window.history.replaceState(null, '', url);
+  } catch {
+    // The address is a convenience. The points are already on screen.
+  }
+}
+
 function forget() {
   activeMemberId = null;
+  syncNameParam('');
   app.scorecard.clear();
   app.history.clear();
   app.card = null;
