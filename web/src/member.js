@@ -12,7 +12,7 @@
 //               same function v_member_status uses for is_honorary, so the
 //               checklist and the star on the board can never disagree
 //   records     every attendance record for the year: what it was for, when,
-//               what credit it carried, where it came from, and who decided it
+//               what credit it carried, where it came from, and its status
 //
 // AND ONE WRITE. An officer can add a record by hand, because that is how the
 // spreadsheet workflow actually operated: somebody says "I was there, I signed
@@ -72,6 +72,9 @@ export function createMember(ctx) {
     records: $('member-records'),
     recordsCount: $('member-records-count'),
     addRecord: $('member-add-record'),
+    remove: $('member-remove'),
+    needs: $('member-needs'),
+    recordsFilter: $('member-records-filter'),
     retro: $('member-retro'),
     retroBody: $('member-retro-body'),
     recordDialog: $('record-dialog'),
@@ -104,7 +107,10 @@ export function createMember(ctx) {
     totals: new Map(),
     checklist: [],
     records: [],
-    reviewers: new Map(), // user_id -> name
+    recordFilter: 'all',
+    // The member an open Add record dialog was opened for. See openRecordDialog().
+    recordFor: null,
+    enrolledThisYear: false,
     events: [],
     busy: false,
   };
@@ -147,7 +153,7 @@ export function createMember(ctx) {
           // of them. joined.js says why that has to be the same fact here as
           // on the roster.
           select('member_enrollments', {
-            select: 'member_id,joined_on',
+            select: 'member_id,academic_year_id,joined_on',
             filters: { member_id: `eq.${state.memberId}` },
           }),
           select('categories', {
@@ -188,9 +194,9 @@ export function createMember(ctx) {
       // Every year they have ever been on, not the selected one. The read is
       // deliberately unfiltered by year for this: see joined.js.
       state.joined = firstJoinedOn(enrollments, state.member);
+      state.enrolledThisYear = enrollments.some((row) => row.academic_year_id === yearId);
       state.status = statuses[0] ?? null;
       state.totals = new Map(totals.map((row) => [row.category_id, Number(row.total ?? 0)]));
-      state.reviewers = new Map();
 
       // Newest first: the record somebody is asking about is nearly always the
       // one from last week.
@@ -198,8 +204,9 @@ export function createMember(ctx) {
         String(b.events?.occurred_on ?? '').localeCompare(String(a.events?.occurred_on ?? '')),
       );
 
-      const used = new Set(state.totals.keys());
-      state.categories = categories.filter((row) => !row.archived_at || used.has(row.id));
+      // Only the categories this member has credit in. The Honorary checklist
+      // beside it already lists what the rules measure, met or not.
+      state.categories = categories.filter((row) => (state.totals.get(row.id) ?? 0) !== 0);
 
       state.checklist = await loadChecklist(state.status?.requirement_set_id ?? null);
       // The checklist RPC is its own await, and a newer load() can just as
@@ -297,14 +304,39 @@ export function createMember(ctx) {
     setHidden(el.honorary, !state.status?.is_honorary);
     setHidden(el.edit, ctx.isAdmin === false);
     setHidden(el.addRecord, ctx.isAdmin === false);
+    setHidden(el.remove, ctx.isAdmin === false || !state.enrolledThisYear || !ctx.removeFromYear);
     // Hidden until loadRetro() (called right after this) says otherwise, so a
     // section left over from whoever was open before is never shown against
     // this member even for the moment it takes to fetch.
     setHidden(el.retro, true);
 
+    renderNeeds();
     renderProgress();
     renderChecklist();
     renderRecords();
+  }
+
+  /**
+   * What is still missing, in one line: "Needs 2 Tabling, 1 Writing".
+   *
+   * Every figure is the evaluator's own value and target. A requirement is
+   * listed only when it failed and so did the group it sits in: inside a
+   * group that already passed, a failed requirement does not stand between
+   * the member and Honorary.
+   */
+  function renderNeeds() {
+    const rows = state.checklist;
+    const missing = [];
+    if (rows.length && !state.status?.is_honorary) {
+      const passed = new Map(rows.map(({ item }) => [item.id, item.passed]));
+      for (const { item } of rows.slice(1)) {
+        if (item.passed || item.type === 'group') continue;
+        if (item.parent_id && passed.get(item.parent_id) === true) continue;
+        missing.push(`${number(Math.max(item.target - item.value, 0))} ${item.label}`);
+      }
+    }
+    el.needs.textContent = missing.length ? `Needs ${missing.join(', ')}` : '';
+    setHidden(el.needs, missing.length === 0);
   }
 
   function renderProgress() {
@@ -320,7 +352,7 @@ export function createMember(ctx) {
       }),
     );
     if (!state.categories.length) {
-      el.progress.replaceChildren(h('p', { class: 'muted small' }, 'No categories yet.'));
+      el.progress.replaceChildren(h('p', { class: 'muted small' }, 'No credit yet this year.'));
     }
   }
 
@@ -361,21 +393,59 @@ export function createMember(ctx) {
     );
   }
 
+  const RECORD_FILTERS = [
+    ['all', 'All'],
+    ['pending', 'Pending'],
+    ['rejected', 'Declined'],
+  ];
+
+  /** All, Pending, Declined: offered only when there is something to narrow to. */
+  function renderRecordFilter() {
+    const counts = { all: state.records.length, pending: 0, rejected: 0 };
+    for (const record of state.records) {
+      if (record.status in counts) counts[record.status] += 1;
+    }
+    if (!counts[state.recordFilter]) state.recordFilter = 'all';
+    const offered = RECORD_FILTERS.filter(([key]) => key === 'all' || counts[key] > 0);
+    setHidden(el.recordsFilter, offered.length < 2);
+    el.recordsFilter.replaceChildren(
+      ...offered.map(([key, label]) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'filter-tab',
+            'aria-selected': String(state.recordFilter === key),
+            onClick: () => {
+              state.recordFilter = key;
+              renderRecords();
+            },
+          },
+          label,
+          h('span', { class: 'pill' }, String(counts[key])),
+        ),
+      ),
+    );
+  }
+
   function renderRecords() {
     el.recordsCount.textContent = plural(state.records.length, 'record');
+    renderRecordFilter();
 
     if (!state.records.length) {
       el.records.replaceChildren(
-        h('tr', {}, h('td', { class: 'muted', colspan: '6' }, 'Nothing this year.')),
+        h('tr', {}, h('td', { class: 'muted', colspan: '5' }, 'Nothing this year.')),
       );
       return;
     }
 
-    el.records.replaceChildren(
-      ...state.records.map((record) => {
-        const event = record.events ?? {};
-        const reviewer = record.reviewed_by ? state.reviewers.get(record.reviewed_by) : null;
+    const shown = state.recordFilter === 'all'
+      ? state.records
+      : state.records.filter((record) => record.status === state.recordFilter);
 
+    el.records.replaceChildren(
+      ...shown.map((record) => {
+        const event = record.events ?? {};
         return h(
           'tr',
           { dataset: { record: record.id, status: record.status } },
@@ -390,7 +460,6 @@ export function createMember(ctx) {
               STATUS[record.status] ?? record.status),
             record.review_note ? h('span', { class: 'record-note' }, record.review_note) : null,
           ),
-          h('td', {}, reviewer ?? (record.reviewed_at ? 'Officer' : '')),
         );
       }),
     );
@@ -419,6 +488,11 @@ export function createMember(ctx) {
   async function openRecordDialog() {
     setHidden(el.recordError, true);
     el.recordValue.value = '';
+    // The member this Add record was pressed for. Search or a tab can move the
+    // screen to somebody else while the event list below is loading, and the
+    // dialog must never open for, or file a record against, that person.
+    const memberId = state.memberId;
+    const token = state.loadToken;
 
     if (!state.events.length) {
       try {
@@ -431,6 +505,7 @@ export function createMember(ctx) {
         ctx.fail(err, null);
         return;
       }
+      if (state.memberId !== memberId || state.loadToken !== token) return;
     }
 
     const taken = new Set(
@@ -449,6 +524,7 @@ export function createMember(ctx) {
       ),
     );
     onEventChosen();
+    state.recordFor = memberId;
     el.recordDialog.showModal();
   }
 
@@ -486,11 +562,15 @@ export function createMember(ctx) {
     setHidden(el.recordError, true);
     el.recordDialog.close();
 
+    const memberId = state.recordFor;
+    state.recordFor = null;
+    if (!memberId || memberId !== state.memberId) return;
+
     setBusy(true);
     try {
       const created = await callRpc('add_officer_attendance', {
         p_event_id: eventId,
-        p_member_ids: [state.memberId],
+        p_member_ids: [memberId],
         p_submitted_value: needsValue ? value : null,
       });
       if (!Array.isArray(created) || created.length !== 1) throw new Error('nothing came back');
@@ -569,6 +649,9 @@ export function createMember(ctx) {
     el.back.addEventListener('click', () => ctx.closeMember());
     el.addRecord.addEventListener('click', openRecordDialog);
     el.edit.addEventListener('click', openEditDialog);
+    el.remove.addEventListener('click', () => {
+      if (state.member) ctx.removeFromYear?.(state.member, () => ctx.closeMember());
+    });
     el.recordEvent.addEventListener('change', onEventChosen);
     el.recordForm.addEventListener('submit', addRecord);
     el.editForm.addEventListener('submit', saveEdit);
@@ -582,6 +665,7 @@ export function createMember(ctx) {
       wire();
     },
     open(memberId) {
+      if (memberId !== state.memberId) state.recordFilter = 'all';
       return load(memberId);
     },
     reload: () => load(),

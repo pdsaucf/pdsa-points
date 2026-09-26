@@ -613,6 +613,12 @@ const eventRowFor = (title) => {
 const rowTitles = () =>
   dom.$('event-list').querySelectorAll('.event-title').map((node) => node.textContent.trim());
 const todayDivider = () => dom.$('event-list').querySelector('.event-today-divider');
+// A card carries View event and QR; Edit is on the event's own screen.
+async function editFromCard(row) {
+  dom.click(dom.buttonNamed(row, 'View event'));
+  await until(() => !dom.$('event-detail-body').hidden, 'the event did not open for Edit');
+  dom.click(dom.$('event-detail-edit'));
+}
 const pastToggle = () => dom.$('event-list').querySelector('.event-past-toggle');
 const pastRows = () => dom.$('event-list').querySelector('#events-past-list');
 const tabLabels = () =>
@@ -908,7 +914,7 @@ await check('an Events schema drift banner reloads Events without reloading Revi
 initialEventsFailure.restore();
 await until(() => !dom.$('event-list').hidden, 'the events list never rendered after recovery');
 
-await check('Events opens oldest first with Today between past and current events', async () => {
+await check('Events opens on upcoming events, oldest first, with past events folded below', async () => {
   const sort = dom.$('events-sort');
   assert.equal(sort.value, 'date_asc');
   assert.equal(
@@ -927,22 +933,17 @@ await check('Events opens oldest first with Today between past and current event
     'initial rows are not ascending by calendar date',
   );
 
-  const divider = todayDivider();
-  assert.ok(divider, 'Today is missing');
-  assert.equal(divider.textContent.trim(), 'Today');
-  assert.equal(divider.getAttribute('role'), 'separator');
-  assert.equal(divider.getAttribute('aria-label'), 'Today');
-  assert.equal(divider.hasAttribute('tabindex'), false, 'Today is focusable');
-  assert.ok(divider.querySelector('.event-today-dot'), 'Today has no marker');
-  assert.ok(divider.querySelector('.event-today-line'), 'Today has no line');
+  // Upcoming first, so the boundary needs no Today line.
+  assert.equal(todayDivider(), null, 'the grouped list drew a Today line');
 
   const children = dom.$('event-list').children;
-  const at = children.indexOf(divider);
-  assert.ok(children[at - 1].classList.contains('event-past-group'), 'Today does not follow the past group');
+  assert.equal(children[0].querySelector('.event-title').textContent, 'Soap Carving');
+  const last = children[children.length - 1];
+  assert.ok(last.classList.contains('event-past-group'), 'past events are not folded below');
   dom.click(pastToggle());
-  assert.equal(children[at - 1].querySelectorAll('.event-title').at(-1).textContent, 'Give Kids A Smile');
+  // Newest first inside the group: the one nearest today leads.
+  assert.equal(pastRows().querySelectorAll('.event-title')[0].textContent, 'Give Kids A Smile');
   dom.click(pastToggle());
-  assert.equal(children[at + 1].querySelector('.event-title').textContent, 'Soap Carving');
   const rowCount = dom.$('event-list').querySelectorAll('.event-row').length
     - pastRows().querySelectorAll('.event-row').length
     + Number(pastToggle().querySelector('.pill').textContent);
@@ -1051,7 +1052,8 @@ await check('search recomputes Today without server reads', async () => {
 
     search.value = '';
     dom.fire(search, 'input');
-    assert.ok(todayDivider(), 'clearing search did not restore Today');
+    assert.ok(pastToggle(), 'clearing search did not restore the past group');
+    assert.equal(todayDivider(), null, 'clearing search drew a Today line over the grouped list');
 
     const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
     assert.equal(eventReads.length, 0, 'search re-read events from the server');
@@ -1417,7 +1419,7 @@ await check('Location, Attire, Sign-up and Description save and reload with the 
   assert.equal(saved.description, 'What a member reads on the public events page.');
 
   const row = eventRowFor('Verify Public Fields');
-  dom.click(dom.buttonNamed(row, 'Edit'));
+  await editFromCard(row);
   assert.equal(dom.$('event-location').value, 'Student Union 218');
   assert.equal(dom.$('event-attire').value, 'Business casual');
   assert.equal(dom.$('event-signup').value, 'https://forms.example.com/verify-public-fields');
@@ -1661,9 +1663,11 @@ await check('event cards separate headings, status metadata, counts, and actions
     assert.match(view.getAttribute('class') ?? '', /button-primary/);
 
     const qr = dom.buttonNamed(row, 'QR');
-    const edit = dom.buttonNamed(row, 'Edit');
     assert.equal(qr?.getAttribute('aria-label'), `QR code for ${title.textContent}`);
-    assert.equal(edit?.getAttribute('aria-label'), `Edit ${title.textContent}`);
+    // Edit, Publish and Unpublish are on the event's own screen.
+    for (const moved of ['Edit', 'Publish', 'Unpublish']) {
+      assert.equal(dom.buttonNamed(row, moved), null, `${title.textContent} still carries ${moved}`);
+    }
 
     const status = row.querySelector('.event-checkin-status');
     assert.equal(status?.tagName, 'SPAN', 'check-in status is not plain metadata');
@@ -1717,7 +1721,7 @@ await check('ordinary list repainting does not steal focus', () => {
   assert.equal(document.activeElement, search);
 });
 
-await check('card QR has a working Back control and Edit keeps its existing flow', async () => {
+await check('card QR has a working Back control and Edit from the event keeps its flow', async () => {
   let row = eventRowFor('Soap Carving');
   assert.ok(row, 'Soap Carving is not on the list');
   dom.click(dom.buttonNamed(row, 'QR'));
@@ -1730,12 +1734,14 @@ await check('card QR has a working Back control and Edit keeps its existing flow
   assert.equal(dom.$('qr-dialog').open, false, 'Back did not close the QR dialog');
 
   row = eventRowFor('Soap Carving');
-  dom.click(dom.buttonNamed(row, 'Edit'));
+  await editFromCard(row);
   assert.ok(!dom.$('event-form-view').hidden, 'Edit did not open the event form');
   assert.equal(dom.$('event-form-title').textContent, 'Edit event');
   assert.equal(dom.$('event-title').value, 'Soap Carving');
   dom.click(dom.$('event-cancel'));
-  await until(() => !dom.$('event-list').hidden, 'Cancel did not return to the cards');
+  await until(() => !dom.$('event-detail-body').hidden, 'Cancel did not return to the event');
+  dom.click(dom.$('event-detail-back'));
+  await until(() => !dom.$('event-list').hidden, 'Back did not return to the cards');
 });
 
 await check('event cards stack actions with full tap targets on narrow screens', () => {
@@ -1937,7 +1943,7 @@ await check('the order picker reorders the list without re-reading the server', 
 
     sort.value = 'date_asc';
     dom.fire(sort, 'change');
-    assert.ok(todayDivider(), 'Oldest first did not restore Today');
+    assert.ok(pastToggle(), 'Oldest first did not restore the past group');
 
     const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
     assert.equal(eventReads.length, 0, 'sorting sent a request');
@@ -3287,6 +3293,15 @@ await check('an event nobody checked in to can be deleted, and takes its categor
   await openEvent('Verify Deletable Event');
   assert.equal(dom.$('event-detail-delete').disabled, false, 'Delete is not offered on an event with no check-ins');
   dom.click(dom.$('event-detail-delete'));
+
+  // Search must not open over the confirmation: navigating underneath it
+  // would point Delete at whichever event the search opened.
+  const shortcut = new Event('keydown', dom.root);
+  shortcut.key = 'k';
+  shortcut.ctrlKey = true;
+  dom.root.dispatchEvent(shortcut);
+  assert.equal(dom.$('search-dialog').open, false, 'search opened over the delete confirmation');
+
   dom.fire(dom.$('event-delete-form'), 'submit');
   await until(() => !dom.$('event-list').hidden, 'the screen never went back to the list');
   await until(() => !Boolean(eventRowFor('Verify Deletable Event')), 'the event is still on the list');
@@ -3436,10 +3451,11 @@ await check('unmatched visitors stay out of Needs review and can open their even
   const offending = dom.$('flagged-list').querySelector(
     `[data-id="${IDS.RECORD_MISSING_EVIDENCE}"]`,
   );
-  dom.click(dom.buttonNamed(offending, 'View event'));
+  // The event name on the card's metadata line is the way to it.
+  dom.click(offending.querySelector('.card-event'));
   await until(
     () => !dom.$('panel-events').hidden && !dom.$('event-detail-body').hidden,
-    'View event did not open the event detail',
+    'the event link did not open the event detail',
   );
   assert.equal(dom.$('event-detail-title').textContent, 'Soap Carving');
 
@@ -3620,9 +3636,9 @@ await check('Past events builds 5 rows on open, then 10 more at a time, and neve
   assert.equal(built(), 5);
   assert.equal(more().hidden, false);
   assert.equal(more().textContent, 'Show earlier');
-  { const kids = [...more().parentNode.children]; assert.equal(kids.indexOf(more()) + 1, kids.findIndex((n) => n.id === 'events-past-list'), 'Show earlier is not above the rows it adds to'); }
+  { const kids = [...more().parentNode.children]; assert.equal(kids.indexOf(more()) - 1, kids.findIndex((n) => n.id === 'events-past-list'), 'Show earlier is not below the rows it adds to'); }
   assert.ok(more().classList.contains('button'));
-  // The five nearest today, in the list's own order.
+  // The five nearest today, newest first.
   const events = await select('events', {
     select: 'title,occurred_on',
     filters: { academic_year_id: `eq.${IDS.YEAR_CURRENT}` },
@@ -3631,7 +3647,7 @@ await check('Past events builds 5 rows on open, then 10 more at a time, and neve
   const past = sortEvents(events).filter((event) => event.occurred_on < today);
   assert.equal(past.length, total);
   assert.deepEqual(pastRows().querySelectorAll('.event-title').map((n) => n.textContent),
-    past.slice(-5).map((event) => event.title));
+    past.slice(-5).reverse().map((event) => event.title));
   assert.equal(drawnRowFor(past[0].title), null, 'an unrevealed row exists in the DOM');
 
   // A repaint keeps the revealed count.

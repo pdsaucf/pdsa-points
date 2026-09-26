@@ -95,6 +95,9 @@ when the database does not match the static page.
 | `..._event_times_and_portal_attendance.sql` | optional paired actual event times, removal of event Location, and the one-row-per-event public attendance contract |
 | `..._officer_roles.sql` | restores profiles and separates admin writes from officer event management and staff reads |
 | `..._leadership_access.sql` | verified Google identity binding, admin access management and audit, immediate revocation and last-admin protection |
+| `..._rls_role_check_once_per_query.sql` | wraps every policy's role check as `(select fn_is_staff())`, so Postgres evaluates it once per statement instead of once per row. The Members screen had been running past the statement timeout |
+| `..._member_status_requirements_unmet.sql` | `v_member_status.requirements_unmet`, the top-level honorary requirements a member has not met, from the same evaluator call as `is_honorary`. The progress board's "One requirement away" filter reads it |
+| `..._role_check_single_lookup.sql` | `fn_staff_role()`: the shared-admin and Google-profile tests in one statement, so each role predicate is one definer call instead of a chain of three |
 
 The first migration is destructive and deliberately separate so it is
 impossible to apply by accident along with everything else.

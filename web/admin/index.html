@@ -71,18 +71,58 @@
           <button id="tab-roster" type="button" class="tab" aria-selected="false" aria-controls="panel-roster">
             Members
           </button>
-          <button id="tab-requirements" type="button" class="tab" aria-selected="false" aria-controls="panel-requirements">
-            Honorary requirements
-          </button>
-          <button id="tab-storage" type="button" class="tab" aria-selected="false" aria-controls="panel-storage">
-            Storage
-          </button>
-          <button id="tab-access" type="button" class="tab" aria-selected="false" aria-controls="panel-access">Access</button>
+          <!-- Configuration an officer changes a few times a year. It sits
+               behind one menu so the tabs beside it are the daily work. -->
+          <div id="settings-menu" class="menu">
+            <button
+              id="settings-toggle"
+              type="button"
+              class="tab menu-toggle"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-controls="settings-list"
+            >
+              Settings
+            </button>
+            <div id="settings-list" class="menu-list" hidden>
+              <button id="tab-requirements" type="button" class="menu-item" aria-selected="false" aria-controls="panel-requirements">
+                Honorary requirements
+              </button>
+              <button id="tab-categories" type="button" class="menu-item" aria-selected="false" aria-controls="panel-categories">
+                Event settings
+              </button>
+              <button id="tab-storage" type="button" class="menu-item" aria-selected="false" aria-controls="panel-storage">
+                Storage
+              </button>
+              <button id="tab-access" type="button" class="menu-item" aria-selected="false" aria-controls="panel-access">
+                Access
+              </button>
+            </div>
+          </div>
         </nav>
 
         <div class="topbar-right">
-          <span id="who" class="muted small"></span>
-          <button id="signout" type="button" class="button button-quiet">Sign out</button>
+          <button id="search-open" type="button" class="search-trigger" aria-keyshortcuts="Meta+K Control+K">
+            <span>Search</span>
+            <kbd id="search-shortcut">Ctrl K</kbd>
+          </button>
+          <div class="menu menu-end">
+            <button
+              id="account-toggle"
+              type="button"
+              class="account-toggle"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-controls="account-list"
+            >
+              <span id="account-initial" aria-hidden="true"></span>
+              <span class="visually-hidden">Account</span>
+            </button>
+            <div id="account-list" class="menu-list" hidden>
+              <p id="who" class="menu-note"></p>
+              <button id="signout" type="button" class="menu-item">Sign out</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -139,19 +179,6 @@
           <button id="event-new" type="button" class="button button-primary">New event</button>
         </div>
 
-        <!--
-          The Monday drop, global. Not per event: docs/05-events-page.md says
-          an exemptible fairness rule is not one, so this is the one place
-          app_settings.events_auto_publish is read or written.
-        -->
-        <div id="events-auto-publish" class="events-auto-publish">
-          <label class="event-checkbox">
-            <input id="events-auto-publish-toggle" type="checkbox" />
-            Publish queued events automatically
-          </label>
-          <p id="events-auto-publish-note" class="muted small"></p>
-        </div>
-
         <!-- One tab per category this year's events actually use, built from
              the events themselves rather than from the category table: a tab
              that filters to nothing teaches an officer nothing. -->
@@ -184,9 +211,23 @@
             <button id="event-detail-qr" type="button" class="button">QR</button>
             <button id="event-detail-preview" type="button" class="button">Preview check-in</button>
             <button id="event-detail-edit" type="button" class="button">Edit</button>
-            <button id="event-detail-duplicate" type="button" class="button">Duplicate</button>
             <button id="event-detail-publish" type="button" class="button">Publish</button>
-            <button id="event-detail-delete" type="button" class="button button-danger">Delete</button>
+            <div class="menu menu-end">
+              <button
+                id="event-detail-more"
+                type="button"
+                class="button"
+                aria-haspopup="true"
+                aria-expanded="false"
+                aria-controls="event-detail-more-list"
+              >
+                More
+              </button>
+              <div id="event-detail-more-list" class="menu-list" hidden>
+                <button id="event-detail-duplicate" type="button" class="menu-item">Duplicate</button>
+                <button id="event-detail-delete" type="button" class="menu-item menu-item-danger">Delete</button>
+              </div>
+            </div>
           </div>
 
           <section id="loading-event-detail" class="empty" aria-busy="true">
@@ -197,13 +238,15 @@
           <div id="event-detail-body" hidden>
             <header class="event-detail-head">
               <h2 id="event-detail-title" class="member-name"></h2>
+              <!-- Date, check-in and publish state on one line: three facts an
+                   officer reads together, spaced rather than stacked. -->
               <p class="event-detail-line">
                 <span id="event-detail-meta" class="muted small"></span>
                 <span id="event-detail-status" class="event-status"></span>
+                <span id="event-detail-window" class="muted small"></span>
+                <span id="event-detail-publish-status" class="event-publish-status"></span>
               </p>
-              <p id="event-detail-publish-status" class="event-publish-status"></p>
               <div id="event-detail-chips" class="chip-row"></div>
-              <p id="event-detail-window" class="muted small"></p>
             </header>
 
             <div id="event-detail-stats" class="event-stats"></div>
@@ -330,6 +373,12 @@
           <p id="pending-count" class="count" aria-live="polite"></p>
           <button id="refresh" type="button" class="button">Refresh</button>
         </div>
+        <p class="shortcuts">
+          <span><kbd>J</kbd> and <kbd>K</kbd> move</span>
+          <span><kbd>A</kbd> approve</span>
+          <span><kbd>R</kbd> decline</span>
+          <span><kbd>Esc</kbd> closes</span>
+        </p>
 
         <section id="loading-review" class="empty" aria-busy="true">
           <p class="spinner" aria-hidden="true"></p>
@@ -373,13 +422,6 @@
           <div id="unmatched-list" class="flagged-list quiet-list"></div>
         </details>
 
-        <p class="shortcuts">
-          <span>Click a photo to enlarge</span>
-          <span><kbd>J</kbd> and <kbd>K</kbd> move</span>
-          <span><kbd>A</kbd> approve</span>
-          <span><kbd>R</kbd> decline</span>
-          <span><kbd>Esc</kbd> closes</span>
-        </p>
       </main>
 
       <!--
@@ -519,6 +561,7 @@
           <p id="member-records-count" class="count"></p>
           <button id="member-edit" type="button" class="button">Edit</button>
           <button id="member-add-record" type="button" class="button">Add record</button>
+          <button id="member-remove" type="button" class="button" hidden>Remove</button>
         </div>
 
         <section id="loading-member" class="empty" aria-busy="true">
@@ -535,6 +578,7 @@
               <span class="muted small">points</span>
               <span id="member-honorary" class="member-badge" hidden>★ Honorary</span>
             </p>
+            <p id="member-needs" class="member-needs" hidden></p>
           </header>
 
           <div class="member-columns">
@@ -551,7 +595,10 @@
           </div>
 
           <section class="member-block" aria-labelledby="member-records-title">
-            <h3 id="member-records-title" class="zone-title">Records</h3>
+            <div class="member-records-head">
+              <h3 id="member-records-title" class="zone-title">Records</h3>
+              <div id="member-records-filter" class="filter-tabs" role="group" aria-label="Status" hidden></div>
+            </div>
             <table class="board board-plain">
               <thead>
                 <tr>
@@ -560,7 +607,6 @@
                   <th scope="col">Credit</th>
                   <th scope="col">Source</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Decided by</th>
                 </tr>
               </thead>
               <tbody id="member-records"></tbody>
@@ -647,9 +693,29 @@
           <button id="start-draft" type="button" class="button button-primary">Start a draft</button>
         </section>
 
+      </main>
+
+      <!-- Event settings: the Monday release and the category list, the two
+           things every event reads that no single event owns. -->
+      <main id="panel-categories" class="panel-view settings-view" hidden>
+        <!--
+          The Monday drop, global. Not per event: docs/05-events-page.md says
+          an exemptible fairness rule is not one, so this is the one place
+          app_settings.events_auto_publish is read or written.
+        -->
+        <section class="settings-block" aria-labelledby="publishing-title">
+          <h2 id="publishing-title" class="section-title">Publishing</h2>
+          <div id="events-auto-publish" class="events-auto-publish">
+            <label class="event-checkbox">
+              <input id="events-auto-publish-toggle" type="checkbox" />
+              Publish queued events automatically
+            </label>
+            <p id="events-auto-publish-note" class="muted small"></p>
+          </div>
+        </section>
+
       <!--
-        Categories sit in the same workspace as the requirements they feed.
-        They archive, so every
+        Categories archive, so every
         reference from a rule or an event stays resolvable (invariant 4).
         Delete is offered too, but only when nothing references the category
         at all, in which case nothing is left to dangle: see the header of
@@ -771,6 +837,24 @@
     </div>
 
     <!-- Rejection always captures a reason. -->
+    <!-- One box that finds a member or an event from any screen. -->
+    <dialog id="search-dialog" class="dialog search-dialog" aria-labelledby="search-label">
+      <label id="search-label" class="visually-hidden" for="search-input">Search members and events</label>
+      <input
+        id="search-input"
+        class="input search-input"
+        type="search"
+        autocomplete="off"
+        placeholder="Member or event"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="search-results"
+        aria-autocomplete="list"
+      />
+      <ul id="search-results" class="search-results" role="listbox" aria-label="Results"></ul>
+      <p id="search-empty" class="muted small search-empty" hidden>No matches</p>
+    </dialog>
+
     <!--
       novalidate on both dialogs, so the message an officer reads is the one
       written for this screen rather than the browser's own bubble. `required`

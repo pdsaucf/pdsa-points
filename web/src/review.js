@@ -478,7 +478,16 @@ export function createReview(ctx) {
         record.member_id
           ? h('span', { class: 'card-who' }, nameOf(record))
           : h('span', { class: 'card-said' }, `"${record.claimed_name ?? ''}"`),
-        eventLabel(record),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'card-event',
+            title: 'View event',
+            onClick: () => ctx.openEvent?.(record.event_id),
+          },
+          eventLabel(record),
+        ),
         clockTime(record.submitted_at),
         valueLabel(record),
         // The "Requested by member" heading already says where it came from.
@@ -540,7 +549,11 @@ export function createReview(ctx) {
       );
     }
 
-    card.append(main, h('div', { class: 'card-side' }, thumbFor(record)));
+    // No side column when there is no photo and none was sent: the headline
+    // already says "Photo missing" where that matters.
+    const thumb = thumbFor(record);
+    card.append(main);
+    if (thumb) card.append(h('div', { class: 'card-side' }, thumb));
 
     if (flags.includes('unmatched_name')) card.append(renderSuggestions(record));
 
@@ -554,11 +567,8 @@ export function createReview(ctx) {
   function thumbFor(record) {
     const url = photoUrl(record);
     if (!url) {
-      return h(
-        'p',
-        { class: 'thumb-missing' },
-        (record.attendance_evidence ?? []).length ? 'Photo unavailable' : 'No photo',
-      );
+      if (!(record.attendance_evidence ?? []).length) return null;
+      return h('p', { class: 'thumb-missing' }, 'Photo unavailable');
     }
     return h('img', {
       class: 'thumb',
@@ -665,13 +675,12 @@ export function createReview(ctx) {
         label,
       );
 
-    row.append(button('View event', '', () => ctx.openEvent?.(record.event_id)));
-
+    // The decision first, then anything that helps make it. The event is a
+    // link on the metadata line above.
     for (const action of actions) {
       if (action === 'resolve') continue; // the suggestion row above is the control
-      if (action === 'compare') {
-        row.append(button('Compare photos', '', () => openComparison(record)));
-      } else if (action === 'enroll') {
+      if (action === 'compare') continue; // appended last, below
+      if (action === 'enroll') {
         row.append(
           button('Enroll and approve', 'button-primary', () => enrollAndApprove(record)),
         );
@@ -684,6 +693,9 @@ export function createReview(ctx) {
       } else if (action === 'reject') {
         row.append(button('Decline', 'button-danger', () => rejectWithReason([record])));
       }
+    }
+    if (actions.includes('compare')) {
+      row.append(button('Compare photos', '', () => openComparison(record)));
     }
 
     return row;

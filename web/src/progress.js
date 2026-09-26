@@ -28,6 +28,10 @@
 // tell an officer something the rules do not say. Those columns show the number
 // and no target. The member detail screen asks
 // fn_member_requirement_status() for the authoritative per-requirement verdict.
+//
+//   requirements_unmet   read from v_member_status, from the same evaluator
+//                        call as is_honorary. "One requirement away" filters
+//                        on it; nothing here counts requirements itself.
 
 import { select } from './rest.js';
 import { csvFilename, downloadCsv } from './csv.js';
@@ -36,6 +40,7 @@ import { $, h, announce, setHidden, plural } from './ui.js';
 const HONORARY_FILTERS = {
   all: 'Everyone',
   honorary: 'Honorary only',
+  close: 'One requirement away',
   not_honorary: 'Not honorary yet',
 };
 
@@ -61,6 +66,10 @@ export function createProgress(ctx) {
     totals: new Map(), // `${member_id}:${category_id}` -> total
     query: '',
     filter: 'all',
+    // Which column the rows are ordered by: 'name', 'points', 'honorary' or a
+    // category id. Numbers sort high to low first, the name A to Z.
+    sortKey: 'name',
+    sortDir: 'asc',
     loaded: false,
   };
 
@@ -94,7 +103,7 @@ export function createProgress(ctx) {
           },
         }),
         select('v_member_status', {
-          select: 'member_id,point_total,is_honorary',
+          select: 'member_id,point_total,is_honorary,requirements_unmet',
           filters: { academic_year_id: `eq.${yearId}` },
         }),
         select('v_member_category_totals', {
@@ -104,10 +113,13 @@ export function createProgress(ctx) {
         loadTargets(yearId),
       ]);
 
-      // A retired category still holds last year's credit, so it earns a column
-      // only when somebody on this year's board actually has a number in it.
+      // A column is a category this year's published rules measure, or one
+      // somebody on this year's board actually has credit in. A category
+      // nobody used and no rule reads would be a column of blanks.
       const used = new Set(totals.map((row) => row.category_id));
-      state.categories = categories.filter((row) => !row.archived_at || used.has(row.id));
+      state.categories = categories.filter(
+        (row) => used.has(row.id) || targets.measured.has(row.id),
+      );
 
       state.members = enrollments
         .map((row) => row.members)
@@ -117,7 +129,11 @@ export function createProgress(ctx) {
       state.status = new Map(
         status.map((row) => [
           row.member_id,
-          { point_total: Number(row.point_total ?? 0), is_honorary: Boolean(row.is_honorary) },
+          {
+            point_total: Number(row.point_total ?? 0),
+            is_honorary: Boolean(row.is_honorary),
+            requirements_unmet: row.requirements_unmet ?? null,
+          },
         ]),
       );
 
@@ -125,7 +141,7 @@ export function createProgress(ctx) {
         totals.map((row) => [`${row.member_id}:${row.category_id}`, Number(row.total ?? 0)]),
       );
 
-      state.targets = targets;
+      state.targets = targets.byCategory;
       state.loaded = true;
       render();
     } catch (err) {
@@ -150,20 +166,22 @@ export function createProgress(ctx) {
       limit: 1,
     });
     const set = sets[0];
-    if (!set) return new Map();
+    if (!set) return { byCategory: new Map(), measured: new Set() };
 
     const rows = await select('requirement_nodes', {
       select: 'id,type,min_value,requirement_node_categories(category_id)',
       filters: { requirement_set_id: `eq.${set.id}`, type: 'eq.threshold' },
     });
 
-    const targets = new Map();
+    const byCategory = new Map();
+    const measured = new Set();
     for (const row of rows) {
       const links = row.requirement_node_categories ?? [];
+      for (const link of links) measured.add(link.category_id);
       if (links.length !== 1) continue;
-      targets.set(links[0].category_id, Number(row.min_value));
+      byCategory.set(links[0].category_id, Number(row.min_value));
     }
-    return targets;
+    return { byCategory, measured };
   }
 
   // -------------------------------------------------------------------------
@@ -172,13 +190,46 @@ export function createProgress(ctx) {
 
   function visibleMembers() {
     const query = state.query.trim().toLowerCase();
-    return state.members.filter((member) => {
+    const rows = state.members.filter((member) => {
       if (query && !member.display_name.toLowerCase().includes(query)) return false;
-      const honorary = state.status.get(member.id)?.is_honorary ?? false;
+      const status = state.status.get(member.id);
+      const honorary = status?.is_honorary ?? false;
       if (state.filter === 'honorary' && !honorary) return false;
       if (state.filter === 'not_honorary' && honorary) return false;
+      if (state.filter === 'close' && status?.requirements_unmet !== 1) return false;
       return true;
     });
+    return sortRows(rows);
+  }
+
+  function sortValue(member) {
+    const status = state.status.get(member.id);
+    if (state.sortKey === 'points') return status?.point_total ?? 0;
+    if (state.sortKey === 'honorary') return status?.is_honorary ? 1 : 0;
+    return totalFor(member.id, state.sortKey);
+  }
+
+  function sortRows(rows) {
+    if (state.sortKey === 'name') {
+      return state.sortDir === 'asc' ? rows : [...rows].reverse();
+    }
+    const sign = state.sortDir === 'asc' ? 1 : -1;
+    // Ties keep A to Z, the order the rows arrived in.
+    return rows
+      .map((member, index) => ({ member, index, value: sortValue(member) }))
+      .sort((a, b) => sign * (a.value - b.value) || a.index - b.index)
+      .map((row) => row.member);
+  }
+
+  function sortBy(key) {
+    if (state.sortKey === key) {
+      state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.sortKey = key;
+      state.sortDir = key === 'name' ? 'asc' : 'desc';
+    }
+    render();
+    el.table.querySelector(`[data-sort="${CSS.escape(key)}"]`)?.focus();
   }
 
   const totalFor = (memberId, categoryId) => state.totals.get(`${memberId}:${categoryId}`) ?? 0;
@@ -217,16 +268,41 @@ export function createProgress(ctx) {
     el.table.replaceChildren(head(), body(rows));
   }
 
+  /** A column heading that orders the rows by that column when pressed. */
+  function sortHeading(key, label, className) {
+    const active = state.sortKey === key;
+    return h(
+      'th',
+      {
+        class: className,
+        scope: 'col',
+        'aria-sort': active ? (state.sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
+      },
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'board-sort',
+          dataset: { sort: key, active: String(active), dir: state.sortDir },
+          onClick: () => sortBy(key),
+        },
+        // The arrow is drawn by CSS from data-dir, so the heading's text stays
+        // the column's name; aria-sort carries the direction.
+        label,
+      ),
+    );
+  }
+
   function head() {
     const names = h(
       'tr',
       {},
-      h('th', { class: 'board-name-cell', scope: 'col' }, 'Member'),
-      h('th', { class: 'board-number', scope: 'col' }, 'Points'),
+      sortHeading('name', 'Member', 'board-name-cell'),
+      sortHeading('points', 'Points', 'board-number'),
       ...state.categories.map((category) =>
-        h('th', { class: 'board-number', scope: 'col' }, category.name),
+        sortHeading(category.id, category.name, 'board-number'),
       ),
-      h('th', { class: 'board-number', scope: 'col' }, 'Honorary'),
+      sortHeading('honorary', 'Honorary', 'board-number'),
     );
 
     // The threshold strip. Empty under Points, because the point total is not
@@ -295,10 +371,12 @@ export function createProgress(ctx) {
     const target = state.targets.get(category.id);
     const met = target !== undefined && total >= target;
 
+    // A zero is left blank so the numbers that are there stand out. A zero
+    // that meets a zero target still gets its tick.
     return h(
       'td',
       { class: 'board-number', dataset: { met: String(met) } },
-      h('span', { class: 'board-value' }, number(total)),
+      h('span', { class: 'board-value' }, total === 0 && !met ? '' : number(total)),
       met ? h('span', { class: 'board-tick', 'aria-label': 'Met' }, '✓') : null,
     );
   }

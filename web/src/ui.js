@@ -139,3 +139,59 @@ export function clockTime(isoTimestamp) {
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
+
+/**
+ * A button that opens a short list of buttons under it. Choosing an item,
+ * pressing Escape or clicking anywhere else closes it. The items are ordinary
+ * buttons with their own listeners; this only shows and hides the list.
+ */
+export function wireMenu(toggle, list) {
+  const items = () => [...list.querySelectorAll('.menu-item:not([hidden])')];
+  const isOpen = () => !list.hidden;
+
+  function close({ focusToggle = false } = {}) {
+    if (!isOpen()) return;
+    list.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+    if (focusToggle) toggle.focus();
+  }
+
+  function open() {
+    list.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+  }
+
+  toggle.addEventListener('click', () => {
+    if (isOpen()) close();
+    else {
+      open();
+      items()[0]?.focus();
+    }
+  });
+
+  list.addEventListener('click', (event) => {
+    if (event.target.closest('.menu-item')) close();
+  });
+
+  list.addEventListener('keydown', (event) => {
+    const all = items();
+    const index = all.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      all[(index + 1) % all.length]?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      all[(index - 1 + all.length) % all.length]?.focus();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isOpen()) close({ focusToggle: true });
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!toggle.contains(event.target) && !list.contains(event.target)) close();
+  });
+
+  return { close };
+}

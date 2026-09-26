@@ -707,9 +707,10 @@ await check('Export CSV carries exactly what is on screen, in the order it is on
     assert.equal(line[0], node.querySelectorAll('th')[0].textContent.trim(), 'the order differs');
     assert.equal(line[1], cells[0].textContent.trim(), `${line[0]} exported a different point total`);
     for (let i = 1; i < cells.length - 1; i += 1) {
+      // The board leaves a zero blank; the spreadsheet carries the 0.
       assert.equal(
         line[1 + i],
-        cells[i].querySelector('.board-value').textContent.trim(),
+        cells[i].querySelector('.board-value').textContent.trim() || '0',
         `${line[0]} exported a different figure in column ${i}`,
       );
     }
@@ -793,13 +794,13 @@ await check('the checklist is the requirement engine, not a second opinion', asy
   assert.equal(root.passed, Boolean(status.is_honorary));
 });
 
-await check('the record log says what it was for, where it came from and who decided it', () => {
+await check('the record log says what it was for, where it came from and its status', () => {
   const rows = dom.$('member-records').querySelectorAll('tr');
   assert.ok(rows.length > 2, `only ${rows.length} records`);
 
   for (const row of rows) {
     const cells = row.querySelectorAll('td');
-    assert.equal(cells.length, 6);
+    assert.equal(cells.length, 5);
     assert.ok(cells[0].textContent.trim(), 'a record with no event on it');
     assert.ok(cells[1].textContent.trim(), 'a record with no date on it');
     assert.match(cells[3].textContent.trim(), /Scanned|Added by an officer|Imported|Member portal/);
@@ -811,6 +812,24 @@ await check('the record log says what it was for, where it came from and who dec
   assert.ok(declined, 'the fixture no longer has a declined record for this member');
   assert.match(declined.textContent, /Declined/);
   assert.match(declined.textContent, /car park/);
+});
+
+await check('Add record never opens for a member the screen has left', async () => {
+  // The first Add record loads the event list before the dialog opens. Moving
+  // to somebody else in that gap must not open the dialog for them.
+  const boardName = (name) =>
+    dom.$('progress-table').querySelectorAll('.board-name').find((node) => node.textContent.trim() === name);
+  dom.click(dom.$('member-add-record'));
+  dom.click(boardName('Abby Catto'));
+  await until(() => dom.$('member-name').textContent.trim() === 'Abby Catto', 'the second member never opened');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(dom.$('record-dialog').open, false, 'Add record opened for a member nobody pressed it for');
+
+  dom.click(boardName('Aaron Ozan'));
+  await until(
+    () => !dom.$('member-body').hidden && dom.$('member-name').textContent.trim() === 'Aaron Ozan',
+    'Aaron Ozan never came back',
+  );
 });
 
 await check('an officer adds a record by hand, and it goes through the same approval', async () => {

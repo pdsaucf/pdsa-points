@@ -509,7 +509,7 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1.25rem;
-  margin: 2rem 0 0;
+  margin: -0.25rem 0 1rem;
   color: var(--ink-muted);
   font-size: 0.8125rem;
 }
@@ -2826,4 +2826,304 @@ kbd {
 .event-past-more {
   justify-self: start;
   margin: 0.75rem 0;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Menus: Settings, the account, and More on an event                          */
+/* --------------------------------------------------------------------------- */
+
+.menu {
+  position: relative;
+}
+
+.menu-toggle::after {
+  content: '';
+  width: 0.4rem;
+  height: 0.4rem;
+  margin: -0.2rem 0 0 0.15rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+}
+
+/* A settings screen is open: the menu that leads to it reads as the tab. */
+.menu-toggle[data-active='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.menu-list {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 13rem;
+  padding: 0.375rem;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow), 0 12px 28px rgba(42, 39, 33, 0.12);
+}
+
+.menu-list[hidden] {
+  display: none;
+}
+
+.menu-end .menu-list {
+  right: 0;
+  left: auto;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-item:hover:not([disabled]),
+.menu-item:focus-visible {
+  background: var(--surface-sunken);
+}
+
+.menu-item[aria-selected='true'] {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.menu-item[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menu-item-danger:not([disabled]) {
+  color: var(--danger);
+}
+
+.menu-note {
+  margin: 0;
+  padding: 0.375rem 0.75rem 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.25rem;
+}
+
+.account-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  font: inherit;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.account-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------- */
+/* Search                                                                      */
+/* --------------------------------------------------------------------------- */
+
+.search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.375rem 0.25rem 0.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.search-trigger:hover {
+  border-color: var(--line-strong);
+}
+
+.search-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  margin-top: 12vh;
+  padding: 0.5rem;
+}
+
+.search-input {
+  font-size: 1rem;
+}
+
+.search-results {
+  margin: 0.375rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-results:empty {
+  display: none;
+}
+
+.search-result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.search-result:hover,
+.search-result[aria-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.search-result-label {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.search-result-kind {
+  flex-shrink: 0;
+}
+
+.search-empty {
+  margin: 0.5rem 0.75rem 0.25rem;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Rows that open on click                                                     */
+/* --------------------------------------------------------------------------- */
+
+.event-row {
+  cursor: pointer;
+}
+
+.event-row:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.roster-row {
+  cursor: pointer;
+}
+
+.card-event {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------- */
+/* The progress board's sortable headings                                      */
+/* --------------------------------------------------------------------------- */
+
+.board-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.board-sort:hover,
+.board-sort[data-active='true'] {
+  color: var(--accent);
+}
+
+.board-sort[data-active='true']::after {
+  content: '\2193';
+}
+
+.board-sort[data-active='true'][data-dir='asc']::after {
+  content: '\2191';
+}
+
+/* --------------------------------------------------------------------------- */
+/* Member page                                                                 */
+/* --------------------------------------------------------------------------- */
+
+.member-needs {
+  margin: 0.375rem 0 0;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.member-records-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.member-records-head .zone-title {
+  margin: 0;
+}
+
+.member-records-head .filter-tabs {
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Event settings                                                              */
+/* --------------------------------------------------------------------------- */
+
+.settings-block > .section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 46rem) {
+  /* The tab row scrolls sideways here, and a scrolling box clips anything
+     absolutely positioned inside it. Fixed escapes the clip; with top left
+     at auto the list still opens right under Settings. */
+  .tabs .menu-list {
+    position: fixed;
+    top: auto;
+    left: 1rem;
+    right: 1rem;
+    margin-top: 0.375rem;
+  }
+
+  .search-trigger {
+    gap: 0.5rem;
+  }
+
+  .search-trigger kbd {
+    display: none;
+  }
 }

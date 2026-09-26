@@ -127,6 +127,10 @@ function isTransportRetryable(err) {
     // seconds to appear. PDS09 is checked before this and is the one PDS code
     // that does get repeated.
     if (typeof err.code === 'string' && err.code.startsWith('PDS')) return false;
+    // 57014 is Postgres cancelling a statement that ran past its timeout. The
+    // same query sent again takes just as long, so four tries only made the
+    // officer wait four timeouts, and loaded the database while they did.
+    if (err.code === '57014') return false;
     if (err.status === 408 || err.status === 425) return true;
     if (err.status >= 500) return true;
   }

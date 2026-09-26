@@ -183,6 +183,6 @@ Breaking any of these reintroduces a problem the design exists to solve:
 
 ## Review workflow
 
-Per the global CLAUDE.md: write the code directly in the main session, without spawning
-orchestrator or implementer agents, then run a Codex adversarial review of the change.
+Per the global CLAUDE.md: write the code directly in the main session, no subagents,
+then run a Codex adversarial review of the change.
 Fix P0 and P1 findings; log the rest.

@@ -131,14 +131,18 @@ await check('no em dash in anything this screen is made of', () => {
   }
 });
 
-await check('requirements and event categories share one Honorary requirements tab', () => {
+await check('event categories have their own settings screen beside the requirements', () => {
   assert.match(adminHtml, /id="tab-requirements"[^>]*>[\s\S]*?Honorary requirements/);
-  assert.doesNotMatch(adminHtml, /id="tab-categories"|id="panel-categories"/);
+  assert.match(adminHtml, /id="tab-categories"[^>]*>[\s\S]*?Event settings/);
 
-  const panel = adminHtml.match(/<main id="panel-requirements"[\s\S]*?<\/main>/)?.[0] ?? '';
-  assert.match(panel, /id="rule-tree"/);
-  assert.match(panel, /id="category-manager"/);
-  assert.match(panel, /id="category-form"/);
+  const requirements = adminHtml.match(/<main id="panel-requirements"[\s\S]*?<\/main>/)?.[0] ?? '';
+  assert.match(requirements, /id="rule-tree"/);
+  assert.doesNotMatch(requirements, /id="category-manager"/);
+
+  const categories = adminHtml.match(/<main id="panel-categories"[\s\S]*?<\/main>/)?.[0] ?? '';
+  assert.match(categories, /id="category-manager"/);
+  assert.match(categories, /id="category-form"/);
+  assert.match(categories, /id="events-auto-publish-toggle"/);
 });
 
 await check('the redundant root pass-mode control is gone', () => {
@@ -859,20 +863,15 @@ globalThis.window = {
 const { start } = await import('../src/admin.js');
 start();
 
-await check('published requirements render above the category manager', async () => {
+await check('published requirements render on their own settings screen', async () => {
   await until(() => !dom.$('view-app').hidden, 'the admin shell never opened');
   dom.click(dom.$('tab-requirements'));
   await until(() => !dom.$('requirements-body').hidden, 'the requirement rows stayed hidden');
 
-  const tree = dom.$('rule-tree');
-  const rows = tree.querySelectorAll('.rule-row');
-  assert.ok(rows.length > 0, 'the combined workspace rendered no requirements');
-  const panelChildren = dom.$('panel-requirements').childNodes;
-  assert.ok(
-    panelChildren.indexOf(dom.$('requirements-body')) <
-      panelChildren.indexOf(dom.$('category-manager')),
-    'event categories were not placed after the requirements',
-  );
+  const rows = dom.$('rule-tree').querySelectorAll('.rule-row');
+  assert.ok(rows.length > 0, 'the requirements screen rendered no requirements');
+  assert.equal(dom.$('panel-categories').hidden, true, 'event settings showed under the requirements');
+  assert.equal(dom.$('settings-toggle').dataset.active, 'true', 'Settings did not read as the open tab');
 });
 
 await check('Writing visibly accepts PDSA Post or Media Writing', () => {

@@ -261,7 +261,9 @@ export function createRequirements(ctx) {
     setHidden(el.copyRun, others.length === 0);
     if (others.length) {
       el.copyFrom.replaceChildren(
-        ...others.map((entry) => h('option', { value: entry.set.id }, entry.year.label)),
+        // "From 2025-2026", so this reads as the source of the Copy beside it
+        // and not as a second year selector next to the one in the top bar.
+        ...others.map((entry) => h('option', { value: entry.set.id }, `From ${entry.year.label}`)),
       );
     }
 

@@ -11,14 +11,16 @@ import { createRoster } from './roster.js';
 import { createMember } from './member.js';
 import { createAccess } from './access.js';
 import { createStorage } from './storage.js';
-import { $, h, announce, setHidden } from './ui.js';
+import { createSearch } from './search.js';
+import { $, h, announce, setHidden, wireMenu } from './ui.js';
 import { installButtonIcons } from './icons.js';
 
-// The six panels, in tab order. Each one is mounted once and reloaded when
-// the year changes, so switching tabs costs nothing. Events is first: it is
-// where an officer's day starts (make the event, print the code), and the
-// app lands on it (see start()).
-const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'storage', 'access'];
+// The panels, in tab order. Each one is mounted once and reloaded when the
+// year changes, so switching tabs costs nothing. Events is first: it is where
+// an officer's day starts (make the event, print the code), and the app lands
+// on it (see start()). The last four sit behind the Settings menu.
+const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage', 'access'];
+const SETTINGS_TABS = ['requirements', 'categories', 'storage', 'access'];
 
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
@@ -258,6 +260,9 @@ function context(panelName) {
     setReviewCount: (count) => setCount(el.tabReviewCount, count),
     openMember,
     closeMember,
+    // The member page's Remove. The dialog and the write belong to the
+    // roster, which is also what has to reload afterwards.
+    removeFromYear: (member, onRemoved) => app.roster?.askRemove(member, { onRemoved }),
     // An event's own screen sends an officer here for the one record it
     // cannot decide: a check-in with no member linked. The queue is where the
     // roster suggestions are, so this opens it already narrowed to that event
@@ -317,6 +322,7 @@ function showPanel(name) {
   for (const tab of TABS) {
     el.tabs[tab].setAttribute('aria-selected', String(tab === name));
   }
+  el.settingsToggle.dataset.active = String(SETTINGS_TABS.includes(name));
 }
 
 function selectTab(tab) {
@@ -341,7 +347,9 @@ function closeMember() {
 function startApp() {
   showView('app');
 
-  el.who.textContent = app.session.user.email || 'Signed in';
+  const email = app.session.user.email || '';
+  el.who.textContent = email || 'Signed in';
+  el.accountInitial.textContent = (email.trim()[0] ?? '?').toUpperCase();
 
   el.yearSelect.replaceChildren(
     ...app.years.map((year) => h('option', { value: year.id }, year.label)),
@@ -352,9 +360,21 @@ function startApp() {
   app.progress = createProgress(context('progress'));
   app.roster = createRoster(context('roster'));
   app.member = createMember(context('member'));
-  for (const name of ['review', 'requirements', 'storage', 'access']) {
+  for (const name of ['review', ...SETTINGS_TABS]) {
     setHidden(el.tabs[name], app.role !== 'admin');
   }
+  setHidden(el.settingsMenu, app.role !== 'admin');
+  createSearch({
+    get year() {
+      return app.year;
+    },
+    openMember,
+    openEvent: (eventId) => {
+      selectTab('events');
+      app.events?.open(eventId);
+    },
+    fail: (err, retry) => fail(err, retry, { panel: 'Search' }),
+  }).mount();
   if (app.role === 'admin') {
     app.review = createReview(context('review'));
     app.requirements = createRequirements(context('requirements'));
@@ -398,6 +418,7 @@ function cacheElements() {
       progress: $('tab-progress'),
       roster: $('tab-roster'),
       requirements: $('tab-requirements'),
+      categories: $('tab-categories'),
       storage: $('tab-storage'),
       access: $('tab-access'),
     },
@@ -407,11 +428,18 @@ function cacheElements() {
       progress: $('panel-progress'),
       roster: $('panel-roster'),
       requirements: $('panel-requirements'),
+      categories: $('panel-categories'),
       storage: $('panel-storage'),
       access: $('panel-access'),
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),
+    settingsMenu: $('settings-menu'),
+    settingsToggle: $('settings-toggle'),
+    settingsList: $('settings-list'),
+    accountToggle: $('account-toggle'),
+    accountList: $('account-list'),
+    accountInitial: $('account-initial'),
     who: $('who'),
     signout: $('signout'),
 
@@ -447,6 +475,8 @@ function wire() {
   for (const name of TABS) {
     el.tabs[name].addEventListener('click', () => selectTab(name));
   }
+  wireMenu(el.settingsToggle, el.settingsList);
+  wireMenu(el.accountToggle, el.accountList);
 
   el.yearSelect.addEventListener('change', () => {
     const year = app.years.find((y) => y.id === el.yearSelect.value);

@@ -49,7 +49,7 @@ import {
   sortAttendees,
   typedValueCategory,
 } from './events-model.js';
-import { $, h, announce, setHidden, plural, shortDate, clockTime } from './ui.js';
+import { $, h, announce, setHidden, plural, shortDate, clockTime, wireMenu } from './ui.js';
 import { isMemberEnteredValue } from './flags.js';
 
 const RECORD_SELECT = [
@@ -273,6 +273,8 @@ export function createEventDetail(ctx, host) {
     duplicate: $('event-detail-duplicate'),
     publish: $('event-detail-publish'),
     remove: $('event-detail-delete'),
+    more: $('event-detail-more'),
+    moreList: $('event-detail-more-list'),
 
     stats: $('event-detail-stats'),
     sources: $('event-detail-sources'),
@@ -321,6 +323,8 @@ export function createEventDetail(ctx, host) {
     // captured token before it paints anything. Same guard member.js keeps.
     loadToken: 0,
     busy: false,
+    // The event a Delete confirmation was opened for. See confirmDelete().
+    deleteId: null,
     // A mutation committed but its authoritative re-read failed. The old DOM
     // remains disabled until a later open() proves current state and clears
     // this lock, so stale buttons cannot repeat the completed mutation.
@@ -423,7 +427,7 @@ export function createEventDetail(ctx, host) {
     el.title.textContent = event.title ?? '';
 
     const status = eventStatus(event.checkin_closes_at);
-    el.status.textContent = status;
+    el.status.textContent = `Check-in ${status.toLowerCase()}`;
     el.status.dataset.status = status.toLowerCase();
 
     el.meta.textContent = shortDate(event.occurred_on);
@@ -460,11 +464,11 @@ export function createEventDetail(ctx, host) {
         : [h('span', { class: 'muted small' }, 'No categories')]),
     );
 
-    el.window.textContent = event.checkin_closes_at
-      ? `Check-in closes ${shortDate(event.checkin_closes_at.slice(0, 10))} ${clockTime(
-          event.checkin_closes_at,
-        )}`
-      : 'Check-in has no close time';
+    // Read after the chip beside it: "Check-in open until Oct 26, 7:35 PM".
+    const closes = event.checkin_closes_at
+      ? `${shortDate(event.checkin_closes_at.slice(0, 10))}, ${clockTime(event.checkin_closes_at)}`
+      : null;
+    el.window.textContent = !closes ? 'no close time' : status === 'Open' ? `until ${closes}` : closes;
   }
 
   function render() {
@@ -1210,12 +1214,18 @@ export function createEventDetail(ctx, host) {
   function askToDelete() {
     if (!canDeleteEvent(state.records)) return;
     el.deleteWhat.textContent = `${state.event.title}, ${shortDate(state.event.occurred_on)}`;
+    state.deleteId = state.event.id;
     el.deleteDialog.showModal();
   }
 
   function confirmDelete(event) {
     event.preventDefault();
     el.deleteDialog.close();
+    // The dialog names one event. If the screen has moved to another since it
+    // opened, confirming it must not delete the one on screen now.
+    const askedFor = state.deleteId;
+    state.deleteId = null;
+    if (!state.event || state.event.id !== askedFor) return;
     // Re-asked rather than trusted: the officer may have approved somebody on
     // this event in another tab since the dialog opened, and the button that
     // opened it is the only thing that checked.
@@ -1285,6 +1295,7 @@ export function createEventDetail(ctx, host) {
   }
 
   function wire() {
+    wireMenu(el.more, el.moreList);
     el.back.addEventListener('click', close);
     el.qr.addEventListener('click', () => host.openQr(state.event));
     el.preview.addEventListener('click', () => host.previewCheckin(state.event));

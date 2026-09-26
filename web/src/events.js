@@ -166,7 +166,6 @@ export function createEvents(ctx) {
     autoPublishBusy: false,
     // The one card whose Publish/Unpublish button is mid-request, so its
     // button (and no other) disables while the write is in flight.
-    publishBusyId: null,
     loaded: false,
     busy: false,
 
@@ -541,14 +540,16 @@ export function createEvents(ctx) {
       const fromEnd = past.length - past.findIndex((event) => event.id === state.detailOriginEventId);
       state.pastRevealed = Math.max(state.pastRevealed, fromEnd);
     }
-    const dividerIndex = todayDividerIndex(shown, state.sort, today);
+    // Grouped, the list opens on what is coming up and the past sits folded
+    // underneath it, so no Today line is needed to find the boundary.
+    const dividerIndex = groupPast ? -1 : todayDividerIndex(shown, state.sort, today);
     const children = [];
-    if (past.length) children.push(renderPastEvents(past));
     shown.forEach((event, index) => {
       if (index === dividerIndex) children.push(renderTodayDivider());
       if (groupPast && event.occurred_on < today) return;
       children.push(renderRow(event));
     });
+    if (past.length) children.push(renderPastEvents(past));
     el.list.replaceChildren(...children);
     if (restoreDisclosureFocus) el.list.querySelector('.event-past-toggle')?.focus();
 
@@ -569,8 +570,8 @@ export function createEvents(ctx) {
   }
 
   // Past rows are built only when the group is open, and only the ones nearest
-  // today. Everything older is reached with Show earlier, which sits above
-  // the rows so the older ones it adds appear right under it. With a search, a
+  // today, newest first. Everything older is reached with Show earlier, which
+  // sits under the rows so the older ones it adds appear right above it. With a search, a
   // filter or another sort the group is not used at all (see render), so every
   // match is in the list and no cap can hide one.
   function renderPastEvents(events) {
@@ -585,7 +586,7 @@ export function createEvents(ctx) {
     }, 'Show earlier');
     function fill() {
       const shownCount = state.pastExpanded ? Math.min(state.pastRevealed, events.length) : 0;
-      rows.replaceChildren(...events.slice(events.length - shownCount).map(renderRow));
+      rows.replaceChildren(...events.slice(events.length - shownCount).reverse().map(renderRow));
       const remaining = state.pastExpanded && shownCount < events.length;
       const hadFocus = document.activeElement === more;
       setHidden(more, !remaining);
@@ -610,7 +611,7 @@ export function createEvents(ctx) {
     }, h('span', { class: 'event-past-label' },
       'Past events', h('span', { class: 'pill' }, String(events.length))), arrow);
     fill();
-    return h('div', { class: 'event-past-group' }, toggle, more, rows);
+    return h('div', { class: 'event-past-group' }, toggle, rows, more);
   }
 
   function renderTodayDivider() {
@@ -682,20 +683,12 @@ export function createEvents(ctx) {
     // makes the same choice for checkin_closes_at rather than threading
     // ctx.now() through it.
     const publish = eventPublishStatus(event, state.autoPublishEnabled);
-    // Not visible: Publish always offers to force it early. Visible: offered
-    // only when it would actually take effect (see eventPublishStatus's own
-    // comment) so the button is never a no-op dressed as a control.
-    const publishButton = !publish.visible
-      ? publishToggleButton(event, true, 'Publish')
-      : publish.canUnpublish
-        ? publishToggleButton(event, false, 'Unpublish')
-        : null;
 
-    // h()'s own children handling drops a null entry (publishButton is null
-    // exactly when neither Publish nor Unpublish should be offered);
-    // Node.append() does not; it stringifies null into a literal text node.
-    // So this passes the buttons AS h()'s children, not through a follow-up
-    // .append() call the way this used to read.
+    // View event and QR are the only controls on a card. Edit, Publish,
+    // Duplicate and Delete live on the event's own screen; QR stays here
+    // because it is what an officer needs at the door. A click anywhere else
+    // on the card opens the event too.
+    const view = () => openDetail(event, { rememberOrigin: true });
     const actions = h(
       'div',
       { class: 'event-actions' },
@@ -705,7 +698,7 @@ export function createEvents(ctx) {
           type: 'button',
           class: 'button button-small button-primary event-view',
           'aria-label': `View event: ${event.title}`,
-          onClick: () => openDetail(event, { rememberOrigin: true }),
+          onClick: view,
         },
         'View event',
       ),
@@ -719,22 +712,19 @@ export function createEvents(ctx) {
         },
         'QR',
       ),
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'button button-small',
-          'aria-label': `Edit ${event.title}`,
-          onClick: () => openForm(event),
-        },
-        'Edit',
-      ),
-      publishButton,
     );
 
     return h(
       'div',
-      { class: 'event-row', dataset: { id: event.id, visible: String(publish.visible) } },
+      {
+        class: 'event-row',
+        dataset: { id: event.id, visible: String(publish.visible) },
+        // View event is the keyboard and screen reader route.
+        onClick: (click) => {
+          if (click.target.closest('button, a, input, select')) return;
+          view();
+        },
+      },
       h('span', { class: 'event-date' }, shortDate(event.occurred_on)),
       h(
         'span',
@@ -768,41 +758,6 @@ export function createEvents(ctx) {
       ),
       actions,
     );
-  }
-
-  function publishToggleButton(event, nextPublished, label) {
-    return h(
-      'button',
-      {
-        type: 'button',
-        class: 'button button-small',
-        disabled: state.publishBusyId === event.id,
-        'aria-label': `${label} ${event.title}`,
-        onClick: () => toggleRowPublish(event, nextPublished),
-      },
-      label,
-    );
-  }
-
-  /** Publish or unpublish straight from the list card, no need to open the event. */
-  async function toggleRowPublish(event, nextPublished) {
-    if (state.publishBusyId) return;
-    state.publishBusyId = event.id;
-    showList();
-    ctx.clearMessage();
-    try {
-      await callRpc('set_event_published', { p_event_id: event.id, p_published: nextPublished });
-      const said = nextPublished ? `${event.title} published.` : `${event.title} unpublished.`;
-      ctx.note(said);
-      announce(said);
-      await load({ quiet: true });
-      ctx.onEventsChanged?.();
-    } catch (err) {
-      ctx.fail(err, null);
-    } finally {
-      state.publishBusyId = null;
-      if (state.view === 'list') showList();
-    }
   }
 
   function creditLabel(link) {

@@ -78,6 +78,25 @@ test('every fixture member has the honorary verdict derived by hand', async () =
   assert.deepEqual(got, want);
 });
 
+test('requirements_unmet counts the top-level requirements each member is short of', async () => {
+  const rows = await db.q(
+    `select m.first_name, s.is_honorary, s.requirements_unmet
+       from v_member_status s
+       join members m on m.id = s.member_id
+      where s.academic_year_id = $1`,
+    [YEAR_2026],
+  );
+  const by = Object.fromEntries(rows.map((r) => [r.first_name.toLowerCase(), r]));
+
+  // Honorary means nothing is missing, and anybody not honorary is short of something.
+  for (const row of rows) {
+    assert.equal(row.requirements_unmet === 0, row.is_honorary, row.first_name);
+  }
+  // Barnaby fails Clinical Workshops and nothing else.
+  assert.equal(by.barnaby.requirements_unmet, 1);
+  assert.ok(by.dorian.requirements_unmet > 1, 'no records misses every requirement');
+});
+
 test('the honorary count matches', async () => {
   const n = await db.val(
     `select count(*) from v_member_status where academic_year_id = $1 and is_honorary`,

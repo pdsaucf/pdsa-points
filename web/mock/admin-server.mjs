@@ -796,9 +796,8 @@ function memberStatusRows() {
     for (const total of totals.values()) points += total;
 
     const set = publishedSetFor(yearId);
-    const root = set
-      ? evaluateSet(set.id, enrollment.member_id, index).find((row) => row.node_id === set.root_node_id)
-      : null;
+    const nodes = set ? evaluateSet(set.id, enrollment.member_id, index) : [];
+    const root = set ? nodes.find((row) => row.node_id === set.root_node_id) : null;
 
     out.push({
       member_id: enrollment.member_id,
@@ -806,6 +805,9 @@ function memberStatusRows() {
       point_total: points,
       is_honorary: Boolean(root?.passed),
       requirement_set_id: set?.id ?? null,
+      requirements_unmet: set
+        ? nodes.filter((row) => row.parent_id === set.root_node_id && !row.passed).length
+        : null,
     });
   }
 

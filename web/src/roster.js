@@ -275,6 +275,7 @@ export function createRoster(ctx) {
     // scanImportRetro() below.
     retroScanToken: 0,
     removing: null,
+    onRemoved: null,
     busy: false,
     loaded: false,
   };
@@ -422,9 +423,18 @@ export function createRoster(ctx) {
     el.rows.replaceChildren(
       ...rows.map((member) => {
         const status = state.status.get(member.id) ?? { point_total: 0, is_honorary: false };
+        // The whole row opens the member. Remove from this year is on the
+        // member's own page, away from a row an officer clicks all day.
         return h(
           'tr',
-          { dataset: { member: member.id } },
+          {
+            class: 'roster-row',
+            dataset: { member: member.id },
+            onClick: (click) => {
+              if (click.target.closest('button')) return;
+              ctx.openMember(member.id);
+            },
+          },
           h(
             'td',
             {},
@@ -456,17 +466,6 @@ export function createRoster(ctx) {
                 onClick: () => ctx.openMember(member.id),
               },
               'Open',
-            ),
-            ctx.isAdmin === false ? null : h(
-              'button',
-              {
-                type: 'button',
-                class: 'button button-small',
-                disabled: state.busy,
-                'aria-label': `Remove ${member.display_name} from this year`,
-                onClick: () => askRemove(member),
-              },
-              'Remove',
             ),
           ),
         );
@@ -1000,8 +999,9 @@ export function createRoster(ctx) {
   // Taking one off this year
   // -------------------------------------------------------------------------
 
-  function askRemove(member) {
+  function askRemove(member, { onRemoved = null } = {}) {
     state.removing = member;
+    state.onRemoved = onRemoved;
     el.removeMeta.textContent = `${member.display_name}, ${ctx.year.label}`;
     el.removeDialog.showModal();
   }
@@ -1023,12 +1023,14 @@ export function createRoster(ctx) {
         return;
       }
       ctx.note(`${member.display_name} removed from ${ctx.year.label}.`);
+      state.onRemoved?.();
       await load();
       ctx.onRosterChanged?.();
     } catch (err) {
       ctx.fail(err, null);
     } finally {
       state.removing = null;
+      state.onRemoved = null;
       setBusy(false);
     }
   }
@@ -1438,5 +1440,8 @@ export function createRoster(ctx) {
     // file picker in between.
     preview: (people) => matchRoster(people, state.everyMember),
     exportRows,
+    // The member page's Remove from this year. The dialog and the write stay
+    // here, beside the roster they change.
+    askRemove,
   };
 }
