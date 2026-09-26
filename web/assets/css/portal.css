@@ -354,7 +354,7 @@ body {
 .check-bar-fill {
   display: block;
   height: 100%;
-  background: var(--accent);
+  background: var(--gold);
   border-radius: inherit;
 }
 
