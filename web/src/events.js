@@ -541,8 +541,10 @@ export function createEvents(ctx) {
       state.pastRevealed = Math.max(state.pastRevealed, fromEnd);
     }
     // Grouped, the list opens on what is coming up and the past sits folded
-    // underneath it, so no Today line is needed to find the boundary.
-    const dividerIndex = groupPast ? -1 : todayDividerIndex(shown, state.sort, today);
+    // underneath it. Today still heads the upcoming rows: it is where the
+    // officer is in the year, and the past rows it would otherwise follow are
+    // skipped below, so it lands directly above the first of them.
+    const dividerIndex = todayDividerIndex(shown, state.sort, today);
     const children = [];
     shown.forEach((event, index) => {
       if (index === dividerIndex) children.push(renderTodayDivider());

@@ -914,7 +914,7 @@ await check('an Events schema drift banner reloads Events without reloading Revi
 initialEventsFailure.restore();
 await until(() => !dom.$('event-list').hidden, 'the events list never rendered after recovery');
 
-await check('Events opens on upcoming events, oldest first, with past events folded below', async () => {
+await check('Events opens on Today and upcoming events, oldest first, with past events folded below', async () => {
   const sort = dom.$('events-sort');
   assert.equal(sort.value, 'date_asc');
   assert.equal(
@@ -933,11 +933,19 @@ await check('Events opens on upcoming events, oldest first, with past events fol
     'initial rows are not ascending by calendar date',
   );
 
-  // Upcoming first, so the boundary needs no Today line.
-  assert.equal(todayDivider(), null, 'the grouped list drew a Today line');
+  const divider = todayDivider();
+  assert.ok(divider, 'Today is missing');
+  assert.equal(divider.textContent.trim(), 'Today');
+  assert.equal(divider.getAttribute('role'), 'separator');
+  assert.equal(divider.getAttribute('aria-label'), 'Today');
+  assert.equal(divider.hasAttribute('tabindex'), false, 'Today is focusable');
+  assert.ok(divider.querySelector('.event-today-dot'), 'Today has no marker');
+  assert.ok(divider.querySelector('.event-today-line'), 'Today has no line');
 
+  // Today heads the list, directly above the first event that has not passed.
   const children = dom.$('event-list').children;
-  assert.equal(children[0].querySelector('.event-title').textContent, 'Soap Carving');
+  assert.equal(children[0], divider, 'Today does not head the upcoming events');
+  assert.equal(children[1].querySelector('.event-title').textContent, 'Soap Carving');
   const last = children[children.length - 1];
   assert.ok(last.classList.contains('event-past-group'), 'past events are not folded below');
   dom.click(pastToggle());
@@ -1053,7 +1061,7 @@ await check('search recomputes Today without server reads', async () => {
     search.value = '';
     dom.fire(search, 'input');
     assert.ok(pastToggle(), 'clearing search did not restore the past group');
-    assert.equal(todayDivider(), null, 'clearing search drew a Today line over the grouped list');
+    assert.ok(todayDivider(), 'clearing search did not restore Today');
 
     const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
     assert.equal(eventReads.length, 0, 'search re-read events from the server');
@@ -1944,6 +1952,7 @@ await check('the order picker reorders the list without re-reading the server', 
     sort.value = 'date_asc';
     dom.fire(sort, 'change');
     assert.ok(pastToggle(), 'Oldest first did not restore the past group');
+    assert.ok(todayDivider(), 'Oldest first did not restore Today');
 
     const eventReads = captured.requests.filter(({ url }) => new URL(url).pathname === '/rest/v1/events');
     assert.equal(eventReads.length, 0, 'sorting sent a request');
