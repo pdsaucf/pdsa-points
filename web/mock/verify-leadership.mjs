@@ -62,7 +62,7 @@ try {
   await assert.rejects(callRpc('review_records', { p_record_ids: [], p_decision: 'approve' }), (e) => e.code === 'PDS07');
   const dom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
   start();
-  await until(() => !dom.$('view-app').hidden && dom.$('event-list').childNodes.length);
+  await until(() => !dom.$('view-app').hidden && dom.$('event-list').childNodes.length && dom.$('loading-roster').hidden);
   for (const id of ['tab-review','tab-requirements','tab-storage','tab-access','events-auto-publish','roster-add','roster-paste','roster-import']) {
     assert.equal(dom.$(id)?.hidden, true, `${id} must be hidden`);
   }
@@ -76,6 +76,21 @@ try {
   auth.forgetSession();
   await auth.signInWithPasscode('mock-passcode');
   assert.equal((await callRpc('leadership_session', {})).role, 'admin');
+  // An admin's own screen, then the officer preview opened from Access.
+  const adminDom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
+  start();
+  await until(() => !adminDom.$('view-app').hidden && adminDom.$('event-list').childNodes.length);
+  assert.equal(adminDom.$('tab-access').hidden, false);
+  assert.equal(adminDom.$('role-preview-bar').hidden, true);
+  window.location.search = '?as=officer';
+  const previewDom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
+  start();
+  await until(() => !previewDom.$('view-app').hidden && previewDom.$('event-list').childNodes.length && previewDom.$('loading-roster').hidden);
+  assert.equal(previewDom.$('role-preview-bar').hidden, false);
+  for (const id of ['tab-review','settings-menu','events-auto-publish','roster-add','roster-paste','roster-import']) {
+    assert.equal(previewDom.$(id)?.hidden, true, `${id} must be hidden in the officer preview`);
+  }
+  delete window.location.search;
   const added = await callRpc('authorize_leadership_access', { p_email: 'new@example.com', p_role: 'officer' });
   assert.equal(added.user_id, null);
   await callRpc('set_leadership_role', { p_access_id: added.id, p_role: 'admin' });
@@ -119,5 +134,5 @@ try {
     assert.equal(auth.currentSession(), null);
     globalThis.fetch = originalFetch;
   }
-  console.log('Leadership mock checks passed: Google-only entry, sign-in retry, shared fallback, PKCE, refresh, refusals, role-aware shell, access changes, callback rejection and logout races.');
+  console.log('Leadership mock checks passed: Google-only entry, sign-in retry, shared fallback, PKCE, refresh, refusals, role-aware shell, officer preview, access changes, callback rejection and logout races.');
 } finally { await new Promise((resolve) => server.close(resolve)); }

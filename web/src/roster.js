@@ -398,9 +398,7 @@ export function createRoster(ctx) {
 
   function render() {
     setHidden(el.loading, true);
-    setHidden(el.add, false);
-    setHidden(el.pasteButton, false);
-    setHidden(el.importButton, false);
+    for (const node of [el.add, el.pasteButton, el.importButton]) setHidden(node, ctx.isAdmin === false);
 
     const rows = visibleMembers();
     el.count.textContent = plural(rows.length, 'member');

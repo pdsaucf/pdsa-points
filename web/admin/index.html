@@ -40,6 +40,13 @@
 
     <!-- 4. The product -->
     <div id="view-app" hidden>
+      <!-- An admin looking at the screen an officer gets. The page hides what
+           an officer cannot do; the database still answers as the admin, so a
+           change made here is a real change. -->
+      <div id="role-preview-bar" class="role-preview-bar" hidden>
+        <p class="role-preview-bar-text"><strong id="role-preview-role"></strong> <span class="role-preview-bar-note">Changes are saved.</span></p>
+        <a id="role-preview-exit" class="button button-small" href="./" data-icon="x">Exit preview</a>
+      </div>
       <header class="topbar">
         <div class="topbar-left">
           <!-- alt is empty: the wordmark is right there in text beside it. -->
@@ -143,6 +150,30 @@
         </form>
         <p id="access-status" class="muted" role="status"></p>
         <div class="access-scroll"><table class="board-table"><thead><tr><th>Email</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead><tbody id="access-rows"></tbody></table></div>
+        <h2 class="panel-title">Preview as</h2>
+        <ul class="role-preview-list">
+          <li class="role-preview-item">
+            <div class="role-preview-item-text">
+              <p class="role-preview-item-name">Officer / Director</p>
+              <p class="muted small">Events, Progress and Members. No review, attendance changes, photos or settings.</p>
+            </div>
+            <a class="button button-small" href="./?as=officer" target="_blank" rel="noopener" data-icon="eye">Preview</a>
+          </li>
+          <li class="role-preview-item">
+            <div class="role-preview-item-text">
+              <p class="role-preview-item-name">Member</p>
+              <p class="muted small">Points, honorary status and this year's attendance, by name.</p>
+            </div>
+            <a class="button button-small" href="../me/" target="_blank" rel="noopener" data-icon="eye">Preview</a>
+          </li>
+          <li class="role-preview-item">
+            <div class="role-preview-item-text">
+              <p class="role-preview-item-name">Public</p>
+              <p class="muted small">Upcoming published events. No sign-in.</p>
+            </div>
+            <a class="button button-small" href="../events/" target="_blank" rel="noopener" data-icon="eye">Preview</a>
+          </li>
+        </ul>
         <h2 class="panel-title">Access history</h2>
         <div class="access-scroll"><table class="board-table"><thead><tr><th>Time</th><th>Account</th><th>Change</th><th>By</th></tr></thead><tbody id="access-audit"></tbody></table></div>
       </main>

@@ -42,7 +42,10 @@ const PANEL_RECOVERY = {
 const el = {};
 const app = {
   session: null,
+  // The role the screen is drawn for. It differs from actualRole only in an
+  // officer preview, which an admin opens from Access (?as=officer).
   role: null,
+  actualRole: null,
   access: null,
   years: [],
   year: null,
@@ -200,7 +203,8 @@ async function guard() {
 
   try {
     const identity = await callRpc('leadership_session', {});
-    app.role = identity?.role;
+    app.actualRole = identity?.role;
+    app.role = app.actualRole === 'admin' && previewRequested() ? 'officer' : app.actualRole;
     if (!['admin', 'officer'].includes(app.role)) {
       showDenied('This account has no PDSA access. Contact the Secretary.');
       return;
@@ -344,8 +348,19 @@ function closeMember() {
   selectTab(app.returnTab);
 }
 
+function previewRequested() {
+  return new URLSearchParams(window.location.search).get('as') === 'officer';
+}
+
 function startApp() {
   showView('app');
+
+  const previewing = app.role !== app.actualRole;
+  setHidden(el.previewBar, !previewing);
+  if (previewing) {
+    el.previewBarRole.textContent = 'Officer / Director preview';
+    document.title = 'Officer preview, PDSA Points';
+  }
 
   const email = app.session.user.email || '';
   el.who.textContent = email || 'Signed in';
@@ -434,6 +449,8 @@ function cacheElements() {
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),
+    previewBar: $('role-preview-bar'),
+    previewBarRole: $('role-preview-role'),
     settingsMenu: $('settings-menu'),
     settingsToggle: $('settings-toggle'),
     settingsList: $('settings-list'),
@@ -526,11 +543,11 @@ export function start({ now = () => new Date() } = {}) {
 
 let checkingAccess = false;
 async function recheckAccess() {
-  if (checkingAccess || !app.role || !currentSession()) return;
+  if (checkingAccess || !app.actualRole || !currentSession()) return;
   checkingAccess = true;
   try {
     const identity = await callRpc('leadership_session', {});
-    if (identity?.role !== app.role) window.location.replace(window.location.pathname);
+    if (identity?.role !== app.actualRole) window.location.replace(window.location.pathname);
   } catch (err) {
     if (err?.status === 401) { forgetSession(); showSignIn(); }
   } finally { checkingAccess = false; }
