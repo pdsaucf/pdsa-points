@@ -185,3 +185,40 @@ insert, update and delete paths, self-escalation, role revocation, roleless and 
 roles, evidence reads and writes, and shared-passcode compatibility. Its visibility
 regression sets auto-publish false and verifies the officer's computed event visibility
 before and after an admin enables it.
+
+
+## Secretary Director
+
+Migrations `20260928100000_secretary_director_enum.sql` and
+`20260928100100_secretary_director_role.sql` add a third role between the two above.
+
+| Person | Role | Reasoning |
+| --- | --- | --- |
+| Secretary | `admin` | Everything. |
+| Secretary Director | `secretary_director` | The Secretary's attendance, roster and photo work, without the Secretary's settings. |
+| Officer | `officer` | Events, and reading the club. Unchanged. |
+
+`fn_is_secretary_director()` means secretary director or admin, the way `fn_is_officer()`
+means officer or admin, and `fn_is_officer()` and `fn_is_staff()` now include the new role.
+
+**Secretary Director may**, beyond everything an officer may:
+
+- Every attendance write: `review_records()`, `add_officer_attendance()`,
+  `add_officer_attendance_batch()`, `remove_attendance_record()`,
+  `recover_officer_attendance_batch()`, `resolve_unmatched()`, and the `attendance_admin`
+  and `evidence_admin` policies.
+- Roster writes: `upsert_member_and_enroll()`, `upsert_members_and_enroll()`,
+  `merge_members()`, `link_retroactive_matches()`, `dismiss_duplicate_pair()`, and the
+  `members_admin` and `enrollments_admin` policies.
+- Photos: read and delete evidence storage objects, `purge_evidence()`,
+  `purge_orphaned_uploads()`, `finish_purge_run()`.
+- One setting, `evidence_retention_months`, which the Storage screen edits. The policy
+  `settings_retention_secretary_director` allows an update to that key and no other.
+
+**Admin only**, and refused to a Secretary Director: honorary requirements, categories,
+every other setting (including events auto-publish), academic years and terms, and
+leadership access. In the UI those are the Honorary requirements, Event settings and
+Access tabs.
+
+`test/privileges.test.mjs` asserts both halves: the Secretary Director RPCs pass their
+role check, and the admin-only RPCs and direct writes are refused.

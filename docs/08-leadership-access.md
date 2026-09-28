@@ -5,7 +5,8 @@ Implemented and deployed. The member portal and check-in stay anonymous and unch
 ## Authorization
 
 Leadership approval is separate from members and enrollment. An admin approves an exact
-Google account email as `admin` (Secretary) or `officer` (Officer or Director). A successful
+Google account email as `admin` (Secretary), `secretary_director` (Secretary Director) or
+`officer` (Officer). A successful
 Google sign-in without approval gets no staff access. Leadership emails never become member
 emails or roster records.
 
@@ -49,6 +50,11 @@ photo deletion and leadership management require admin. Officers cannot read evi
 metadata or private storage objects. Existing bearer photo URLs remain valid until expiry;
 new image access requires the admin storage policy.
 
+Secretary Directors have every officer permission, plus attendance, roster and member
+writes, evidence photos, purging and the Storage retention window. Requirements, categories,
+other settings and leadership management stay admin only. See
+[07-officer-roles.md](07-officer-roles.md).
+
 ## Frontend RPC contract
 
 All RPCs require an authenticated session. Only `leadership_session()` is callable without
@@ -63,7 +69,7 @@ an application role; it returns a null role for unapproved or unverifiable indiv
 | `revoke_leadership_access(p_access_id uuid)` | Access row JSON; repeated revocation is idempotent |
 | `list_leadership_audit()` | Rows: `id`, `access_id`, `created_at`, `action`, `actor_email`, `target_email`, `old_role`, `new_role` |
 
-Only `admin` and `officer` are accepted. Email matching trims surrounding whitespace and
+Only `admin`, `secretary_director` and `officer` are accepted. Email matching trims surrounding whitespace and
 ignores case; it does not equate aliases or different addresses. The shared fallback email
 cannot be preapproved as an individual. `PDS07` means denied, `PDS03` means invalid input
 or missing access, and `PDS16` means the last individual admin would be removed. Audit

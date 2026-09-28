@@ -59,7 +59,7 @@ let bucketObjects = seedBucketObjects();
 
 // Local fixtures only, not real Google identity verification.
 const googleCodes = new Map();
-const seedLeadership = () => ['admin', 'officer'].map((role) => ({ id: `access-${role}`, email: `${role}@leadership.example`, role, user_id: `google-${role}`, bound_at: new Date().toISOString(), created_at: new Date().toISOString(), revoked_at: null }));
+const seedLeadership = () => ['admin', 'secretary_director', 'officer'].map((role) => ({ id: `access-${role}`, email: `${role}@leadership.example`, role, user_id: `google-${role}`, bound_at: new Date().toISOString(), created_at: new Date().toISOString(), revoked_at: null }));
 let leadership = seedLeadership();
 let leadershipAudit = [];
 const sessions = new Map(); // access token -> { userId, email, expiresAt }
@@ -234,8 +234,11 @@ function issueSession(userId, email) {
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_SECONDS };
 }
 
-const STAFF_ROLES = ['officer', 'admin', 'viewer'];
-const OFFICER_ROLES = ['officer', 'admin'];
+const STAFF_ROLES = ['officer', 'secretary_director', 'admin', 'viewer'];
+const OFFICER_ROLES = ['officer', 'secretary_director', 'admin'];
+const SECRETARY_DIRECTOR_ROLES = ['secretary_director', 'admin'];
+// Direct table writes a Secretary Director may make, as in 20260928100100.
+const SECRETARY_DIRECTOR_TABLES = ['members', 'member_enrollments', 'attendance_records', 'attendance_evidence'];
 
 /**
  * @returns {{kind:'anon'}|{kind:'invalid'}|{kind:'user', userId, email, role}}
@@ -277,6 +280,9 @@ const accountFor = (email) => ACCOUNTS[email] ?? null;
 const isStaff = (auth) => auth.kind === 'user' && STAFF_ROLES.includes(auth.role);
 const isOfficer = (auth) => auth.kind === 'user' && OFFICER_ROLES.includes(auth.role);
 const isAdmin = (auth) => auth.kind === 'user' && auth.role === 'admin';
+const isSecretaryDirector = (auth) => auth.kind === 'user' && SECRETARY_DIRECTOR_ROLES.includes(auth.role);
+const secretaryDirectorMayWrite = (table, url) => SECRETARY_DIRECTOR_TABLES.includes(table)
+  || (table === 'app_settings' && url.searchParams.get('key') === 'eq.evidence_retention_months');
 
 // ---------------------------------------------------------------------------
 // Auth endpoints
@@ -292,13 +298,13 @@ export function handleAuth(req, res, url, body, helpers) {
     const chosen = url.searchParams.get('mock_account');
     if (!chosen) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      const links = ['admin', 'officer', 'stranger'].map((role) => {
+      const links = ['admin', 'secretary_director', 'officer', 'stranger'].map((role) => {
         const href = new URL(url); href.searchParams.set('mock_account', role);
         return `<p><a href="${href.pathname}${href.search.replaceAll('&', '&amp;')}">${role}</a></p>`;
       }).join('');
       res.end(`<h1>Mock Google sign-in</h1><p>Local fixtures only.</p>${links}`); return true;
     }
-    if (!['admin', 'officer', 'stranger'].includes(chosen)) { json(res, 400, {}); return true; }
+    if (!['admin', 'secretary_director', 'officer', 'stranger'].includes(chosen)) { json(res, 400, {}); return true; }
     const code = randomBytes(24).toString('hex');
     googleCodes.set(code, { challenge: url.searchParams.get('code_challenge'), email: `${chosen}@leadership.example`, userId: `google-${chosen}` });
     redirect.searchParams.set('code', code);
@@ -1038,7 +1044,7 @@ const OFFICER_VIEWS = { v_purge_runs_outstanding: purgeRunsOutstandingRows };
  */
 function visibleRows(table, auth) {
   if (!isStaff(auth)) return [];
-  if (table === 'attendance_evidence' && !isAdmin(auth)) return [];
+  if (table === 'attendance_evidence' && !isSecretaryDirector(auth)) return [];
   if (OFFICER_ONLY_TABLES.has(table)) {
     return isOfficer(auth) ? (db[table] ?? []) : [];
   }
@@ -1851,7 +1857,7 @@ export function handleRest(req, res, url, body, helpers, anonKey) {
     return;
   }
 
-  if (!isStaff(auth) || (req.method !== 'GET' && !isAdmin(auth) && !(req.method === 'DELETE' && table === 'events'))) { json(res, 403, { code: 'PDS07', message: 'Not permitted.' }); return; }
+  if (!isStaff(auth) || (req.method !== 'GET' && !isAdmin(auth) && !(isSecretaryDirector(auth) && secretaryDirectorMayWrite(table, url)) && !(req.method === 'DELETE' && table === 'events'))) { json(res, 403, { code: 'PDS07', message: 'Not permitted.' }); return; }
   let result;
   if (req.method === 'GET') {
     result = runSelect(table, url.searchParams, auth);
@@ -2097,7 +2103,7 @@ function accessMutation(action) {
     if (!isAdmin(auth)) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
     const email = String(body.p_email ?? '').trim().toLowerCase();
     let entry = action === 'authorize' ? leadership.find((e) => e.email === email) : leadership.find((e) => e.id === body.p_access_id);
-    if ((action !== 'revoke' && !['admin', 'officer'].includes(body.p_role)) || (action === 'authorize' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) { helpers.pds(res, 'PDS03', 'Check the email and role.'); return; }
+    if ((action !== 'revoke' && !['admin', 'secretary_director', 'officer'].includes(body.p_role)) || (action === 'authorize' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) { helpers.pds(res, 'PDS03', 'Check the email and role.'); return; }
     if (!entry && action !== 'authorize') { helpers.pds(res, 'PDS03', 'Account not found.'); return; }
     if (entry?.role === 'admin' && entry.user_id && !entry.revoked_at && (action === 'revoke' || body.p_role !== 'admin') && leadership.filter((e) => e.role === 'admin' && e.user_id && !e.revoked_at).length === 1) { helpers.pds(res, 'PDS16', 'Keep one individual admin.'); return; }
     const oldRole = entry?.role ?? null;
@@ -4941,22 +4947,25 @@ export const ADMIN_RPC = {
   },
 };
 
-// Keep the local contract aligned with stage 2. SQL tests prove the real boundary.
-for (const name of [
+// Keep the local contract aligned with the migrations. SQL tests prove the real boundary.
+const guardRpcs = (names, allowed) => {
+  for (const name of names) {
+    const handler = ADMIN_RPC[name];
+    if (!handler) continue;
+    ADMIN_RPC[name] = (res, body, req, helpers, anonKey) => {
+      if (!allowed(resolveAuth(req, anonKey))) { helpers.pds(res, 'PDS07', 'Not permitted.'); return; }
+      return handler(res, body, req, helpers, anonKey);
+    };
+  }
+};
+guardRpcs([
   'review_records', 'add_officer_attendance', 'add_officer_attendance_batch',
   'remove_attendance_record', 'recover_officer_attendance_batch', 'resolve_unmatched',
-  'merge_members', 'validate_requirement_set', 'preview_requirement_set',
-  'clone_requirement_set', 'purge_evidence', 'purge_orphaned_uploads', 'finish_purge_run',
+  'merge_members', 'purge_evidence', 'purge_orphaned_uploads', 'finish_purge_run',
   'upsert_member_and_enroll', 'upsert_members_and_enroll', 'link_retroactive_matches',
   'dismiss_duplicate_pair',
-]) {
-  const handler = ADMIN_RPC[name];
-  if (!handler) continue;
-  ADMIN_RPC[name] = (res, body, req, helpers, anonKey) => {
-    if (!isAdmin(resolveAuth(req, anonKey))) { helpers.pds(res, 'PDS07', 'Admin required.'); return; }
-    return handler(res, body, req, helpers, anonKey);
-  };
-}
+], isSecretaryDirector);
+guardRpcs(['validate_requirement_set', 'preview_requirement_set', 'clone_requirement_set'], isAdmin);
 
 
 // ---------------------------------------------------------------------------
@@ -5005,7 +5014,7 @@ export function handleStorageDelete(req, res, url, body, helpers, anonKey) {
   const { json } = helpers;
   const auth = resolveAuth(req, anonKey);
 
-  if (!isAdmin(auth)) {
+  if (!isSecretaryDirector(auth)) {
     record({ fn: 'storage.delete', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, {
       statusCode: '403',
@@ -5048,7 +5057,7 @@ export function handleStorageInfo(req, res, url, helpers, anonKey) {
   const { json } = helpers;
   const auth = resolveAuth(req, anonKey);
 
-  if (!isAdmin(auth)) {
+  if (!isSecretaryDirector(auth)) {
     record({ fn: 'storage.info', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, {
       statusCode: '403',
@@ -5084,7 +5093,7 @@ export function handleStorageSign(req, res, url, body, helpers, anonKey) {
   // The evidence bucket is private. Only staff may sign a URL for it, which is
   // the storage policy evidence_read_staff, and it is why the grid cannot be
   // rebuilt by anybody who happens to know an object path.
-  if (!isAdmin(auth)) {
+  if (!isSecretaryDirector(auth)) {
     record({ fn: 'storage.sign', outcome: 'refused', role: auth.role ?? auth.kind });
     json(res, 400, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
     return;

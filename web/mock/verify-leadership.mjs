@@ -70,6 +70,22 @@ try {
   assert.ok(!calls.some((c) => c.fn === 'storage.sign' && c.outcome !== 'refused'), 'officer fetched photos');
   assert.ok(!calls.some((c) => ['fn_storage_usage','preview_requirement_set','validate_requirement_set'].includes(c.fn)), 'officer eagerly loaded admin panels');
   auth.forgetSession();
+  // Secretary Director: attendance, roster and Storage, no admin settings.
+  await callback('secretary_director'); await auth.completeGoogleSignIn();
+  assert.equal((await callRpc('leadership_session', {})).role, 'secretary_director');
+  await assert.rejects(callRpc('list_leadership_access', {}), (e) => e.code === 'PDS07');
+  await assert.rejects(callRpc('validate_requirement_set', { p_set_id: null }), (e) => e.code === 'PDS07');
+  assert.equal(await callRpc('review_records', { p_record_ids: [], p_decision: 'approve' }), 0);
+  const secdirDom = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
+  start();
+  await until(() => !secdirDom.$('view-app').hidden && secdirDom.$('event-list').childNodes.length && secdirDom.$('loading-roster').hidden);
+  for (const id of ['tab-requirements','tab-categories','tab-access','events-auto-publish']) {
+    assert.equal(secdirDom.$(id)?.hidden, true, `${id} must be hidden for a Secretary Director`);
+  }
+  for (const id of ['tab-review','settings-menu','tab-storage','roster-add','roster-paste','roster-import']) {
+    assert.equal(secdirDom.$(id)?.hidden, false, `${id} must be shown for a Secretary Director`);
+  }
+  auth.forgetSession();
   await callback('stranger'); await auth.completeGoogleSignIn();
   assert.equal((await callRpc('leadership_session', {})).role, null);
   await assert.rejects(select('members', {}));
@@ -90,6 +106,13 @@ try {
   for (const id of ['tab-review','settings-menu','events-auto-publish','roster-add','roster-paste','roster-import']) {
     assert.equal(previewDom.$(id)?.hidden, true, `${id} must be hidden in the officer preview`);
   }
+  window.location.search = '?as=secretary_director';
+  const secdirPreview = installDom(await readFile(new URL('../admin/index.html', import.meta.url), 'utf8'));
+  start();
+  await until(() => !secdirPreview.$('view-app').hidden && secdirPreview.$('event-list').childNodes.length && secdirPreview.$('loading-roster').hidden);
+  assert.equal(secdirPreview.$('role-preview-role').textContent, 'Secretary Director preview');
+  assert.equal(secdirPreview.$('tab-storage').hidden, false);
+  assert.equal(secdirPreview.$('tab-access').hidden, true);
   delete window.location.search;
   const added = await callRpc('authorize_leadership_access', { p_email: 'new@example.com', p_role: 'officer' });
   assert.equal(added.user_id, null);
@@ -134,5 +157,5 @@ try {
     assert.equal(auth.currentSession(), null);
     globalThis.fetch = originalFetch;
   }
-  console.log('Leadership mock checks passed: Google-only entry, sign-in retry, shared fallback, PKCE, refresh, refusals, role-aware shell, officer preview, access changes, callback rejection and logout races.');
+  console.log('Leadership mock checks passed: Google-only entry, sign-in retry, shared fallback, PKCE, refresh, refusals, role-aware shell, officer and Secretary Director previews, access changes, callback rejection and logout races.');
 } finally { await new Promise((resolve) => server.close(resolve)); }

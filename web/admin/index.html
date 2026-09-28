@@ -145,20 +145,39 @@
         <h1 class="panel-title">Access</h1>
         <form id="access-form" class="toolbar">
           <div class="toolbar-field"><label class="label" for="access-email">Google email</label><input id="access-email" type="email" class="input" required autocomplete="off" maxlength="254" /></div>
-          <div class="toolbar-field"><label class="label" for="access-role">Role</label><select id="access-role" class="select"><option value="officer">Officer / Director</option><option value="admin">Secretary / Admin</option></select></div>
+          <div class="toolbar-field"><label class="label" for="access-role">Role</label><select id="access-role" class="select"><option value="officer">Officer</option><option value="secretary_director">Secretary Director</option><option value="admin">Secretary / Admin</option></select></div>
           <button class="button button-primary" type="submit">Authorize</button>
         </form>
         <p id="access-status" class="muted" role="status"></p>
         <div class="access-scroll"><table class="board-table"><thead><tr><th>Email</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead><tbody id="access-rows"></tbody></table></div>
-        <h2 class="panel-title">Preview as</h2>
+        <!-- What each role may do. Postgres enforces it: docs/07-officer-roles.md. -->
+        <h2 class="panel-title">Roles</h2>
         <ul class="role-preview-list">
           <li class="role-preview-item">
             <div class="role-preview-item-text">
-              <p class="role-preview-item-name">Officer / Director</p>
-              <p class="muted small">Events, Progress and Members. No review, attendance changes, photos or settings.</p>
+              <p class="role-preview-item-name">Secretary / Admin</p>
+              <p class="role-rule"><span class="role-rule-label">Can</span> Everything.</p>
+            </div>
+          </li>
+          <li class="role-preview-item">
+            <div class="role-preview-item-text">
+              <p class="role-preview-item-name">Secretary Director</p>
+              <p class="role-rule"><span class="role-rule-label">Can</span> Approve and decline check-ins, add and remove attendance, add, edit and remove members, manage Storage, create and edit events.</p>
+              <p class="role-rule"><span class="role-rule-label">Cannot</span> Open Access, Event settings or Honorary requirements.</p>
+            </div>
+            <a class="button button-small" href="./?as=secretary_director" target="_blank" rel="noopener" data-icon="eye">Preview</a>
+          </li>
+          <li class="role-preview-item">
+            <div class="role-preview-item-text">
+              <p class="role-preview-item-name">Officer</p>
+              <p class="role-rule"><span class="role-rule-label">Can</span> Create, edit and publish events. View attendance, members and points.</p>
+              <p class="role-rule"><span class="role-rule-label">Cannot</span> Approve, decline, add or remove attendance, change members, view photos, or open Settings.</p>
             </div>
             <a class="button button-small" href="./?as=officer" target="_blank" rel="noopener" data-icon="eye">Preview</a>
           </li>
+        </ul>
+        <h2 class="panel-title">Preview as</h2>
+        <ul class="role-preview-list">
           <li class="role-preview-item">
             <div class="role-preview-item-text">
               <p class="role-preview-item-name">Member</p>

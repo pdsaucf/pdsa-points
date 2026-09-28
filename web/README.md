@@ -4,7 +4,7 @@ Four surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
 - **`/admin/`** the leadership screens, entered through `Continue with Google`.
-  Postgres grants approved Admin or Officer access. No password field is rendered;
+  Postgres grants approved Admin, Secretary Director or Officer access. No password field is rendered;
   the low-level shared-passcode auth fallback remains available.
 - **`/me/`** the public member portal: name lookup, points and current-year attendance.
   No member sign-in or claim flow.

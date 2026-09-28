@@ -310,7 +310,7 @@ export function createRoster(ctx) {
           select: 'member_id,point_total,is_honorary',
           filters: { academic_year_id: `eq.${yearId}` },
         }),
-        ctx.isAdmin === false ? [] : loadDuplicates(),
+        ctx.canManage === false ? [] : loadDuplicates(),
         // Deliberately NOT filtered to the selected year. See joined.js.
         select('member_enrollments', { select: 'member_id,joined_on' }),
         // Also deliberately not filtered to the year, and for the same kind of
@@ -398,7 +398,7 @@ export function createRoster(ctx) {
 
   function render() {
     setHidden(el.loading, true);
-    for (const node of [el.add, el.pasteButton, el.importButton]) setHidden(node, ctx.isAdmin === false);
+    for (const node of [el.add, el.pasteButton, el.importButton]) setHidden(node, ctx.canManage === false);
 
     const rows = visibleMembers();
     el.count.textContent = plural(rows.length, 'member');
@@ -1418,7 +1418,7 @@ export function createRoster(ctx) {
 
   return {
     mount() {
-      for (const node of [el.add, el.pasteButton, el.importButton]) setHidden(node, ctx.isAdmin === false);
+      for (const node of [el.add, el.pasteButton, el.importButton]) setHidden(node, ctx.canManage === false);
       wire();
       return load();
     },

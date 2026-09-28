@@ -361,7 +361,7 @@ export function createEventDetail(ctx, host) {
         // Re-read here so a reload after every write refreshes it too.
         select('events', { select: EVENT_SELECT, filters: { id: `eq.${event.id}` } }),
         select('attendance_records', {
-          select: ctx.isAdmin === false ? RECORD_SELECT.replace(',attendance_evidence(id,object_path)', '') : RECORD_SELECT,
+          select: ctx.canManage === false ? RECORD_SELECT.replace(',attendance_evidence(id,object_path)', '') : RECORD_SELECT,
           filters: { event_id: `eq.${event.id}` },
           order: 'submitted_at.asc',
         }),
@@ -525,8 +525,8 @@ export function createEventDetail(ctx, host) {
     // waiting too, and it is exactly what the button cannot approve, so a
     // label counting it promises an officer something the database refuses.
     const approvable = approvableIds().length;
-    setHidden(el.approveAll, ctx.isAdmin === false || approvable === 0);
-    setHidden(el.add, ctx.isAdmin === false);
+    setHidden(el.approveAll, ctx.canManage === false || approvable === 0);
+    setHidden(el.add, ctx.canManage === false);
     el.approveAll.textContent = `Approve ${approvable} waiting`;
     el.approveAll.disabled = state.busy;
   }
@@ -604,7 +604,7 @@ export function createEventDetail(ctx, host) {
    * roster suggestions that fix it live in the queue.
    */
   function actionsFor(record) {
-    if (ctx.isAdmin === false) return [];
+    if (ctx.canManage === false) return [];
     const buttons = [];
     const disabled = state.busy;
 

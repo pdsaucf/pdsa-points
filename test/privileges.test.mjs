@@ -359,6 +359,7 @@ const ROLE_ADMIN = '99999999-0000-4000-a000-0000000000e2';
 const ROLELESS = '99999999-0000-4000-a000-0000000000e3';
 const ROLE_VIEWER = '99999999-0000-4000-a000-0000000000e4';
 const ROLE_MEMBER = '99999999-0000-4000-a000-0000000000e5';
+const ROLE_SECDIR = '99999999-0000-4000-a000-0000000000e6';
 const ROLE_EVENT = '22222222-0000-4000-a000-0000000000e1';
 const ROLE_YEAR = 'a0000000-0000-4000-a000-000000000001';
 
@@ -370,23 +371,28 @@ async function roleFixture() {
       ('${ROLE_ADMIN}','secretary@example.test'),
       ('${ROLELESS}','stranger@example.test'),
       ('${ROLE_VIEWER}','unused-viewer@example.test'),
-      ('${ROLE_MEMBER}','unused-member@example.test') on conflict do nothing;
+      ('${ROLE_MEMBER}','unused-member@example.test'),
+      ('${ROLE_SECDIR}','secdir@example.test') on conflict do nothing;
     insert into auth.identities(user_id,provider,provider_id,identity_data) values
       ('${ROLE_OFFICER}','google','role-officer-sub','{"email":"director@example.test","email_verified":true}'),
-      ('${ROLE_ADMIN}','google','role-admin-sub','{"email":"secretary@example.test","email_verified":true}')
+      ('${ROLE_ADMIN}','google','role-admin-sub','{"email":"secretary@example.test","email_verified":true}'),
+      ('${ROLE_SECDIR}','google','role-secdir-sub','{"email":"secdir@example.test","email_verified":true}')
       on conflict(provider_id,provider) do nothing;
     insert into leadership_access(email,role,user_id,google_subject,bound_at) values
       ('director@example.test','officer','${ROLE_OFFICER}','role-officer-sub',now()),
-      ('secretary@example.test','admin','${ROLE_ADMIN}','role-admin-sub',now())
+      ('secretary@example.test','admin','${ROLE_ADMIN}','role-admin-sub',now()),
+      ('secdir@example.test','secretary_director','${ROLE_SECDIR}','role-secdir-sub',now())
       on conflict(email) do update set role=excluded.role, revoked_at=null;
     insert into profiles(user_id,role) values
       ('${ROLE_OFFICER}','officer'), ('${ROLE_ADMIN}','admin'),
+      ('${ROLE_SECDIR}','secretary_director'),
       ('${ROLE_VIEWER}','viewer'), ('${ROLE_MEMBER}','member')
       on conflict(user_id) do update set role=excluded.role;
   `);
 }
 
-const ADMIN_CALLS = [
+// Attendance, roster and photo work: Secretary Director and admin.
+const SECRETARY_DIRECTOR_CALLS = [
   `review_records(array[]::uuid[], 'approve', null)`,
   `add_officer_attendance(null, array[]::uuid[], null)`,
   `add_officer_attendance_batch(null, '[]'::jsonb, null)`,
@@ -394,10 +400,6 @@ const ADMIN_CALLS = [
   `recover_officer_attendance_batch(null, 'refusal-test')`,
   `resolve_unmatched(null, null, '{}'::jsonb)`,
   `merge_members(null, null)`,
-  `validate_requirement_set('${REQ_SET}')`,
-  `preview_requirement_set('${REQ_SET}')`,
-  `clone_requirement_set('${REQ_SET}')`,
-  `publish_requirement_set('${REQ_SET}')`,
   `purge_evidence(12, null)`,
   `purge_orphaned_uploads()`,
   `finish_purge_run(null, array[]::text[])`,
@@ -405,6 +407,14 @@ const ADMIN_CALLS = [
   `upsert_members_and_enroll('[]'::jsonb, null)`,
   `link_retroactive_matches(null, array[]::uuid[])`,
   `dismiss_duplicate_pair(null, null)`,
+];
+
+// Requirements and leadership access: admin only.
+const ADMIN_ONLY_CALLS = [
+  `validate_requirement_set('${REQ_SET}')`,
+  `preview_requirement_set('${REQ_SET}')`,
+  `clone_requirement_set('${REQ_SET}')`,
+  `publish_requirement_set('${REQ_SET}')`,
   `list_leadership_access()`,
   `authorize_leadership_access('refused@example.test', 'officer')`,
   `set_leadership_role(null, 'officer')`,
@@ -412,17 +422,20 @@ const ADMIN_CALLS = [
   `list_leadership_audit()`,
 ];
 
+const ADMIN_CALLS = [...SECRETARY_DIRECTOR_CALLS, ...ADMIN_ONLY_CALLS];
+
 test('profile roles fail closed and the shared passcode needs no profile', async () => {
   await roleFixture();
   for (const [user, expected] of [
-    [SHARED_ADMIN, [true, true, true]], [ROLE_ADMIN, [true, true, true]],
-    [ROLE_OFFICER, [false, true, true]], [ROLELESS, [false, false, false]],
-    [ROLE_VIEWER, [false, false, false]], [ROLE_MEMBER, [false, false, false]],
-    [null, [false, false, false]],
+    [SHARED_ADMIN, [true, true, true, true]], [ROLE_ADMIN, [true, true, true, true]],
+    [ROLE_SECDIR, [false, true, true, true]],
+    [ROLE_OFFICER, [false, false, true, true]], [ROLELESS, [false, false, false, false]],
+    [ROLE_VIEWER, [false, false, false, false]], [ROLE_MEMBER, [false, false, false, false]],
+    [null, [false, false, false, false]],
   ]) {
     await db.as('authenticated', user);
     assert.deepEqual(Object.values(await db.one(
-      'select fn_is_admin() a, fn_is_officer() o, fn_is_staff() s',
+      'select fn_is_admin() a, fn_is_secretary_director() d, fn_is_officer() o, fn_is_staff() s',
     )), expected, `role predicates for ${user}`);
   }
   await db.asOwner();
@@ -579,13 +592,91 @@ test('officers cannot read evidence metadata or storage bytes, or replace/delete
   // Storage statistics expose aggregates only, never signed URLs or paths.
   assert.deepEqual(Object.keys(await db.one('select * from fn_storage_usage()')).sort(),
     ['bytes_held','orphaned_count','percent_used','photo_count','quota_bytes','warn_percent']);
-  for (const user of [ROLE_ADMIN, SHARED_ADMIN]) {
+  for (const user of [ROLE_ADMIN, SHARED_ADMIN, ROLE_SECDIR]) {
     await db.as('authenticated', user);
     assert.equal((await db.q('select object_path from attendance_evidence where object_path=$1', [path])).length, 1);
     assert.equal((await db.q("select name from storage.objects where name=$1", [path])).length, 1);
   }
   await db.as('authenticated', ROLE_ADMIN);
   assert.equal((await db.q("delete from storage.objects where name=$1 returning id", [path])).length, 1);
+});
+
+test('Secretary Directors reach attendance, roster, photo and event RPCs, and no requirement or access RPC', async () => {
+  await roleFixture();
+  await db.as('authenticated', ROLE_SECDIR);
+  for (const call of ADMIN_ONLY_CALLS) {
+    const error = await db.expectError(`select * from ${call}`);
+    assert.equal(error.code, 'PDS07', `${call}: ${error.message}`);
+  }
+  // Null arguments may fail validation; what matters is that the role check passed.
+  for (const call of SECRETARY_DIRECTOR_CALLS) {
+    await db.exec('begin');
+    try {
+      await db.q(`select * from ${call}`);
+    } catch (err) {
+      assert.notEqual(err.code, 'PDS07', `${call}: ${err.message}`);
+    } finally {
+      await db.exec('rollback');
+    }
+  }
+  await db.q('select set_event_published($1,true)', [ROLE_EVENT]);
+  await db.q('select set_event_published($1,false)', [ROLE_EVENT]);
+  assert.equal((await db.q('select * from profiles')).length, 1);
+  assert.equal((await db.expectError("update profiles set role='admin' where user_id=$1", [ROLE_SECDIR])).code, '42501');
+  await db.asOwner();
+});
+
+test('Secretary Directors write the roster and attendance, and not categories, rules, calendar or settings', async () => {
+  await roleFixture();
+  await db.as('authenticated', ROLE_ADMIN);
+  const draft = await db.val('select clone_requirement_set($1)', [REQ_SET]);
+  const firstColumn = async (table) => {
+    await db.asOwner();
+    return (await db.q(`select attname from pg_attribute
+      where attrelid=$1::regclass and attnum>0 and not attisdropped and attgenerated=''
+      order by attnum`, [table])).map(r => r.attname);
+  };
+  for (const table of ['members', 'member_enrollments', 'attendance_records']) {
+    const [column] = await firstColumn(table);
+    const count = await db.val(`select count(*)::int from ${table}`);
+    await db.as('authenticated', ROLE_SECDIR);
+    await db.exec('begin');
+    try {
+      assert.equal((await db.q(`update ${table} set ${column}=${column} returning 1`)).length, count, `${table} update`);
+    } finally {
+      await db.exec('rollback');
+    }
+  }
+  const refused = [
+    'categories', 'requirement_sets', 'requirement_nodes', 'requirement_node_categories',
+    'academic_years', 'terms',
+  ];
+  for (const table of refused) {
+    const columns = await firstColumn(table);
+    const count = await db.val(`select count(*)::int from ${table}`);
+    assert.ok(count > 0, `${table} test requires existing rows`);
+    await db.as('authenticated', ROLE_SECDIR);
+    assert.equal(await db.val(`select count(*)::int from ${table}`), count, `${table} staff read`);
+    assert.equal((await db.expectError(
+      `insert into ${table} (${columns.join(',')}) select ${columns.join(',')} from ${table} limit 1`,
+    )).code, '42501', `${table} insert must be RLS, not a duplicate-key failure`);
+    assert.deepEqual(await db.q(`update ${table} set ${columns[0]}=${columns[0]} returning 1`), [], `${table} update`);
+    assert.deepEqual(await db.q(`delete from ${table} returning 1`), [], `${table} delete`);
+  }
+  // Settings: the Storage screen's retention window, and no other key.
+  await db.as('authenticated', ROLE_SECDIR);
+  assert.deepEqual(await db.q("update app_settings set value=value where key<>'evidence_retention_months' returning 1"), []);
+  assert.equal((await db.expectError("update app_settings set key='renamed' where key='evidence_retention_months'")).code, '42501');
+  assert.equal((await db.expectError("insert into app_settings(key,value) values('secdir-bypass','true')")).code, '42501');
+  assert.deepEqual(await db.q("delete from app_settings returning 1"), []);
+  await db.exec('begin');
+  try {
+    assert.equal((await db.q("update app_settings set value='6'::jsonb where key='evidence_retention_months' returning 1")).length, 1);
+  } finally {
+    await db.exec('rollback');
+  }
+  await db.asOwner();
+  assert.equal(await db.val('select status from requirement_sets where id=$1', [draft]), 'draft');
 });
 
 test('roleless and unused-role accounts cannot read internal tables or invoke event operations', async () => {
@@ -635,6 +726,16 @@ test('leadership approval binds only its verified Google identity and never memb
   await db.asOwner();
   assert.equal(await db.val('select user_id from leadership_access where id=$1', [approved.id]), user);
   assert.equal(await db.val('select count(*)::int from members'), membersBefore);
+
+  const secdir = await googleUser('d101', 'new.secdir@example.test');
+  await approve('new.secdir@example.test', 'secretary_director');
+  await db.as('authenticated', secdir);
+  assert.equal((await db.val('select leadership_session()')).role, 'secretary_director');
+  assert.equal(await db.val("select review_records('{}','approve',null)"), 0);
+  assert.equal((await db.expectError('select * from list_leadership_access()')).code, 'PDS07');
+  assert.equal((await db.expectError("select authorize_leadership_access('x@example.test','admin')")).code, 'PDS07');
+  await db.as('authenticated', SHARED_ADMIN);
+  assert.equal((await db.expectError("select authorize_leadership_access('x@example.test','viewer')")).code, 'PDS03');
 });
 
 test('editable user metadata, non-Google or unverified identities and legacy profiles cannot grant access', async () => {
@@ -750,7 +851,7 @@ test('a stale bound admin cannot stand in for the last effective individual admi
   assert.equal((await db.val('select leadership_session()')).is_shared_admin,true);
 });
 
-test('officer-role migration resolves citext signatures when Supabase installs the extension outside public', async () => {
+test('role migrations resolve citext signatures when Supabase installs the extension outside public', async () => {
   const {PGlite} = await import('@electric-sql/pglite');
   const {citext} = await import('@electric-sql/pglite/contrib/citext');
   const {pg_trgm} = await import('@electric-sql/pglite/contrib/pg_trgm');
@@ -767,7 +868,7 @@ test('officer-role migration resolves citext signatures when Supabase installs t
       await isolated.exec(await readFile(new URL(`../supabase/migrations/${name}`,import.meta.url),'utf8'));
     }
     const result = await isolated.query(`select prosrc from pg_proc where proname='upsert_member_and_enroll'`);
-    assert.match(result.rows[0].prosrc,/fn_is_admin\(\)/);
+    assert.match(result.rows[0].prosrc,/fn_is_secretary_director\(\)/);
   } finally {
     await isolated.close();
   }

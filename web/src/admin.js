@@ -22,6 +22,18 @@ import { installButtonIcons } from './icons.js';
 const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage', 'access'];
 const SETTINGS_TABS = ['requirements', 'categories', 'storage', 'access'];
 
+// The tabs each role is shown. Postgres holds the boundary; this only keeps
+// doors that will not open off the screen. See docs/07-officer-roles.md.
+const ROLE_TABS = {
+  admin: TABS,
+  secretary_director: ['events', 'review', 'progress', 'roster', 'storage'],
+  officer: ['events', 'progress', 'roster'],
+};
+const ROLE_NAMES = {
+  secretary_director: 'Secretary Director',
+  officer: 'Officer',
+};
+
 // One member, in full. It is not a tab: it is opened from a name on the board
 // or on the roster and closed back to whichever of those it came from, so
 // clicking a name never loses the officer's place.
@@ -42,8 +54,8 @@ const PANEL_RECOVERY = {
 const el = {};
 const app = {
   session: null,
-  // The role the screen is drawn for. It differs from actualRole only in an
-  // officer preview, which an admin opens from Access (?as=officer).
+  // The role the screen is drawn for. It differs from actualRole only in a
+  // role preview, which an admin opens from Access (?as=officer).
   role: null,
   actualRole: null,
   access: null,
@@ -204,8 +216,8 @@ async function guard() {
   try {
     const identity = await callRpc('leadership_session', {});
     app.actualRole = identity?.role;
-    app.role = app.actualRole === 'admin' && previewRequested() ? 'officer' : app.actualRole;
-    if (!['admin', 'officer'].includes(app.role)) {
+    app.role = app.actualRole === 'admin' ? previewRequested() ?? 'admin' : app.actualRole;
+    if (!ROLE_TABS[app.role]) {
       showDenied('This account has no PDSA access. Contact the Secretary.');
       return;
     }
@@ -244,6 +256,8 @@ function context(panelName) {
     },
     userId: app.session.user.id,
     get isAdmin() { return app.role === 'admin'; },
+    // Attendance, roster and photo writes: Secretary Director and admin.
+    get canManage() { return app.role === 'admin' || app.role === 'secretary_director'; },
     now: app.now,
     // Pass the original error through unchanged so describeOfficer can still
     // distinguish RpcError, NetworkError and an expired session. A refresh is
@@ -330,7 +344,7 @@ function showPanel(name) {
 }
 
 function selectTab(tab) {
-  if (app.role === 'officer' && !['events', 'roster', 'progress'].includes(tab)) return;
+  if (!ROLE_TABS[app.role]?.includes(tab)) return;
   app.tab = tab;
   showPanel(tab);
   clearMessage();
@@ -348,8 +362,10 @@ function closeMember() {
   selectTab(app.returnTab);
 }
 
+// The previewed role, or null. Admin is never a preview.
 function previewRequested() {
-  return new URLSearchParams(window.location.search).get('as') === 'officer';
+  const role = new URLSearchParams(window.location.search).get('as');
+  return Object.hasOwn(ROLE_NAMES, role) ? role : null;
 }
 
 function startApp() {
@@ -358,8 +374,8 @@ function startApp() {
   const previewing = app.role !== app.actualRole;
   setHidden(el.previewBar, !previewing);
   if (previewing) {
-    el.previewBarRole.textContent = 'Officer / Director preview';
-    document.title = 'Officer preview, PDSA Points';
+    el.previewBarRole.textContent = `${ROLE_NAMES[app.role]} preview`;
+    document.title = `${ROLE_NAMES[app.role]} preview, PDSA Points`;
   }
 
   const email = app.session.user.email || '';
@@ -375,10 +391,9 @@ function startApp() {
   app.progress = createProgress(context('progress'));
   app.roster = createRoster(context('roster'));
   app.member = createMember(context('member'));
-  for (const name of ['review', ...SETTINGS_TABS]) {
-    setHidden(el.tabs[name], app.role !== 'admin');
-  }
-  setHidden(el.settingsMenu, app.role !== 'admin');
+  const tabs = ROLE_TABS[app.role];
+  for (const name of TABS) setHidden(el.tabs[name], !tabs.includes(name));
+  setHidden(el.settingsMenu, !SETTINGS_TABS.some((name) => tabs.includes(name)));
   createSearch({
     get year() {
       return app.year;
@@ -390,16 +405,20 @@ function startApp() {
     },
     fail: (err, retry) => fail(err, retry, { panel: 'Search' }),
   }).mount();
-  if (app.role === 'admin') {
+  if (tabs.includes('review')) {
     app.review = createReview(context('review'));
+    app.review.mount();
+  }
+  if (tabs.includes('storage')) {
+    app.storage = createStorage(context('storage'));
+    app.storageReloadQueue = Promise.resolve(app.storage.mount());
+  }
+  if (app.role === 'admin') {
     app.requirements = createRequirements(context('requirements'));
     app.categories = createCategories(context('categories'));
-    app.storage = createStorage(context('storage'));
     app.access = createAccess(context('access'));
-    app.review.mount();
     app.requirements.mount();
     app.categories.mount();
-    app.storageReloadQueue = Promise.resolve(app.storage.mount());
     app.access.mount();
   }
   app.events.mount();

@@ -3,7 +3,8 @@
 import { callRpc } from './rest.js';
 import { $, h } from './ui.js';
 
-const roleName = (role) => role === 'admin' ? 'Secretary / Admin' : 'Officer / Director';
+const ROLES = { officer: 'Officer', secretary_director: 'Secretary Director', admin: 'Secretary / Admin' };
+const roleName = (role) => ROLES[role] ?? role;
 export function createAccess(ctx) {
   let busy = false;
   function lock(value) {
@@ -17,7 +18,7 @@ export function createAccess(ctx) {
       ]);
       $('access-rows').replaceChildren(...entries.map((entry) => {
         const picker = h('select', { class: 'select', 'aria-label': `Role for ${entry.email}` },
-          ...['officer', 'admin'].map((role) => h('option', { value: role, selected: role === entry.role }, roleName(role))));
+          ...Object.keys(ROLES).map((role) => h('option', { value: role, selected: role === entry.role }, roleName(role))));
         return h('tr', {}, h('td', {}, entry.email),
           h('td', {}, entry.revoked_at ? 'Revoked' : entry.user_id ? 'Approved' : 'Pending first sign-in'),
           h('td', {}, entry.revoked_at ? roleName(entry.role) : picker),

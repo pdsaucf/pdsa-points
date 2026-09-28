@@ -79,7 +79,7 @@ test('staff profiles are restored without reviving member claims', async () => {
   assert.equal(await db.val("select to_regclass('public.member_claims')"), null);
   assert.deepEqual((await db.q(`select enumlabel from pg_enum
     where enumtypid='app_role'::regtype order by enumsortorder`)).map(row => row.enumlabel),
-  ['admin', 'officer', 'viewer', 'member']);
+  ['admin', 'secretary_director', 'officer', 'viewer', 'member']);
 });
 
 test('retiring an old Auth user preserves historical rows', async () => {
