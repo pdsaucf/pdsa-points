@@ -9,7 +9,7 @@ personalization: `/me` already answers "what did I attend", and this page answer
 is happening". Eight facts per event, and nothing else:
 
 ```
-Date · Time · Location · Attire · Sign-ups · Points · Title · Description
+Date, Time, Location, Attire, Sign-ups, Points, Title, Description
 ```
 
 ## What has to be added
@@ -28,8 +28,8 @@ renders as nothing at all.
 `notes` is officer-side, RLS-protected, and a public page reading it would leak an
 internal note the first time somebody typed one there.
 
-Points come from `event_categories` and are not a new column. The page shows the sum of
-`fixed_credit` across the event's categories, with each category named. An event whose
+Points come from `event_categories` and are not a new column. The page names each
+category with its `fixed_credit` and prints no total. An event whose
 category is `credit_mode = 'from_submission'` shows `Varies` for that category, because
 the member types the number at check-in and no fixed figure exists to promise.
 
@@ -88,7 +88,7 @@ published silently. The admin list marks it:
 
 ```
 Not visible
-Sep 12 Give Kids A Smile · Publishes after the event
+Sep 12 Give Kids A Smile, Publishes after the event
 [ Publish ]
 ```
 

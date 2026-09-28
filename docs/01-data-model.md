@@ -1,6 +1,7 @@
 # PDSA Points: data model
 
-Status: **draft for sign-off**. No code written yet.
+Status: **implemented**. The migrations in `supabase/migrations/` are the source of truth;
+this document explains why they are shaped the way they are.
 Grounded in [00-spreadsheet-findings.md](00-spreadsheet-findings.md).
 
 ## Design principles
@@ -112,10 +113,10 @@ create table member_enrollments (
 `member_enrollments` is what makes year rollover a non-event: last year's members stay
 in `members` with their history intact, and this year's roster is a new set of rows.
 
-The only signed-in identity is the fixed shared GoTrue user behind the admin
-passcode. Its JWT must resolve to `officers@pdsaucf.com`; another Auth user is
-not an administrator. There is no application profile, role enum, viewer mode,
-member account, or claim flow. The member portal is anonymous and name-based:
+Leadership accounts are separate from members. Officers and the Secretary sign in with
+Google after an admin approves their address, and `profiles` carries each one's role
+([07-officer-roles.md](07-officer-roles.md), [08-leadership-access.md](08-leadership-access.md)).
+There is no member account or claim flow. The member portal is anonymous and name-based:
 see [04-member-ui.md](04-member-ui.md).
 
 ## 3. Categories
@@ -200,8 +201,8 @@ create table event_evidence_requirements (
 
 Why this shape:
 
-- **Soap Carving** is one row with two `event_categories` links (Clinical Workshop,
-  fixed 1 · Social, fixed 1). The 69/69 duplication in the sheet becomes structurally
+- **Soap Carving** is one row with two `event_categories` links (Clinical Workshop
+  and Social, fixed 1 each). The 69/69 duplication in the sheet becomes structurally
   impossible.
 - **An event that asks the member for a number** links to its category with
   `credit_mode='from_submission'` and could *also* link to Socials with
@@ -214,8 +215,9 @@ Why this shape:
 - `starts_at/ends_at` are the verified actual event schedule. They are optional as a
   pair, display in America/New_York, and are never inferred from or used as the
   check-in window. Existing events remain blank until an officer verifies their times.
-- Events have no Location property. The club did not use it, so migration 25 discards
-  the old column instead of carrying a deprecated field.
+- `location`, `attire` and `signup` are free text for the public events page. Migration
+  25 dropped `location`, and the events-page migration restored it
+  ([05-events-page.md](05-events-page.md)).
 
 ## 5. Attendance (one table with statuses, not a queue plus a ledger)
 
@@ -449,26 +451,24 @@ create view v_member_category_totals as
   `point_total` is every category's credit added up, since all of it is points;
   `is_honorary` is the root node's `passed`.
 - `v_config_warnings` → the anti-drift lint, surfaced as a dashboard banner:
-  active category with no rule in the current year's set · rule pointing at an archived
-  category · event with zero categories · event with an evidence requirement but
-  `auto_approve` · published year with no ruleset.
+  active category with no rule in the current year's set, rule pointing at an archived
+  category, event with zero categories, event with an evidence requirement but
+  `auto_approve`, published year with no ruleset.
 
 **Honorary status is computed in Postgres, never in the browser**, per the brief's
 constraint 4.
 
 ## 8. Security model
 
-| Surface | `anon` | `authenticated` shared admin session |
-|---|---|---|
-| Admin tables and views | no table grants | full admin access |
-| Admin RPCs | no execution grant | callable |
-| Public check-in RPCs | callable, shaped responses only | callable |
-| Public member portal RPCs | callable, shaped responses only | callable |
+| Surface | `anon` | Officer | Admin |
+|---|---|---|---|
+| Tables and views | no grants | read; event writes through `save_event_config()` | full access |
+| Admin RPCs | no execution grant | refused | callable |
+| Public check-in and portal RPCs | callable, shaped responses only | callable | callable |
 
-The fixed shared GoTrue user is the only signed-in identity. The database
-accepts its `authenticated` JWT only when `auth.users.email` is
-`officers@pdsaucf.com`; any other Auth user is denied. There are no application
-profiles, per-account roles, member accounts, or claim approvals.
+An `authenticated` JWT alone grants nothing. The role comes from `profiles`, backed by an
+approved and verified Google identity, or from the shared admin fallback account. The
+full line between Officer and Admin is in [07-officer-roles.md](07-officer-roles.md).
 
 The anonymous check-in page touches **no table**. It calls four `SECURITY DEFINER`
 RPCs:
@@ -667,7 +667,7 @@ The whole current year imports cleanly as history: 355 members, 134 events,
 
 - **Volunteering hours had no provenance.** The sheet stores only a per-member total,
   so it imports as one synthetic "Volunteering (imported 2025-26 total)" event per
-  member. Going forward, volunteering is real events with hours attached.
+  member. Going forward, volunteering is real events with points attached.
 - **Soap Carving** merges into a single event with two category links, and the
   **PDSA Post** columns need their real titles supplied by an officer at import time,
   because the spreadsheet genuinely does not record what they were.

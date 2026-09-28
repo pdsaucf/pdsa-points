@@ -189,7 +189,7 @@ successful results already carry the member-specific Requirement progress.
 ┌────────────────────────────────────────┐
 │ [Approved 8] [Waiting 1] [Declined 1] │
 │ Fall GBM 1                    GBMs: 1  │
-│ Sep 4 · 6:00 to 7:30 PM · 1 hr 30 min  │
+│ Sep 4, 6:00 to 7:30 PM, 1 hr 30 min    │
 │ Give Kids A Smile     Volunteering: 5  │
 │ Sep 2                                  │
 │                                        │
@@ -211,8 +211,8 @@ Download PDF.
 
 When either actual instant is missing, the row shows no time. The check-in
 window is never used to infer a schedule or duration. Event duration is informational
-and does not enter points, requirement progress, or Honorary status. Event Location no
-longer exists and appears nowhere in the response or page.
+and does not enter points, requirement progress, or Honorary status. Event location is
+not part of the response or page.
 
 Where more than one `attendance_records` row exists for the same event, the live row
 wins. A member who was declined, corrected the problem, and checked in again sees their
@@ -230,7 +230,7 @@ external font request.
 
 ```
 ┌──────────────────────────────────┐
-│  Leaderboard   2026-2027 · 64    │
+│  Leaderboard   2026-2027, 64     │
 │                                  │
 │   1  Amir Petrov         ★   26  │
 │   1  Daniel Nguyen       ★   26  │
@@ -260,13 +260,15 @@ gets pasted into a group chat, so the root is the portal; a URL that still carri
 is forwarded to `/c/` with the query intact, since a token only means check-in.
 
 The emblem at the top of this page is a plain image, not a link. Officers reach
-`/admin/` by its own address; the passcode and its shared authenticated session are the
-gate, unchanged either way (docs/06-officer-passcode.md).
+`/admin/` by its own address; Google sign-in and an approved role are the gate
+([08-leadership-access.md](08-leadership-access.md)).
 
 ## Security
 
-`anon` holds EXECUTE on the five functions above and on nothing else: not the evaluator
-they call, not `fn_portal_year()`, and not one table, view or sequence.
+Of the portal's functions, `anon` holds EXECUTE on the five above and nothing else: not
+the evaluator they call, not `fn_portal_year()`, and not one table, view or sequence. The
+rest of the anonymous surface is check-in, `portal_events()` for `/events`, and the
+keep-alive ping.
 `test/privileges.test.mjs` compares the anon surface against a written-out list, so
 widening it again is a deliberate edit to that list rather than something that happens
 quietly.
@@ -283,9 +285,9 @@ screen and the review queue for exactly that.
 
 ## Retired account design
 
-Migration 24 removes the unused claim RPCs, `member_claims`, `profiles`, and the
-application role enum. The public portal is anonymous and read-only, while `/admin/`
-uses the one fixed shared GoTrue session.
+Migration 24 removed the unused claim RPCs and `member_claims`. The public portal is
+anonymous and read-only. `profiles` and the role enum came back later for leadership
+accounts only ([07-officer-roles.md](07-officer-roles.md)); members still have none.
 
 `members.email` is likewise still a column, holding whatever was imported into it. Nothing
 reads it and nothing writes it.

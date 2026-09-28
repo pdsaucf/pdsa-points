@@ -1,9 +1,8 @@
 # Public Sans
 
 The self-hosted Public Sans variable Roman font and its license are in this
-directory. The `@font-face` rules in `web/assets/css/checkin.css`,
-`web/assets/css/admin.css`, and `web/assets/css/portal.css` load the WOFF2 file
-with `font-display: swap` and retain the
+directory. Each page's stylesheet under `web/assets/css/` declares its own
+`@font-face` for the WOFF2 file with `font-display: swap`, over the
 `ui-sans-serif, system-ui, sans-serif` fallback.
 
 ## Included files

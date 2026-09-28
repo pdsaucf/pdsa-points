@@ -1,9 +1,8 @@
-# web/ · the frontend
+# web/: the frontend
 
 Four surfaces, one static directory, no build step.
 
 - **`/c/`** the page a member reaches by scanning the QR code at an event. No login.
-  This is **P1**.
 - **`/admin/`** the leadership screens, entered through `Continue with Google`.
   Postgres grants approved Admin or Officer access. No password field is rendered;
   the low-level shared-passcode auth fallback remains available.
@@ -19,29 +18,40 @@ web/
   config.js                  Supabase URL and anon key. Public by design.
 
   c/index.html               the check-in page, served at /c/?e=<token>
-  admin/index.html           the review queue, served at /admin/
+  admin/index.html           the leadership screens, served at /admin/
   me/index.html              the member portal, served at /me/
   events/index.html          the public events page, served at /events/
+  privacy/, terms/           the policy pages Google sign-in links to
 
   src/api.js                 fetch against PostgREST and Storage, with retries
   src/checkin.js             the check-in flow
   src/errors.js              every PDS* code, written from the member's side
   src/image.js               compression to the docs/02-storage.md spec
-  src/format.js              dates, labels, units
+  src/format.js              dates and labels
+  src/icons.js               the outline icon set, prepended to labeled buttons
+  src/name-parser.js         pasted names: bullets, numbering, surname first
 
-  src/admin.js               sign-in, the role guard, the tabs
+  src/admin.js               sign-in, the role guard, the tabs, the officer preview
   src/auth.js                Google PKCE, shared fallback, refresh, sign out
   src/rest.js                authenticated PostgREST reads and writes
   src/events.js              the events list: tabs, search, order, the form
   src/event-detail.js        one event: the numbers, and every attendance record
   src/events-model.js        events as data, with no DOM in it
+  src/events-contract.js     the events read, shared with the deploy contract check
+  src/qr.js                  the QR encoder
+  src/joined.js              what "Joined" means, decided once
   src/review.js              the review queue
   src/requirements.js        the rule editor, with the live preview
   src/requirement-model.js   the rule tree as data, with no DOM in it
   src/categories.js          what the rules measure
+  src/category-model.js      categories as data, with no DOM in it
   src/progress.js            the progress board, member by category
   src/member.js              one member: progress, checklist, record log
   src/roster.js              the roster, CSV import, duplicate people
+  src/retro.js               earlier check-ins offered back to a new member
+  src/search.js              the Ctrl K search across members and events
+  src/storage.js             photo storage: usage and the purge flow
+  src/access.js              leadership access, its history, and Preview as
   src/csv.js                 reading and writing CSV, both directions
   src/match.js               ranking the roster against a typed-in name
   src/flags.js               the triage vocabulary, in an officer's words
@@ -51,6 +61,8 @@ web/
   src/portal.js              the public member portal shell and name lookup
   src/portal-scorecard.js    category totals and honorary progress
   src/portal-history.js      current-year attendance
+  src/portal-record.js       attendance record rows
+  src/attendance-pdf.js      the attendance PDF, built in the browser
   src/portal-leaderboard.js  public member standings
   src/member-errors.js       every PDS* code, written from the member's side
   src/events-page.js         the public events page: date, time, location, sign-up
@@ -59,7 +71,9 @@ web/
   assets/css/admin.css       the admin stylesheet
   assets/css/portal.css      the member portal stylesheet
   assets/css/events.css      the public events page stylesheet
-  assets/fonts/public-sans/  Public Sans goes here (see the README in that folder)
+  assets/css/public.css      the @font-face rule and styles shared by every page
+  assets/css/icons.css       icon sizing
+  assets/fonts/public-sans/  Public Sans, and the TTFs the PDF embeds
   mock/                      a local stand-in for Supabase, for development
 ```
 
@@ -83,7 +97,7 @@ sentence a member should ever read.
 
 The check-in page avoided both because it runs on venue wifi with sixty phones on
 it. The admin screens are on a laptop, so that argument does not apply, and the
-question was asked again for **P2** rather than assumed.
+question was asked again for them rather than assumed.
 
 The answer came out the same, for a different reason. No CDN is allowed, so
 `@supabase/supabase-js` would have to be vendored: a bundled artifact committed
@@ -100,14 +114,14 @@ that file, including what is now this codebase's job to maintain as a result.
 4. Commit both. They are public values, and the page cannot work without them.
 
 **The anon key belongs in the repository.** It identifies the project and grants
-nothing on its own: every table is behind RLS, and this page never touches a
-table. What an anonymous caller may do is decided entirely by the four
-`SECURITY DEFINER` RPCs in `supabase/migrations/20260811101000_rpcs.sql`. The
+nothing on its own: every table is behind RLS, and no anonymous page touches a
+table. What an anonymous caller may do is decided entirely by the check-in and
+portal `SECURITY DEFINER` functions, listed in `test/privileges.test.mjs`. The
 `service_role` key is the opposite of that, and must never appear anywhere under
 `web/`.
 
-Until the placeholders are replaced, the page says so rather than failing with a
-network error.
+If the values are missing, the page says so rather than failing with a network
+error.
 
 ## Deploying
 
@@ -119,15 +133,8 @@ The Pages workflow probes the live deployed contracts with the anon key and
 refuses to publish when Supabase has not caught up.
 
 GitHub Pages publishes either the repository root or `/docs`, and this lives in
-neither, so publish `web/` as the Pages artifact from a workflow. That file is
-outside this directory and therefore outside the scope of this phase, but the
-step needed is:
-
-```yaml
-- uses: actions/upload-pages-artifact@v3
-  with:
-    path: web
-```
+neither, so `.github/workflows/pages.yml` publishes `web/` as the Pages artifact on
+every push to `main`, after the contract check passes.
 
 `/c/` is a real directory containing `index.html`, so the route works on GitHub
 Pages with no rewrite rules, no 404 trick and no hash router.
@@ -159,14 +166,17 @@ There is no live Supabase project in development, so `mock/` stands in for one.
 cd web
 npm run mock                 # http://localhost:8787
 npm run verify               # the check-in checks
-npm run verify:admin         # the review queue checks
+npm run verify:admin         # the review queue and passcode checks
 npm run verify:requirements  # the rule editor checks
 npm run verify:board         # the board, member, roster and merge checks
 npm run verify:portal        # public member lookup, points and attendance
 npm run verify:storage       # the storage screen: usage, the purge dialog, roles
 npm run verify:events        # the events screen, the event detail, and the QR encoder
+npm run verify:events-page   # the public events page
 npm run verify:categories    # the category manager
-npm run check                # em dash gate, then all eight suites
+npm run verify:icons         # button icons
+npm run verify:leadership    # Google sign-in, roles, Access, the officer preview
+npm run check                # em dash gate, then every suite above
 ```
 
 `verify:board`, `verify:portal`, `verify:storage` and the second half of
@@ -209,7 +219,7 @@ and production anyway.
 `http://localhost:8787/__mock/audit` shows every call either page made, every
 record filed, any nonce violations, and the officer-side audit trail.
 
-### The review queue, locally
+### The admin screen, locally
 
 ```
 http://localhost:8787/admin/
@@ -224,12 +234,12 @@ the page itself does not expose that input. The real passcode remains a hash in
 `auth.users`, never a repository value. Wrong-passcode refusal and shared-admin
 compatibility remain covered by `verify-admin.mjs` and `verify-leadership.mjs`.
 
+The fixtures put 43 routine check-ins and one of every triage flag into the
+review queue, so no branch of the card renderer is unexercised.
+
 ### The member portal, locally
 
 Open `http://localhost:8787/me/` and look up a fixture member by name. No sign-in is required.
-
-The fixtures put 43 routine check-ins and one of every triage flag into the
-queue, so no branch of the card renderer is unexercised.
 
 ## Things that are load bearing
 
@@ -289,8 +299,8 @@ a refusal they can do nothing about.
 
 ### The client never writes `status`
 
-RLS would in fact allow it: `attendance_write_officer` is `FOR ALL`. Approve and
-reject go through `review_records()` anyway, and linking goes through
+RLS would in fact allow an admin to: `attendance_admin` is `FOR ALL`. Approve and
+decline go through `review_records()` anyway, and linking goes through
 `resolve_unmatched()`, because those functions are also what stamp the reviewer,
 write the `audit_log` row, and refuse the approvals that have to be refused. The
 absence of a direct write is asserted against the source, since nothing else
@@ -351,12 +361,10 @@ from `v_member_category_totals`. Nothing under `src/` sums a category or decides
 who is honorary, which is invariant 2 and the reason the engine is in Postgres.
 
 The trap is that a board which added up its own columns would look completely
-normal. It would also be wrong for every member with volunteering hours, because
-the point total excludes them (`counts_toward_point_total` is false on that
-category) while the column still shows them. So `verify-board.mjs` asserts that
-the visible cells deliberately do NOT sum to the visible point total, on more
-than twenty members. A client doing its own arithmetic could not produce both
-numbers.
+normal, and would stay right until some credit sat in a column the board does not
+show, such as a category retired mid-year. So `verify-board.mjs` scans the source
+for any summation, and compares every drawn total against `v_member_status`,
+member by member.
 
 ### A refused PATCH is a 200
 
@@ -364,21 +372,18 @@ PostgREST answers an UPDATE whose policy matches no row with `200` and an empty
 array, not an error. Every write in `src/rest.js` therefore asks for
 `return=representation` and every caller counts the rows that came back.
 
-The live case is the requirements editor: `req_sets_write` admits an officer for
-drafts only, so an officer's edit to a published set comes back as a 200 with
-nothing in it, and without the count the screen would report a save that never
-happened.
+The case it was built for is the requirements editor, where an update to a
+published set matches no row and comes back as a 200 with nothing in it. Without
+the count, the screen would report a save that never happened.
 
 ## House rules
 
 - **No em dashes anywhere.** `grep -rn $'\xe2\x80\x94' web/` must return nothing.
   `npm run lint:no-em-dash` runs it.
 - **Public Sans, self hosted**, `font-display: swap`, no CDN and no Google Fonts
-  link. The woff2 file is not in the repo yet: see
-  `assets/fonts/public-sans/README.md`. Both pages fall back to
-  `ui-sans-serif, system-ui, sans-serif` until it is added.
-- **Nothing anonymous touches a table.** Only the four RPCs, and the one Storage
-  path a grant reserved. The admin screens are the opposite case and read tables
+  link. See `assets/fonts/public-sans/README.md`.
+- **Nothing anonymous touches a table.** Only the check-in and portal functions,
+  and the one Storage path a grant reserved. The admin screens are the opposite case and read tables
   directly, behind a login and behind RLS.
 - **No jargon on screen.** Not "schema", not "node", not a raw triage flag name.
   `src/flags.js` is where the database's vocabulary is translated into an

@@ -3,9 +3,9 @@
 Replacing PDSA UCF's Google Sheets point tracking with a static frontend on
 GitHub Pages (points.pdsaucf.com) backed by Supabase.
 
-This repository currently contains **P0: the database**. There is no frontend
-yet. What exists is the schema, the requirements engine, the RPC surface, row
-level security, and a test suite that proves all of it works.
+The database (schema, requirements engine, RPCs, row level security) is in
+`supabase/`, and the static site is in `web/`, with its own
+[README](web/README.md). Both are live.
 
 ## Before your first event
 
@@ -21,10 +21,10 @@ unmatched name**. Each one lands in the review queue for an officer to link to a
 person by hand, one at a time, after the event. At a 167-person GBM that is your
 whole evening.
 
-The dashboard warns you about this: `v_config_warnings` raises
-`event_without_enrolled_members` for any published event that is open or
-happening within a week while nobody is enrolled in its academic year. The
-warning exists so you find out beforehand rather than afterwards.
+`v_config_warnings` raises `event_without_enrolled_members` for any published
+event that is open or happening within a week while nobody is enrolled in its
+academic year. No screen shows that view yet, so check the Members screen
+before the first event.
 
 Some unmatched submissions are normal and expected regardless, especially at a
 recruiting event, and the limits are sized to admit a full room of them. See
@@ -39,6 +39,7 @@ Design docs, signed off before implementation:
 - [docs/02-storage.md](docs/02-storage.md)
 - [docs/03-admin-ui.md](docs/03-admin-ui.md)
 - [docs/04-member-ui.md](docs/04-member-ui.md)
+- [docs/05-events-page.md](docs/05-events-page.md)
 - [docs/06-officer-passcode.md](docs/06-officer-passcode.md)
 - [docs/07-officer-roles.md](docs/07-officer-roles.md)
 - [docs/08-leadership-access.md](docs/08-leadership-access.md)
@@ -50,9 +51,11 @@ are requirements, not preferences.
 
 ```
 supabase/migrations/   the schema, in numbered files by concern
-scripts/               roster import, house-rule check
+web/                   the static site: check-in, admin, member portal, events page
+scripts/               roster import, deploy contract check, house-rule check
 test/                  node test runner over PGlite, no Docker
 docs/                  the signed-off design
+.github/workflows/     Pages deploy, keep-alive ping, nightly backup
 ```
 
 ## The migrations
@@ -90,9 +93,20 @@ when the database does not match the static page.
 | `..._name_is_the_identity.sql` | `upsert_member_and_enroll()` resolves a row by name when nothing else identifies it. A member has no email address any more, and the email tier was what made a re-run of an interrupted import land on the rows the first attempt wrote |
 | `..._public_member_portal.sql` | four of the five functions the member portal is made of, callable by `anon`: `portal_find_members()`, `portal_scorecard()`, `portal_leaderboard()`, `portal_requirements()` |
 | `..._one_unit_called_points.sql` | drops `categories.unit`, `categories.unit_label`, the `unit_type` enum and `counts_toward_point_total`. The unit never changed any arithmetic and the flag was false for Volunteering hours alone, so there is one unit and it is points |
-| `..._shared_admin_session.sql` | makes the valid shared session the complete admin authorization decision; drops `profiles`, `member_claims`, `app_role`, and the retired signed-in member RPCs |
 | `..._member_event_history.sql` | `portal_attendance()`, the fifth: a member's own event-by-event attendance for the current year, reversing migration 21's decision to withhold it |
+| `..._shared_admin_session.sql` | makes the valid shared session the complete admin authorization decision; drops `profiles`, `member_claims`, `app_role`, and the retired signed-in member RPCs |
+| `..._officer_attendance_entry.sql` | `add_officer_attendance()`: filing the paper sign-in sheet as one transaction instead of an insert followed by a review |
 | `..._event_times_and_portal_attendance.sql` | optional paired actual event times, removal of event Location, and the one-row-per-event public attendance contract |
+| `..._member_entered_credit_review.sql` | `review_records()` refuses a batch approval that includes a member-entered number |
+| `..._atomic_rate_limit.sql` | the rate limiter decides and increments in one row-locking statement |
+| `..._atomic_event_save.sql` | `save_event_config()`: an event, its categories and its evidence requirement saved in one transaction, with a revision check |
+| `..._atomic_evidence_grant_caps.sql` | upload grant caps hold under concurrent calls |
+| `..._atomic_member_name_upsert.sql` | two simultaneous imports of the same name cannot create two members |
+| `..._event_config_checkin_lock.sql` | a check-in sees one consistent snapshot of the event configuration |
+| `..._event_config_rpc_only.sql` | event configuration is writable only through `save_event_config()` |
+| `..._portal_full_name_lookup.sql` | the portal looks up a member by the complete name as typed |
+| `..._event_attendance_paste.sql` | `add_officer_attendance_batch()`: pasted attendance, matched and unmatched names, in one transaction |
+| `..._events_page.sql` | `portal_events()` for the public events page; restores event location and adds attire and sign-up |
 | `..._officer_roles.sql` | restores profiles and separates admin writes from officer event management and staff reads |
 | `..._leadership_access.sql` | verified Google identity binding, admin access management and audit, immediate revocation and last-admin protection |
 | `..._rls_role_check_once_per_query.sql` | wraps every policy's role check as `(select fn_is_staff())`, so Postgres evaluates it once per statement instead of once per row. The Members screen had been running past the statement timeout |
@@ -201,7 +215,8 @@ four `SECURITY DEFINER` RPCs (`get_checkin_context`, `search_members`,
 source argument, so an anonymous caller structurally cannot approve anything.
 The member portal is anonymous too, and reaches the database through five more
 `SECURITY DEFINER` functions (`portal_find_members`, `portal_scorecard`,
-`portal_attendance`, `portal_leaderboard`, `portal_requirements`). Members have
+`portal_attendance`, `portal_leaderboard`, `portal_requirements`), and the public
+events page through one (`portal_events`). Members have
 no email addresses and no accounts: somebody types their name and reads their
 own points, and the leaderboard lists the club the way the spreadsheet this
 replaces did. `portal_attendance` is a later, deliberate widening: it hands
@@ -344,15 +359,15 @@ To turn backups on:
 2. Same page, Variables tab: add `BACKUPS_ENABLED` set to `true`.
 
 The dump is encrypted with that passphrase before it is ever uploaded (AES-256
-via `gpg --symmetric`), because this repository currently has no git remote, so
-nobody has decided public vs. private yet, and a workflow artifact on a public
-repo is downloadable by anyone with read access. Losing the passphrase means
+via `gpg --symmetric`), because this repository is public, and a workflow
+artifact on a public repository is downloadable by anyone with read access. Losing the passphrase means
 losing the ability to restore, the same as losing any encryption key; keep it
 wherever `SUPABASE_DB_URL` itself is kept.
 
 ## House rules
 
-No em dashes, anywhere, including SQL comments and this file:
+No em dashes, no middle-dot separators, Public Sans self-hosted, and the UI copy
+style. They are written out in [CLAUDE.md](CLAUDE.md). The em dash check:
 
 ```bash
 npm run lint:no-em-dash

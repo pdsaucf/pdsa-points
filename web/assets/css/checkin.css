@@ -8,15 +8,9 @@
    --------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
-   Public Sans, self hosted.
-
-   THE WOFF2 FILES ARE NOT IN THE REPO YET. Until somebody drops them into
-   web/assets/fonts/public-sans/, this @font-face resolves to nothing and
-   every rule below falls through to ui-sans-serif, which is the intended
-   behaviour rather than a broken page: font-display: swap means text is
-   readable from the first paint either way. See
-   web/assets/fonts/public-sans/README.md for exactly which files to add.
-   No Google Fonts link, no CDN.
+   Public Sans, self hosted. Same file, same rule as every other screen: no
+   Google Fonts, no CDN, nothing served from anybody else's host. See
+   web/assets/fonts/public-sans/README.md.
    --------------------------------------------------------------------------- */
 @font-face {
   font-family: 'Public Sans';

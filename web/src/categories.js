@@ -151,7 +151,7 @@ export function createCategories(ctx) {
     }
   }
 
-  /** The subline under a row's name: '4 events · 2 requirements'. Either half
+  /** The subline under a row's name: '4 events, 2 requirements'. Either half
    *  is omitted when zero, and the whole line is omitted when both are. */
   function usageSubline(categoryId) {
     const events = state.displayEventCounts.get(categoryId) ?? 0;

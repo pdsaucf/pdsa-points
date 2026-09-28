@@ -1,7 +1,6 @@
 # Individual leadership access
 
-Implemented locally for review. No production migration or Google provider configuration
-has been applied. The member portal and check-in stay anonymous and unchanged.
+Implemented and deployed. The member portal and check-in stay anonymous and unchanged.
 
 ## Authorization
 
@@ -72,9 +71,9 @@ actions are `authorize`, `change_role`, `revoke` and `bind`.
 
 ## Deployment and Google setup
 
-These are operator steps, not actions performed by this change. Apply the officer-role
-and leadership-access migrations before deploying the frontend that calls these RPCs.
-Keep the existing shared user and password grant functioning throughout.
+Operator steps, kept for rebuilding the project or rotating the Google client. Apply the
+officer-role and leadership-access migrations before deploying a frontend that calls
+these RPCs. Keep the shared user and password grant working throughout.
 
 1. In Google Cloud, configure an OAuth Web application with JavaScript origin
    `https://points.pdsaucf.com` and authorized redirect URI
@@ -97,15 +96,14 @@ Keep the existing shared user and password grant functioning throughout.
 Official references: [Google login](https://supabase.com/docs/guides/auth/social-login/auth-google)
 and [PKCE flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow).
 
-Observed read-only project settings on September 7, 2026: Google disabled, email enabled,
-global signup disabled, and email autoconfirm disabled. Those settings need the operator
-changes above. Actual Google login has not been verified against the live provider.
+Observed read-only project settings on September 28, 2026: Google enabled, email enabled,
+signup enabled, and email autoconfirm disabled.
 
 ## Public Google Branding pages
 
-The feature branch includes these static public pages, available without sign-in:
+These static public pages are live and need no sign-in:
 
-| Google Branding field | URL after deployment |
+| Google Branding field | URL |
 | --- | --- |
 | Application home page | `https://points.pdsaucf.com/me/` |
 | Application privacy policy | `https://points.pdsaucf.com/privacy/` |
@@ -117,14 +115,9 @@ domain continues to redirect there, while bare-domain `?e=` check-in links redir
 existing app pages link to the policies.
 
 The organization and public contact are the same as the existing member/events footers:
-Pre-Dental Student Association at UCF, `pdsa.ucf@gmail.com`. The public contact email was
-confirmed for this change. Club leadership should review these draft policies before
-publication. The text
-describes implemented behavior; it does not establish a fixed deletion deadline or claim
-legal compliance or Google verification approval.
-
-These URLs must be deployed and reachable before using them in Google Branding. This
-change does not deploy the site, apply migrations, or change Google configuration.
+Pre-Dental Student Association at UCF, `pdsa.ucf@gmail.com`. The policies describe
+implemented behavior; they do not establish a fixed deletion deadline or claim legal
+compliance or Google verification approval.
 
 ## Validation scope
 

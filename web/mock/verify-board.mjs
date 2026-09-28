@@ -5,12 +5,10 @@
 //
 //   1. THAT THE NUMBERS COME FROM THE SERVER. Invariant 2 says honorary status
 //      is computed in Postgres and never in client JS, and the point total is
-//      the same kind of answer: it sums only the categories flagged as counting
-//      toward it, which is what excludes Volunteering hours. A board that added
-//      up its own columns would look completely normal and be wrong for every
-//      member with volunteering. So the falsifiable check is here: the visible
-//      cells deliberately do NOT sum to the visible point total, and a client
-//      doing its own arithmetic could not produce both.
+//      the same kind of answer. A board that added up its own columns would
+//      look completely normal until some credit sat in a column it does not
+//      show. So the source is scanned for any summation, and every drawn total
+//      is compared against v_member_status, member by member.
 //   2. That a threshold met shows as met, and that the target under each
 //      column is the published rule's own number rather than a constant. Change
 //      the rule, the board moves.

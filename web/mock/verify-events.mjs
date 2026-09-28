@@ -1936,7 +1936,7 @@ await check('the order picker reorders the list without re-reading the server', 
       .map((row) => {
         // Read off its own cell, never off the row's text: a category chip
         // ending in a credit runs straight into the count beside it, and
-        // "Socials · 1" plus "64 approved" reads as 164.
+        // "Socials, 1" plus "64 approved" reads as 164.
         const [, approved, waiting] =
           /(\d+) approved, (\d+) waiting/.exec(row.querySelector('.event-counts').textContent) ?? [];
         return Number(approved ?? 0) + Number(waiting ?? 0);

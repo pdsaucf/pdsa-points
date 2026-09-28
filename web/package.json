@@ -2,7 +2,7 @@
   "name": "pdsa-points-web",
   "version": "0.2.0",
   "private": true,
-  "description": "Static frontend for the PDSA points system: member check-in and the officer review queue. No build step, no dependencies, no framework.",
+  "description": "Static frontend for the PDSA points system: check-in, the leadership screens, the member portal and the events page. No build step, no dependencies, no framework.",
   "type": "module",
   "engines": {
     "node": ">=20.11"

@@ -283,7 +283,7 @@ export function statusTitle(set) {
   return 'Archived';
 }
 
-/** 'Honorary Member · version 2', for the line under the heading. */
+/** 'Honorary Member, version 2', for the line under the heading. */
 export function setMeta(set) {
   if (!set) return '';
   return [set.name, `version ${set.version}`].filter(Boolean).join(', ');

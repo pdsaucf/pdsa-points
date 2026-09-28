@@ -7,8 +7,8 @@ statements below. The public `/admin/` screen now offers only `Continue with Goo
 Server-side passcode verification and `signInWithPasscode()` remain available as a
 low-level shared-admin fallback; no password field or passcode form is rendered.
 
-Supersedes an unbuilt design for Google sign-in, which was written and then dropped in
-favour of this. Magic-link sign-in is gone with it.
+When written, this replaced an unbuilt Google sign-in design and magic-link sign-in.
+Google sign-in was later built for individual accounts in 08.
 
 ## What was asked
 

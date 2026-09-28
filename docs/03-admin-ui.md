@@ -1,7 +1,7 @@
 # Admin UI: flows and wireframes
 
 Audience: a non-technical student secretary who currently ticks boxes in a
-spreadsheet. Target feel: **spreadsheet-simple, six screens, no jargon**. The word
+spreadsheet. Target feel: **spreadsheet-simple, no jargon**. The word
 "schema" never appears in the UI; neither does "node".
 
 ## Navigation
@@ -9,43 +9,25 @@ spreadsheet. Target feel: **spreadsheet-simple, six screens, no jargon**. The wo
 ```
 points.pdsaucf.com/admin
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ PDSA Points   [2025-2026 ▾]        Dashboard  Review 12  Events          │
-│                          Honorary requirements  Members  Progress   BL ▾│
+│ PDSA Points [2026-2027 ▾]  Events  Review 12  Progress  Members          │
+│                            Settings ▾                   [ Search ⌘K ]  B │
 └──────────────────────────────────────────────────────────────────────────┘
+Settings: Honorary requirements, Event settings, Storage, Access
 ```
 
-The year selector is global and always visible, and every screen is scoped to it, so
-"why do the numbers look wrong" is answerable at a glance.
+The app opens on Events. The year selector is global and always visible, and every
+screen is scoped to it, so "why do the numbers look wrong" is answerable at a glance.
+Officers see Events, Progress and Members; Review and Settings are admin-only
+([07-officer-roles.md](07-officer-roles.md)). Access manages who may sign in, and
+**Preview as** opens the officer screen, the member portal or the events page as that
+audience sees it.
+
+There is no dashboard. `v_config_warnings` exists in the database, and no screen reads
+it yet.
 
 ---
 
-## 1 · Dashboard
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐             │
-│  │ 12         │ │ 355        │ │ 45         │ │ 134        │             │
-│  │ to review  │ │ members    │ │ honorary   │ │ events     │             │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘             │
-│                                                                          │
-│  ⚠ Needs attention                                                       │
-│   • "Media Speaking" has no requirement in 2025-2026        [ Fix ]      │
-│   • "Volleyball" (Mar 12) has no category assigned          [ Fix ]      │
-│   • Check-in still open for "Spring GBM 4" (ended 6d ago)   [ Close ]    │
-│                                                                          │
-│  Recent activity                                                         │
-│   14:02  Sara approved 23 check-ins for Spring GBM 5                     │
-│   13:47  Ben created "Zumba Night" (Socials)                             │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-The "Needs attention" panel is `v_config_warnings`. This is the anti-drift mechanism
-made visible. The dead `President Workshops` tab and the mislabelled `PDSA Post`
-columns would both have shown up here on day one.
-
----
-
-## 2 · Review queue
+## 1. Review queue
 
 **Every submission is reviewed by a human.** The queue's job is to make sure the
 routine ones cost one click and the broken ones are impossible to miss, so it splits
@@ -55,10 +37,10 @@ into two zones by the triage flags, rather than presenting 47 identical rows.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Review        Event [ Spring GBM 5 ▾ ]                     47 pending    │
 │                                                                          │
-│ ⚠ Needs a decision · 4                                                   │
+│ ⚠ Needs a decision, 4                                                    │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
 │ │ "Abby Cato" typed in, no roster match                    [photo]   │   │
-│ │   Closest matches:  Abigail Catto 92%  ·  Abby Catterson 71%         │ │
+│ │   Closest matches:  Abigail Catto 92%,    Abby Catterson 71%         │ │
 │ │   [ It's Abigail Catto ]  [ Add as new member ]  [ Reject ]          │ │
 │ ├──────────────────────────────────────────────────────────────────────┤ │
 │ │ Marcus Okafor  ⚑ same photo he submitted for Spring GBM 4  [photo]   │ │
@@ -71,7 +53,7 @@ into two zones by the triage flags, rather than presenting 47 identical rows.
 │ │   [ Enroll & approve ]  [ Reject ]                                   │ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
 │                                                                          │
-│ ✓ Routine · 43        roster match · inside window · photo attached      │
+│ ✓ Routine, 43        roster match, inside window, photo attached         │
 │ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐                      │
 │ │ [photo]  │ │ [photo]  │ │ [photo]  │ │ [photo]  │   … 39 more          │
 │ │ A. Catto │ │ D. Silva │ │ P. Mehta │ │ L. Brown │                      │
@@ -79,7 +61,7 @@ into two zones by the triage flags, rather than presenting 47 identical rows.
 │ └──────────┘ └──────────┘ └──────────┘ └──────────┘                      │
 │                                      [ Approve all 43 ]  [ Show all ]    │
 │                                                                          │
-│ Click a photo to enlarge · J/K move · A approve · R reject               │
+│ Click a photo to enlarge, J/K move, A approve, R reject                  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,14 +84,13 @@ visible:
 | Couldn't find their name, typed it | ranked fuzzy matches from the roster | links the record to the right member |
 | Genuinely new member | same card | creates the member and links it |
 | Same photo reused for two events | both photos side by side | reject, or approve with a note |
-| Two roster rows for one person | flagged at submission, fixed on the Members screen | merge (see §5) |
+| Two roster rows for one person | flagged at submission, fixed on the Members screen | merge (see §4) |
 
-**Reject** always asks for a one-line reason, stored in `review_note`. Six months later
+**Decline** always asks for a one-line reason, stored in `review_note`. Six months later
 "why doesn't Ana have credit for the March GBM" has an answer.
 
-> Events also carry a `review_policy` column that can auto-approve, left in the schema
-> for a category like Tabling where the stakes are low. It ships **off everywhere**, as
-> an advanced toggle in the event editor. Default behaviour is review everything.
+> Events also carry a `review_policy` column that could auto-approve. Every event is
+> `manual_review`, and no screen can change it (invariant 6).
 
 > **There is no Account claims tab.** There was one, and it existed because the member
 > portal was an account: a member signed in with an address, and an officer confirmed
@@ -119,17 +100,17 @@ visible:
 
 ---
 
-## 3 · Events
+## 2. Events
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Events   Search […]   Show [ Any status ▾ ]  Order [ Newest ▾ ] [+ New]  │
 │ (All 36)(GBMs 14)(Volunteering 3)(Socials 11)(Tabling 4)(No category 1)  │
 │ ──────────────────────────────────────────────────────────────────────── │
-│ Mar 12  Zumba Night          Socials · 1              18 · 0  ● open  ⋯  │
-│ Mar 10  Tabling              Tabling · 1               7 · 0  closed  ⋯  │
-│ Mar 05  Soap Carving         Clinical Workshop, Social 69 · 2  closed  ⋯ │
-│ Feb 26  Nothing Bundt Cakes  Partial Proceeds · 1     31 · 0  closed  ⋯  │
+│ Mar 12  Zumba Night          Socials, 1              18, 0  ● open  ⋯    │
+│ Mar 10  Tabling              Tabling, 1               7, 0  closed  ⋯    │
+│ Mar 05  Soap Carving         Clinical Workshop, Social 69, 2  closed  ⋯  │
+│ Feb 26  Nothing Bundt Cakes  Partial Proceeds, 1     31, 0  closed  ⋯    │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -144,7 +125,7 @@ events point at it, which is invariant 4 working: the history goes on resolving.
 Search, Show and Order all run on the list already loaded. None of the three sends a
 request, so a filter can never disagree with the row underneath it.
 
-### 3.1 · One event, in full
+### 2.1. One event, in full
 
 The title in a list row opens the event. Every other control on the row does one
 narrow thing (print the code, change the fields); this is where the attendees are.
@@ -154,14 +135,14 @@ narrow thing (print the code, change the fields); this is where the attendees ar
 │ [Back]  56 records   [QR] [Preview check-in] [Edit] [Duplicate] [Delete] │
 │                                                                          │
 │ Spring GBM 5                                                             │
-│ Aug 11               ● Open    ⟨GBMs · 1⟩                                │
+│ Aug 11               ● Open    ⟨GBMs, 1⟩                                 │
 │ Check-in has no close time                                               │
 │                                                                          │
 │ ┌────────┐┌────────┐┌────────┐┌─────────────┐┌───────────────┐           │
 │ │ 43     ││ 11     ││ 1      ││ 8           ││ 12%           │           │
 │ │Approved││Waiting ││Declined││ Not matched ││ Of the roster │           │
 │ └────────┘└────────┘└────────┘└─────────────┘└───────────────┘           │
-│ Scanned 54 · Added by an officer 2 · 2:00 PM to 2:40 PM                  │
+│ Scanned 54, Added by an officer 2, 2:00 PM to 2:40 PM                    │
 │                                                                          │
 │ Attendance  [Approve 11 waiting] [Add attendance] [Export CSV]           │
 │ ──────────────────────────────────────────────────────────────────────── │
@@ -293,7 +274,7 @@ is the real check-in page, so a check-in made from it is a real check-in.
 │ Approval    ○ Approve automatically    ◉ Send to review queue            │
 │             (auto is unavailable while a photo is required)              │
 │                                                                          │
-│ QR code   ▣▣▣  points.pdsaucf.com/c/7fK2pQ                               │
+│ QR code   ▣▣▣  points.pdsaucf.com/c/?e=7fK2pQ                            │
 │           [ Print sheet ]  [ Download PNG ]  [ Rotate link ]             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -301,15 +282,16 @@ is the real check-in page, so a check-in made from it is a real check-in.
 Event start and end are entered in America/New_York and stored as instants. Both may
 be blank, but one cannot be saved without the other and the end must be later. They are
 the actual event schedule, not the check-in window, and duration never affects credit
-or Honorary status. The old Location field has been removed from the schema and editor.
+or Honorary status. Location, attire and sign-up are free text shown on the public
+events page ([05-events-page.md](05-events-page.md)).
 
 ---
 
-## 4 · Honorary requirements
+## 3. Honorary requirements
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Honorary requirements · 2025-2026  Status: Published   [ Edit as draft ] │
+│ Honorary requirements, 2025-2026  Status: Published   [ Edit as draft ]  │
 │                                                   [ Copy from 2024-2025 ]│
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
 │ │ ⠿ GBMs                     at least [  9 ] from ⟨GBMs⟩         63 ✓ ⋯│ │
@@ -367,7 +349,7 @@ Four details that matter:
 
 ---
 
-## 5 · Members
+## 4. Members
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -482,11 +464,11 @@ current spreadsheet workflow actually operates and must keep working.
 
 ---
 
-## 6 · Progress board (replaces the Total + Honorary tabs)
+## 5. Progress board (replaces the Total + Honorary tabs)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Progress · 2025-2026    [ Honorary only ▾ ] [ Search ]    [ Export CSV ] │
+│ Progress, 2025-2026    [ Honorary only ▾ ] [ Search ]    [ Export CSV ]  │
 │ ──────────────────────────────────────────────────────────────────────── │
 │ Member          Pts  GBM  Vol  Clin  NonC  Soc  Vis  Fun  PP  Tab  E  ★  │
 │                      /9   /25  /5    /5    /6   /5   /5   /5  /2   /2    │
@@ -504,7 +486,7 @@ one click to CSV for whoever still wants a spreadsheet.
 ## Member-facing check-in (the QR flow)
 
 ```
-  scan QR ──▶  /c/7fK2pQ
+  scan QR ──▶  /c/?e=7fK2pQ
                  │
                  ├── token unknown / rotated ─▶ "This code is no longer valid"
                  ├── outside window ──────────▶ "Check-in for this event is closed"
@@ -543,16 +525,15 @@ rather than throwing an error.
 
 ---
 
-## 7 · Photo storage & clearing
+## 6. Photo storage and clearing
 
-Purging is an action a person takes, not a job that runs. This lives under Settings,
-and surfaces on the dashboard once there's something worth doing.
+Purging is an action a person takes, not a job that runs. This lives under Settings.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Photo storage                                                            │
 │                                                                          │
-│ 2,431 photos · 512 MB                                                    │
+│ 2,431 photos, 512 MB                                                     │
 │ ████████████████████░░░░░░░░░░░░░░░░░░░░  512 MB of 1 GB                 │
 │                                                                          │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
@@ -590,35 +571,11 @@ Rules behind it:
 
 - **Only reviewed photos are ever eligible.** A pending submission can't be purged out
   from under the queue, however old it is.
-- **Officers and directors can run it**; every run is attributed in `purge_runs` and
-  shown in the history above.
+- **Only an admin can run it**; every run is attributed in `purge_runs` and shown in
+  the history above.
 - **Per-event checkboxes** mean you can hold onto one event's evidence for an ongoing
   dispute, while clearing the rest.
 - The retention window is a setting, not a constant. Twelve months is the default.
-
----
-
-## Build phasing
-
-| Phase | Contents | Rough size |
-|---|---|---|
-| **P0** Foundations | Migrations, RLS, roles, seed, import of 2025-26 | 1 block |
-| **P1** Check-in | RPCs, QR page, member search, compression + upload | 1 block |
-| **P2** Review queue | Triage flags, flagged/routine split, unmatched-name resolution, grid + lightbox, bulk approve/reject, audit | 1 block |
-| **P3** Requirements engine | Node model, evaluator, editor UI, live preview | **2 blocks**, the real cost centre |
-| **P4** Board + roster | Progress board, member detail, CSV import/export UI, duplicate detection + merge | 1 block |
-| **P5** Member portal | Name lookup, the scorecard, the event history, the leaderboard, the Honorary explainer, five public functions | 1 block |
-| **P6** Ops | Storage screen + purge flow, keep-alive ping, backups | 1 block |
-
-**Roster loading is not in P4.** The system starts with no members, so a bulk roster
-path has to exist before the first event or that event's check-ins arrive as ~155
-"add as new member" decisions. P0 therefore ships `scripts/import_roster.py`, a CSV
-loader officers run once; the polished import UI stays in P4.
-
-P3 is deliberately sized larger than the rest: a configurable rule tree with a
-published/draft lifecycle and a live "who would qualify" preview is genuinely more work
-than the ledger around it. Sequencing it after P2 means there's a working system
-producing real data to preview against while it's built.
 
 ---
 
@@ -628,26 +585,14 @@ producing real data to preview against while it's built.
   routine records cost one click and the broken ones surface with a fix attached.
 - **12-month retention, cleared by hand** from the storage screen. Nothing deletes
   itself.
-- **Members get a portal.** Magic-link sign-in, their own progress toward Honorary,
-  their own record list including pending and rejected items. See
+- **Members get a portal.** No sign-in: a member types their name and sees their
+  progress toward Honorary and this year's attendance. See
   [04-member-ui.md](04-member-ui.md).
 - **Stay on Supabase Storage.** Google Drive archival is designed and documented but not
   built; the schema already carries `provider` and `drive_file_id` so adding it later
   needs no migration. The tripwire is the 75% storage warning.
 
-## House rules for the build
+## House rules
 
-Two conventions apply to every screen, string and stylesheet, including the member
-portal and the check-in page:
-
-- **No em dashes anywhere in the product.** Not in UI copy, button labels, empty states,
-  error messages, email templates, or seed data. Use a colon, a comma, parentheses, or a
-  second sentence.
-- **Public Sans throughout**, self-hosted from the repo as woff2 with
-  `font-display: swap`. Not Inter, which reads as the default choice for an
-  AI-generated interface. No Google Fonts link and no CDN: the site is static on
-  GitHub Pages and should carry no external font dependency.
-  `ui-sans-serif, system-ui, sans-serif` is the fallback stack behind it.
-
-These are enforced in [CLAUDE.md](../CLAUDE.md) so the implementer and reviewers hold
-the line.
+No em dashes, no middle-dot separators, Public Sans self-hosted, and the UI copy style.
+All are requirements, written out in [CLAUDE.md](../CLAUDE.md).

@@ -1,7 +1,7 @@
 # Officer roles: what a Secretary may do and an Officer may not
 
-Status: implemented locally for review. The Google leadership transition is described
-in [08-leadership-access.md](08-leadership-access.md); production configuration is pending. It reopens exactly one decision from
+Status: implemented and deployed. Google sign-in is described in
+[08-leadership-access.md](08-leadership-access.md). This reopens exactly one decision from
 [06-officer-passcode.md](06-officer-passcode.md), the single shared account, and keeps the
 rest of that document intact.
 
@@ -38,17 +38,17 @@ select fn_is_shared_admin()
     or (auth.uid() is null and current_user not in ('anon', 'authenticated'))
 ```
 
-So today they are three names for one answer. The work is to make them answer differently
-again, which is mostly a lookup, plus a deliberate pass over each policy deciding which
-side of the line it sits on.
+So at that point they were three names for one answer. Making them answer differently
+again was mostly a lookup, plus a deliberate pass over each policy deciding which side of
+the line it sits on.
 
-Migration 24 also dropped `profiles` and its per-user role. That table comes back, or
-something like it: one row per officer, carrying a role.
+Migration 24 also dropped `profiles` and its per-user role. The officer-roles migration
+brought it back: one row per officer, carrying a role.
 
 ## The roles
 
-The historical `app_role` enum has the values this needs. Migration 24 dropped it,
-so the database stage restores that enum alongside `profiles`.
+The historical `app_role` enum has the values this needs. Migration 24 dropped it, and
+the officer-roles migration restored it alongside `profiles`.
 
 | Person | Role | Reasoning |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ applies to anything else reading a setting through a non-definer function.
 ## Signing in
 
 The role has to attach to a person, which the single shared account cannot do. Three
-options were weighed; see the session that produced this document for the full comparison.
+options were weighed.
 
 **Chosen: Google sign-in, one account per officer**, with a `profiles` row carrying the
 role, and a Secretary-only screen for managing that list.
@@ -144,21 +144,6 @@ restricted, it is a hole with no signal.
 against, so the officer would type a name or an address next to the passcode. Two fields is
 no longer the discreet screen 06 asked for, and at that point Google is better in every
 other way.
-
-## Order of work
-
-The database half is load-bearing and is identical under any sign-in scheme. Build it
-first, and the choice above stays swappable.
-
-1. `profiles` and the role lookup, with `fn_is_admin()`, `fn_is_officer()` and
-   `fn_is_staff()` reading it again, and the shared session kept working as `admin` so
-   nothing breaks mid-migration.
-2. The policy and RPC pass, one at a time, against the table above.
-3. Tests. `test/privileges.test.mjs` is where this belongs, and it should assert refusals
-   for an officer, not just successes for an admin. A test that only proves the Secretary
-   can still work would pass with the whole boundary missing.
-4. Google sign-in and the Secretary's officer-management screen.
-5. The UI hiding, last, once there is something real underneath it to reflect.
 
 ## What this does not touch
 

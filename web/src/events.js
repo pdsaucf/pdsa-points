@@ -1258,8 +1258,8 @@ export function createEvents(ctx) {
 
     // A picker left on "Choose a category" is simply not counted, the same
     // as if that row had been removed: an event is allowed to carry no
-    // categories yet (v_config_warnings flags that on the dashboard, this
-    // screen does not block it).
+    // categories yet (v_config_warnings flags that, and this screen does not
+    // block it).
     const desiredCategories = state.categoryRows
       .filter((row) => row.category_id)
       .map((row) => ({

@@ -105,7 +105,7 @@ function isHttpUrl(value) {
 const factRow = (label, value) => h('div', {}, h('dt', {}, label), h('dd', {}, value));
 
 /**
- * 'GBMs 2 · Volunteering Varies', named category by category so nothing here
+ * 'GBMs 2, Volunteering Varies', named category by category so nothing here
  * ever prints a total: an event with one from_submission category has no
  * fixed figure to sum, and "0" would read as a promise this page cannot make.
  */

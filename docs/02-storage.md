@@ -6,7 +6,7 @@ is, with the numbers it rests on.
 ## Sizing, from the real data
 
 Of 4,811 attendance marks in 2025-26, the ones that would plausibly carry a photo are
-shirt-photo categories (GBMs 1,273 · Socials 644) and receipt categories
+shirt-photo categories (GBMs 1,273 and Socials 644) and receipt categories
 (Partial Proceeds 502). Call it **~2,400 photos/year**, and round up to 3,000 for
 growth.
 
@@ -63,8 +63,8 @@ explicit action means a person sees the count and the affected events before any
 is destroyed, and the run is attributed in `purge_runs`.
 
 The trade-off is that a button nobody presses lets storage fill up. That's handled by
-surfacing it rather than automating it: once eligible photos pass a threshold, or
-storage passes 75%, the dashboard says so until someone acts. Reminder, not autopilot.
+surfacing it rather than automating it: once storage passes 75%, the usage bar on the
+Storage screen turns to a warning. Reminder, not autopilot.
 
 Eligibility is deliberately narrow. A photo can only be purged when it is:
 
