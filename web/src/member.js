@@ -187,7 +187,7 @@ export function createMember(ctx) {
       state.member = members[0] ?? null;
       if (!state.member) {
         setHidden(el.loading, true);
-        ctx.note('That member is gone. Reload the page.', 'warn');
+        ctx.note('Member removed elsewhere, reload the page', 'warn');
         return;
       }
 
@@ -352,14 +352,14 @@ export function createMember(ctx) {
       }),
     );
     if (!state.categories.length) {
-      el.progress.replaceChildren(h('p', { class: 'muted small' }, 'No credit yet this year.'));
+      el.progress.replaceChildren(h('p', { class: 'muted small' }, 'No credit this year'));
     }
   }
 
   function renderChecklist() {
     if (!state.checklist.length) {
       setHidden(el.checklistNote, false);
-      el.checklistNote.textContent = 'No rules are published for this year.';
+      el.checklistNote.textContent = 'No published requirements for this year';
       el.checklist.replaceChildren();
       return;
     }
@@ -434,7 +434,7 @@ export function createMember(ctx) {
 
     if (!state.records.length) {
       el.records.replaceChildren(
-        h('tr', {}, h('td', { class: 'muted', colspan: '5' }, 'Nothing this year.')),
+        h('tr', {}, h('td', { class: 'muted', colspan: '5' }, 'No records this year')),
       );
       return;
     }
@@ -514,7 +514,7 @@ export function createMember(ctx) {
     const offered = state.events.filter((event) => !taken.has(event.id));
 
     if (!offered.length) {
-      ctx.note('This member already has a record for every event this year.', 'warn');
+      ctx.note('Already has a record for every event this year', 'warn');
       return;
     }
 
@@ -554,7 +554,7 @@ export function createMember(ctx) {
     const needsValue = !el.recordValueField.hidden;
     const value = Number(el.recordValue.value);
     if (needsValue && (!el.recordValue.value.trim() || !Number.isFinite(value) || value < 0)) {
-      el.recordError.textContent = 'Type a number.';
+      el.recordError.textContent = 'Type a number';
       setHidden(el.recordError, false);
       el.recordValue.focus();
       return;
@@ -575,7 +575,7 @@ export function createMember(ctx) {
       });
       if (!Array.isArray(created) || created.length !== 1) throw new Error('nothing came back');
 
-      const said = 'Record added.';
+      const said = 'Record added';
       ctx.note(said);
       announce(said);
       await load();
@@ -604,7 +604,7 @@ export function createMember(ctx) {
     const first = el.editFirst.value.trim();
     const last = el.editLast.value.trim();
     if (!first || !last) {
-      el.editError.textContent = 'First and last name are both required.';
+      el.editError.textContent = 'First and last name required';
       setHidden(el.editError, false);
       return;
     }
@@ -623,10 +623,10 @@ export function createMember(ctx) {
         },
       );
       if (!rows.length) {
-        ctx.note('Nothing was changed. Reload the page.', 'warn');
+        ctx.note('Not saved, reload the page', 'warn');
         return;
       }
-      ctx.note('Saved.');
+      ctx.note('Saved');
       await load();
       ctx.onMemberChanged?.();
     } catch (err) {

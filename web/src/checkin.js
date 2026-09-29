@@ -19,7 +19,6 @@ import { installButtonIcons } from './icons.js';
 import {
   formatEventDate,
   formatCloseTime,
-  firstName,
   valueFieldLabel,
   formatBytes,
   evidencePrompt,
@@ -71,10 +70,9 @@ function announce(message) {
   el.live.textContent = message;
 }
 
-/** Joins a title and a body for a screen reader without doubling the full stop. */
+/** Joins a title and a body into one line for a screen reader. */
 function spoken(title, body) {
-  const head = /[.!?]$/.test(title) ? title : `${title}.`;
-  return [head, body].filter(Boolean).join(' ');
+  return [title, body].filter(Boolean).join(', ');
 }
 
 function showBlocked(copy, onRetry) {
@@ -177,8 +175,8 @@ function clearEvidence() {
 // ---------------------------------------------------------------------------
 
 const RETRY_NOTE = {
-  network: 'Connection dropped. Trying again.',
-  busy: 'Lots of people are checking in. Trying again.',
+  network: 'Connection dropped, trying again',
+  busy: 'Busy, trying again',
 };
 
 async function loadContext() {
@@ -237,7 +235,7 @@ function renderForm() {
     el.photoOptional.hidden = requirement.is_required;
     el.photoInput.dataset.kind = requirement.kind;
     if (state.evidence.length) {
-      setPhotoStatus('ready', 'Photo already sent.');
+      setPhotoStatus('ready', 'Photo sent');
       el.photoRetake.hidden = false;
     }
   } else {
@@ -278,8 +276,8 @@ function renderResults(rows) {
 
   if (!rows.length) {
     promoteClaimedRoute(true);
-    renderResultsHint('No match on the roster. Use the button below.');
-    announce('No match on the roster. Use the button below.');
+    renderResultsHint('No match on the roster');
+    announce('No match on the roster');
     return;
   }
 
@@ -298,7 +296,7 @@ function renderResults(rows) {
     }),
   );
   el.nameInput.setAttribute('aria-expanded', 'true');
-  announce(`${rows.length} name${rows.length === 1 ? '' : 's'} found.`);
+  announce(`${rows.length} name${rows.length === 1 ? '' : 's'} found`);
 }
 
 function moveActive(delta) {
@@ -340,7 +338,7 @@ async function runSearch(query) {
     // A search that cannot run must not strand anybody: typing a name does
     // not depend on it, so point at it.
     promoteClaimedRoute(true);
-    renderResultsHint(`${copy.title}. ${copy.body} You can still check in below.`);
+    renderResultsHint(copy.title);
   }
 }
 
@@ -352,7 +350,7 @@ function onSearchInput() {
   if (query.length < MIN_SEARCH_LENGTH) {
     state.searchSeq += 1;
     state.searchAbort?.abort();
-    renderResultsHint('Type at least three letters of your name.');
+    renderResultsHint('Type at least three letters');
     return;
   }
 
@@ -374,7 +372,7 @@ function onSearchKeydown(event) {
     if (state.activeIndex >= 0) selectMember(state.results[state.activeIndex]);
   } else if (event.key === 'Escape') {
     el.nameInput.value = '';
-    renderResultsHint('Type at least three letters of your name.');
+    renderResultsHint('Type at least three letters');
   }
 }
 
@@ -394,7 +392,7 @@ function selectMember(row) {
   el.claimedBlock.hidden = true;
   el.chosenBlock.hidden = false;
   showFormMessage(null);
-  announce(`Checking in as ${row.display_name}.`);
+  announce(`Checking in as ${row.display_name}`);
   el.changeName.focus({ preventScroll: true });
 }
 
@@ -406,7 +404,7 @@ function backToSearch() {
   el.claimedBlock.hidden = true;
   el.searchBlock.hidden = false;
   el.nameInput.value = '';
-  renderResultsHint('Type at least three letters of your name.');
+  renderResultsHint('Type at least three letters');
   showFormMessage(null);
   el.nameInput.focus({ preventScroll: true });
 }
@@ -452,10 +450,10 @@ async function onPhotoChosen(event) {
     if (err instanceof ImageTooLargeError) {
       setPhotoStatus(
         'error',
-        `That photo is ${formatBytes(err.bytes)}, over the ${formatBytes(MAX_INPUT_BYTES)} limit. Take it again at a lower resolution.`,
+        `Photo too large (${formatBytes(err.bytes)}, limit ${formatBytes(MAX_INPUT_BYTES)})`,
       );
     } else {
-      setPhotoStatus('error', 'That file is not a photo. Take it again.');
+      setPhotoStatus('error', 'Not a photo');
     }
     return;
   }
@@ -496,7 +494,7 @@ async function sendPhoto() {
         onRetry: ({ reason }) =>
           setPhotoStatus(
             'working',
-            reason === 'busy' ? 'Busy. Still sending the photo…' : 'Slow connection. Still sending…',
+            reason === 'busy' ? 'Busy, still sending the photo…' : 'Slow connection, still sending…',
           ),
       },
     );
@@ -507,7 +505,7 @@ async function sendPhoto() {
     await uploadEvidence(grant.object_path, state.photo.blob, {
       bucket: grant.bucket ?? EVIDENCE_BUCKET,
       attempts: 4,
-      onRetry: () => setPhotoStatus('working', 'Slow connection. Still sending…'),
+      onRetry: () => setPhotoStatus('working', 'Slow connection, still sending…'),
     });
 
     state.evidence = [
@@ -519,7 +517,7 @@ async function sendPhoto() {
       },
     ];
     saveEvidence();
-    setPhotoStatus('ready', `Photo sent (${formatBytes(state.photo.byteSize)}).`);
+    setPhotoStatus('ready', `Photo sent (${formatBytes(state.photo.byteSize)})`);
     return true;
   } catch (err) {
     state.photoError = { error: err, stage, outstandingGrants: state.outstandingGrants };
@@ -529,9 +527,9 @@ async function sendPhoto() {
       state.photo = null;
       URL.revokeObjectURL(el.photoPreview.src);
       el.photoPreview.hidden = true;
-      setPhotoStatus('error', `${copy.title}. ${copy.body}`);
+      setPhotoStatus('error', copy.title);
     } else {
-      setPhotoStatus('error', 'Photo not sent yet. Tap Check in to send it again.');
+      setPhotoStatus('error', 'Tap Check in to resend the photo');
     }
     return false;
   }
@@ -549,7 +547,7 @@ function collectIdentity() {
     if (!name) {
       showFormMessage({
         title: 'Enter your full name',
-        body: 'Use the name you signed up with.',
+        body: 'Use the name you signed up with',
       });
       el.claimedName.focus();
       return null;
@@ -560,7 +558,7 @@ function collectIdentity() {
 
   showFormMessage({
     title: 'Pick your name first',
-    body: 'Type three letters, then tap your name.',
+    body: 'Type three letters, then tap your name',
   });
   el.nameInput.focus();
   return null;
@@ -582,7 +580,7 @@ function collectValue() {
   if (!Number.isFinite(value) || value < 0) {
     showFormMessage({
       title: 'That is not a number',
-      body: `Enter your ${label} as a number, for example 2 or 2.5.`,
+      body: `Enter your ${label} as a number, like 2 or 2.5`,
     });
     el.valueInput.focus();
     return { ok: false };
@@ -612,7 +610,7 @@ async function onSubmit(event) {
   const identity = collectIdentity();
   if (!identity) return;
   const submittedMemberName = identity.p_member_id ? state.member?.display_name ?? null : null;
-  const submittedName = submittedMemberName ?? identity.p_claimed_name ?? '';
+
 
   const value = collectValue();
   if (!value.ok) return;
@@ -637,13 +635,13 @@ async function onSubmit(event) {
       } else if (state.photo) {
         copy = {
           title: 'The photo has not sent yet',
-          body: 'Try again in a moment.',
+          body: 'Try again in a moment',
           offerSkipPhoto: true,
         };
       } else {
         copy = {
           title: 'This event needs a photo',
-          body: 'Take the photo above, then check in.',
+          body: 'Take the photo above, then check in',
         };
       }
       showFormMessage(copy);
@@ -679,15 +677,14 @@ async function onSubmit(event) {
     );
 
     clearEvidence();
-    const who = firstName(submittedName);
     const flags = result?.flags ?? [];
     showDone(
-      who ? `Thanks, ${who}. Submitted for review.` : 'Submitted for review.',
+      'Submitted for review',
       [
         flags.includes('unmatched_name')
-          ? 'An officer will match your name to the roster before your credit appears.'
-          : 'An officer approves check-ins after the event.',
-        flags.includes('outside_window') ? 'Late check-in. An officer will review it.' : null,
+          ? 'Credit appears after an officer matches your name'
+          : 'Approved by an officer after the event',
+        flags.includes('outside_window') ? 'Late check-in' : null,
       ],
       submittedMemberName,
     );
@@ -702,7 +699,7 @@ async function onSubmit(event) {
     if (copy.retakePhoto) {
       el.photoPreview.hidden = true;
       el.photoRetake.hidden = true;
-      setPhotoStatus('error', 'Take the photo again.');
+      setPhotoStatus('error', 'Take the photo again');
     }
     showFormMessage(copy);
   } finally {
@@ -796,6 +793,6 @@ export function start() {
   }
 
   restoreEvidence();
-  renderResultsHint('Type at least three letters of your name.');
+  renderResultsHint('Type at least three letters');
   loadContext();
 }

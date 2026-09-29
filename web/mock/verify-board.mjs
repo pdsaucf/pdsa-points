@@ -1283,7 +1283,7 @@ await check('a chunk that does not report every row is not reported as a success
   const said = dom.$('screen-message-title').textContent;
   assert.match(said, /0 members added, 0 on the roster/, 'a short chunk was counted as written');
   assert.match(said, /2 rows unknown/, 'the officer is not told how many rows are unaccounted for');
-  assert.match(said, /Import the file again/, 'the officer is not told what to do about it');
+  assert.match(said, /import the file again/, 'the officer is not told what to do about it');
   assert.equal(dom.$('screen-message').dataset.tone, 'warn');
 
   // The unaccounted row is not filed as a refusal either: nothing is known
@@ -1850,7 +1850,7 @@ await check('an identity and a resemblance read differently, not just say differ
 await check('the "does not approve" line is always shown beside the link action', () => {
   assert.match(
     dom.$('member-retro-body').textContent,
-    /Not approved yet\./,
+    /Not approved yet/,
     'no line tells the officer that linking is not approving',
   );
 });
@@ -1915,12 +1915,12 @@ await check('a record decided elsewhere while linking was in progress reports it
 
   dom.click(dom.buttonNamed(dom.$('member-retro-body'), 'Link selected'));
   await until(
-    () => dom.$('member-retro-body').textContent.includes('Somebody already decided this one'),
+    () => dom.$('member-retro-body').textContent.includes('Already reviewed'),
     'the outcome for the rejected record never rendered',
   );
 
   const after = retroRows().find((row) => row.textContent.includes('Health Fair'));
-  assert.match(after.textContent, /Somebody already decided this one/, 'not a generic total');
+  assert.match(after.textContent, /Already reviewed/, 'not a generic total');
 
   const record = (await adminAudit()).attendance.find((row) => row.id === IDS.RETRO_RECORD.race);
   assert.equal(record.member_id, null, 'a rejected record was linked anyway');
@@ -1958,7 +1958,7 @@ await check('a merge mid-flow is followed, on both the read and the write', asyn
   );
   assert.match(
     dom.$('member-retro-body').textContent,
-    /This member was merged/,
+    /Merged into another member/,
     'the write did not report the merge',
   );
 
@@ -1980,7 +1980,7 @@ await check('a merge mid-flow is followed, on both the read and the write', asyn
   await openMemberAndWaitForRetro('Fionnuala Askew');
   assert.match(
     dom.$('member-retro-body').textContent,
-    /This member was merged/,
+    /Merged into another member/,
     'the read never reported the merge',
   );
   assert.match(

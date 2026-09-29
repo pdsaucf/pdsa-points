@@ -189,7 +189,7 @@ async function once(url, init, outerSignal) {
     if (isAbort(err, outerSignal)) throw err;
     // fetch only rejects when no response arrived at all: offline, DNS, TLS,
     // a dropped socket, or our timeout. All of those are worth repeating.
-    throw new NetworkError('The request did not reach the server.', err);
+    throw new NetworkError('The request did not reach the server', err);
   } finally {
     attempt.done();
   }
@@ -231,7 +231,7 @@ export async function rpc(name, args, opts = {}) {
 
     throw new RpcError(
       parsed?.code ?? `HTTP_${res.status}`,
-      parsed?.message ?? parsed?.error ?? `Request failed with status ${res.status}.`,
+      parsed?.message ?? parsed?.error ?? `Request failed with status ${res.status}`,
       res.status,
       parsed?.hint,
     );
@@ -282,7 +282,7 @@ export async function uploadEvidence(objectPath, blob, opts = {}) {
     }
     throw new RpcError(
       parsed?.error ?? `HTTP_${res.status}`,
-      parsed?.message ?? `Upload failed with status ${res.status}.`,
+      parsed?.message ?? `Upload failed with status ${res.status}`,
       res.status,
     );
   }, opts);

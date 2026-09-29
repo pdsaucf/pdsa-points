@@ -51,7 +51,7 @@ const CATEGORY_SELECT = 'id,slug,name,sort_order,archived_at';
 export const REQUIREMENT_USE_SELECT =
   'category_id,requirement_nodes(id,label,requirement_sets!requirement_nodes_requirement_set_id_fkey(name,version,status,academic_year_id))';
 
-const NOT_CHANGED = 'Nothing was changed. Reload the page.';
+const NOT_CHANGED = 'Not saved, reload the page';
 
 export function createCategories(ctx) {
   const el = {
@@ -170,7 +170,7 @@ export function createCategories(ctx) {
     el.list.replaceChildren(
       ...(live.length
         ? live.map((row, index) => renderRow(row, index, live.length))
-        : [h('p', { class: 'muted' }, 'No categories yet.')]),
+        : [h('p', { class: 'muted' }, 'No categories yet')]),
     );
 
     const gone = retired();
@@ -268,7 +268,7 @@ export function createCategories(ctx) {
             class: 'button button-small',
             disabled: state.busy,
             'aria-label': `Restore ${category.name}`,
-            onClick: () => write(category, { archived_at: null }, `${category.name} restored.`),
+            onClick: () => write(category, { archived_at: null }, `${category.name} restored`),
           },
           'Restore',
         ),
@@ -346,7 +346,7 @@ export function createCategories(ctx) {
     event.preventDefault();
     const name = el.name.value.trim();
     if (!name) {
-      el.error.textContent = 'Type a name.';
+      el.error.textContent = 'Type a name';
       setHidden(el.error, false);
       el.name.focus();
       return;
@@ -369,7 +369,7 @@ export function createCategories(ctx) {
       state.categories.push(rows[0]);
       el.name.value = '';
       el.name.focus();
-      const said = `${name} added.`;
+      const said = `${name} added`;
       ctx.note(said);
       announce(said);
       render();
@@ -391,7 +391,7 @@ export function createCategories(ctx) {
       const go = await confirmRetire(category, uses);
       if (!go) return;
     }
-    await write(category, { archived_at: new Date().toISOString() }, `${category.name} retired.`);
+    await write(category, { archived_at: new Date().toISOString() }, `${category.name} retired`);
   }
 
   function confirmRetire(category, uses) {
@@ -448,7 +448,7 @@ export function createCategories(ctx) {
         return;
       }
       state.categories = state.categories.filter((row) => row.id !== category.id);
-      const said = `${category.name} deleted.`;
+      const said = `${category.name} deleted`;
       ctx.note(said);
       announce(said);
       render();

@@ -10,7 +10,8 @@
   "scripts": {
     "test": "node --test 'test/*.test.mjs'",
     "lint:no-em-dash": "bash scripts/check_no_em_dash.sh",
-    "check": "npm run lint:no-em-dash && npm test"
+    "lint:ui-copy": "node scripts/check_ui_copy.mjs",
+    "check": "npm run lint:no-em-dash && npm run lint:ui-copy && npm test"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",

@@ -123,7 +123,7 @@ function refuse(message) {
 function showNoMatch() {
   setHidden(el.noMatch, false);
   el.noMatchTitle.focus();
-  announce('Name not found. Check the spelling. Only paid members are listed.');
+  announce('Name not found, only paid members are listed');
 }
 
 async function lookupMember() {
@@ -132,7 +132,7 @@ async function lookupMember() {
   const lookupSeq = ++app.lookupSeq;
   const name = el.lookupName.value.trim();
   if (!name) {
-    refuse('Type your full name.');
+    refuse('Type your full name');
     el.lookupName.focus();
     return;
   }
@@ -141,7 +141,7 @@ async function lookupMember() {
   setHidden(el.noMatch, true);
   clearMessage();
   setLooking(true);
-  announce('Looking up member.');
+  announce('Looking up member');
   const isCurrent = () =>
     lookupSeq === app.lookupSeq && el.lookupName.value.trim() === name;
   try {
@@ -211,7 +211,7 @@ function offerCandidates(rows) {
     ),
   );
   setHidden(el.pickBlock, false);
-  announce('Two people have that name. Pick one.');
+  announce('Two people have that name, pick one');
 }
 
 const joinedLabel = (isoDate) => {
@@ -331,12 +331,12 @@ async function downloadPdf() {
   const memberId = activeMemberId;
   el.download.disabled = true;
   setHidden(el.downloadError, true);
-  announce('Preparing download.');
+  announce('Preparing download');
   try {
     const fonts = await loadAttendancePdfFonts();
     if (activeMemberId !== memberId || app.card !== card || app.attendance !== attendance) return;
     if (!attendanceSnapshotMatches(attendance, memberId) || attendance.scorecard !== card) {
-      throw new Error('Attendance data changed before the download was ready.');
+      throw new Error('Attendance data changed before the download was ready');
     }
     const blob = buildAttendancePdf({
       card,
@@ -344,11 +344,11 @@ async function downloadPdf() {
       ...fonts,
     });
     saveAttendancePdf(blob, attendancePdfFilename(card));
-    announce('PDF downloaded.');
+    announce('PDF downloaded');
   } catch {
     if (activeMemberId !== memberId || app.card !== card || app.attendance !== attendance) return;
     setHidden(el.downloadError, false);
-    announce('Download failed.');
+    announce('Download failed');
   } finally {
     if (activeMemberId === memberId && app.card === card && app.attendance === attendance) {
       el.download.disabled = false;
@@ -416,7 +416,7 @@ export function start() {
 
   if (!IS_CONFIGURED) {
     el.messageTitle.textContent = 'This page is not connected yet';
-    el.messageBody.textContent = 'Ask an officer.';
+    el.messageBody.textContent = 'Ask an officer';
     setHidden(el.message, false);
     setHidden(el.lookupForm, true);
     return;

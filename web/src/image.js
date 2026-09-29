@@ -20,7 +20,7 @@ export const JPEG_QUALITY = 0.7;
 
 export class ImageTooLargeError extends Error {
   constructor(bytes) {
-    super('That photo is too large to send.');
+    super('Photo too large to send');
     this.name = 'ImageTooLargeError';
     this.bytes = bytes;
   }
@@ -28,7 +28,7 @@ export class ImageTooLargeError extends Error {
 
 export class ImageDecodeError extends Error {
   constructor(cause) {
-    super('That file could not be read as a photo.');
+    super('Not a readable photo');
     this.name = 'ImageDecodeError';
     this.cause = cause;
   }

@@ -22,7 +22,7 @@ import { SessionExpiredError } from './auth.js';
 /** Said in two places, so it is written once. */
 const SESSION_EXPIRED = {
   title: 'Sign-in expired',
-  body: 'Sign in again.',
+  body: 'Sign in again',
   recover: 'signin',
 };
 
@@ -35,7 +35,7 @@ const BY_CODE = {
   // this screen.
   PDS06: () => ({
     title: 'Member not matched',
-    body: 'Link this check-in to a member, or add them as a new member, then approve it.',
+    body: 'Link a member or add a new one, then approve',
     recover: 'refresh',
   }),
 
@@ -43,25 +43,25 @@ const BY_CODE = {
 
   PDS05: () => ({
     title: 'Already has a record for this event',
-    body: 'Check that event in the queue, or decline this check-in as a duplicate.',
+    body: 'Check that event in the queue, or decline this check-in as a duplicate',
     recover: 'refresh',
   }),
 
   PDS03: (message) => ({
     title: 'That was not accepted',
-    body: message || 'Check what was entered, then try again.',
+    body: message || 'Check what was entered, then try again',
     recover: 'none',
   }),
 
   PDS09: () => ({
     title: 'The database is busy',
-    body: 'Wait a few seconds, then press the button again. Nothing was lost.',
+    body: 'Wait a few seconds, then press the button again',
     recover: 'retry',
   }),
 
   PDS15: () => ({
     title: 'Event changed',
-    body: 'Another officer saved this event. Review the latest version before editing it again.',
+    body: 'Reload to see the latest version',
     recover: 'none',
   }),
 
@@ -87,7 +87,7 @@ const HTTP_FALLBACK = {
   },
   409: {
     title: 'Conflicts with an existing record',
-    body: 'Reload the queue, then try again.',
+    body: 'Reload the queue, then try again',
     recover: 'refresh',
   },
 };
@@ -111,7 +111,7 @@ export function describeOfficer(err, context = null) {
   if (err instanceof NetworkError) {
     return {
       title: 'No connection to the database',
-      body: 'Check the wifi, then press the button again. Nothing on screen is lost.',
+      body: 'Check the wifi, then press the button again',
       recover: 'retry',
     };
   }
@@ -135,7 +135,7 @@ export function describeOfficer(err, context = null) {
     if (err.status >= 500) {
       return {
         title: 'The database is not responding',
-        body: 'Wait a few seconds, then press the button again.',
+        body: 'Wait a few seconds, then press the button again',
         recover: 'retry',
       };
     }
@@ -143,7 +143,7 @@ export function describeOfficer(err, context = null) {
 
   return {
     title: context?.panel ? `${context.panel} unavailable` : 'That did not go through',
-    body: 'Try again.',
+    body: 'Try again',
     recover: 'refresh',
   };
 }
@@ -166,7 +166,7 @@ const RETRO_OUTCOME = {
   // the RPC response does not say which, so this stays a flag worth a look
   // rather than a claim about whose record it now is.
   already_linked: 'Already linked to somebody',
-  not_pending: 'Somebody already decided this one',
+  not_pending: 'Already reviewed',
   wrong_year: 'Not enrolled for that year',
   not_found: 'No longer exists',
   conflict: 'Already has a record for this event',
@@ -174,7 +174,7 @@ const RETRO_OUTCOME = {
 
 /** @param {string} outcome one of link_retroactive_matches()'s six outcomes */
 export function describeRetroOutcome(outcome) {
-  return RETRO_OUTCOME[outcome] ?? 'Unknown outcome.';
+  return RETRO_OUTCOME[outcome] ?? 'Unknown outcome';
 }
 
 /**
@@ -186,18 +186,18 @@ export function describeRetroOutcome(outcome) {
  * request, which from this form means an empty passcode got past the check.
  */
 export function describeSignIn(err) {
-  if (err instanceof NetworkError) return 'No connection. Try again.';
+  if (err instanceof NetworkError) return 'No connection';
 
   if (err instanceof RpcError) {
-    if (err.status === 400 || err.status === 422) return 'Incorrect passcode.';
+    if (err.status === 400 || err.status === 422) return 'Incorrect passcode';
     // GoTrue rate limits repeated failures per address, and there is only one
     // address here, so this is reachable by an officer who mistyped it a few
     // times as well as by somebody guessing.
-    if (err.status === 429) return 'Too many attempts. Wait a minute.';
-    if (err.status >= 500) return 'The database is not responding.';
+    if (err.status === 429) return 'Too many attempts, wait a minute';
+    if (err.status >= 500) return 'The database is not responding';
   }
 
-  return 'That did not go through.';
+  return 'That did not go through';
 }
 
 export { RpcError, NetworkError, SessionExpiredError };

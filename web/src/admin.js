@@ -147,7 +147,7 @@ function note(text, tone = 'ok') {
 function fail(err, retry, context = null, refresh = null) {
   const copy = describeOfficer(err, context);
   if (err?.code === 'PDS07' || err?.status === 403) {
-    note('This action is not permitted.', 'warn');
+    note('Not permitted', 'warn');
     recheckAccess();
     return;
   }
@@ -218,7 +218,7 @@ async function guard() {
     app.actualRole = identity?.role;
     app.role = app.actualRole === 'admin' ? previewRequested() ?? 'admin' : app.actualRole;
     if (!ROLE_TABS[app.role]) {
-      showDenied('This account has no PDSA access. Contact the Secretary.');
+      showDenied('No PDSA access, contact the Secretary');
       return;
     }
     app.years = await select('academic_years', {
@@ -226,13 +226,13 @@ async function guard() {
       order: 'starts_on.desc',
     });
   } catch (err) {
-    showDenied('Sign-in could not be checked. Try again.');
+    showDenied('Sign-in could not be checked, try again');
     return;
   }
 
   app.year = app.years.find((y) => y.is_current) ?? app.years[0] ?? null;
   if (!app.year) {
-    showDenied('No academic year is set up yet. An admin needs to add one.');
+    showDenied('No academic year set up');
     return;
   }
 
@@ -498,7 +498,7 @@ function wire() {
     try {
       window.location.assign(await googleSignInUrl());
     } catch {
-      showSignIn('Google sign-in failed. Try again.');
+      showSignIn('Google sign-in failed, try again');
     }
   });
   $('denied-retry').addEventListener('click', guard);
@@ -550,13 +550,13 @@ export function start({ now = () => new Date() } = {}) {
   selectTab('events');
 
   if (!IS_CONFIGURED) {
-    showDenied('No database is connected. An admin needs to fill in web/config.js.');
+    showDenied('No database connected, fill in web/config.js');
     el.deniedSignout.hidden = true;
     return;
   }
 
   completeGoogleSignIn().then(guard).catch(() => {
-    showSignIn('Google sign-in did not complete. Try again.');
+    showSignIn('Google sign-in did not complete, try again');
   });
 }
 

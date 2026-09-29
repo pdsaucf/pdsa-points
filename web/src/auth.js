@@ -12,7 +12,7 @@ const REFRESH_SKEW_SECONDS = 90;
 /** The session is gone and cannot be recovered without entering the passcode. */
 export class SessionExpiredError extends Error {
   constructor(message) {
-    super(message || 'That sign-in has expired.');
+    super(message || 'Sign-in expired');
     this.name = 'SessionExpiredError';
   }
 }
@@ -183,7 +183,7 @@ async function authFetch(path, { method = 'POST', body, accessToken, opts = {} }
 
     throw new RpcError(
       parsed?.error_code ?? parsed?.error ?? `HTTP_${res.status}`,
-      parsed?.error_description ?? parsed?.msg ?? parsed?.message ?? `Sign-in failed with status ${res.status}.`,
+      parsed?.error_description ?? parsed?.msg ?? parsed?.message ?? `Sign-in failed with status ${res.status}`,
       res.status,
     );
   }, { attempts: 3, rateLimitAttempts: 1, ...opts });
@@ -214,7 +214,7 @@ export async function signInWithPasscode(passcode, opts = {}) {
     // A 200 with nothing usable in it. Treated as a refusal rather than as a
     // sign-in, because the alternative is a screen that says it worked and
     // then 401s on its first read.
-    throw new RpcError('NO_SESSION', 'That sign-in did not complete.', 500);
+    throw new RpcError('NO_SESSION', 'Sign-in did not complete', 500);
   }
   return session;
 }
@@ -244,7 +244,7 @@ async function refreshSession(session) {
       // refusal from GoTrue clears the stored session.
       if (err instanceof NetworkError) throw err;
       if (epoch === sessionEpoch) forgetSession();
-      throw new SessionExpiredError('That sign-in has expired.');
+      throw new SessionExpiredError('Sign-in expired');
     } finally {
       refreshInFlight = null;
     }
@@ -260,7 +260,7 @@ async function refreshSession(session) {
  */
 export async function accessToken({ force = false } = {}) {
   const session = currentSession();
-  if (!session) throw new SessionExpiredError('You are not signed in.');
+  if (!session) throw new SessionExpiredError('Not signed in');
   if (!force && secondsLeft(session) > REFRESH_SKEW_SECONDS) return session.access_token;
   const next = await refreshSession(session);
   return next.access_token;
@@ -317,11 +317,11 @@ export async function completeGoogleSignIn() {
   window.history.replaceState(null, '', url.pathname);
   const stored = sessionStorage.getItem(PKCE_KEY);
   sessionStorage.removeItem(PKCE_KEY);
-  if (failed || implicit) throw new Error('Google sign-in did not complete. Try again.');
+  if (failed || implicit) throw new Error('Google sign-in did not complete, try again');
   let pending;
   try { pending = JSON.parse(stored); } catch { /* A missing verifier is refused below. */ }
   if (typeof pending?.verifier !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(pending.verifier) || !Number.isFinite(pending.createdAt) || Date.now() - pending.createdAt > 10 * 60 * 1000) {
-    throw new Error('Sign-in expired. Try again in this tab.');
+    throw new Error('Sign-in expired, try again in this tab');
   }
   const epoch = ++sessionEpoch;
   const body = await authFetch('/auth/v1/token?grant_type=pkce', {
@@ -329,6 +329,6 @@ export async function completeGoogleSignIn() {
     opts: { attempts: 1, rateLimitAttempts: 0 },
   });
   if (epoch !== sessionEpoch) throw new SessionExpiredError();
-  if (!adoptSession(body)) throw new Error('Google sign-in did not complete. Try again.');
+  if (!adoptSession(body)) throw new Error('Google sign-in did not complete, try again');
   return true;
 }

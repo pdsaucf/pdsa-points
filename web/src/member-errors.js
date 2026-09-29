@@ -29,12 +29,11 @@ const OUT_OF_DATE = {
 };
 
 const BY_CODE = {
-  // The sentence is the function's own, written in the second person ("Nobody
-  // by that name is on this years roster"), so the heading names the state and
-  // the sentence carries the specifics.
-  PDS03: (message) => ({
+  // The function's own sentence restates the heading ("Nobody by that name is
+  // on this years roster"), so the body says what to do instead.
+  PDS03: () => ({
     title: 'Not on this years roster',
-    body: message || 'Check the spelling, or ask an officer.',
+    body: 'Check the spelling, or ask an officer',
     recover: 'none',
   }),
 
@@ -43,7 +42,7 @@ const BY_CODE = {
   // time this copy is reached.
   PDS09: () => ({
     title: 'Too many tries',
-    body: 'Wait a minute, then try again.',
+    body: 'Wait a minute, then try again',
     recover: 'retry',
   }),
 };
@@ -51,12 +50,12 @@ const BY_CODE = {
 const HTTP_FALLBACK = {
   403: {
     title: 'Not allowed',
-    body: 'Ask an officer.',
+    body: 'Ask an officer',
     recover: 'none',
   },
   404: {
     title: 'Cannot reach your points',
-    body: 'Try again in a few minutes.',
+    body: 'Try again in a few minutes',
     recover: 'retry',
   },
   409: OUT_OF_DATE,
@@ -77,7 +76,7 @@ export function describeMember(err) {
   if (err instanceof NetworkError) {
     return {
       title: 'No connection',
-      body: 'Nothing you typed is lost. Try again when you have a signal.',
+      body: 'Try again once you have signal',
       recover: 'retry',
     };
   }
@@ -91,7 +90,7 @@ export function describeMember(err) {
     if (err.status >= 500) {
       return {
         title: 'Not responding',
-        body: 'Wait a few seconds, then try again.',
+        body: 'Wait a few seconds, then try again',
         recover: 'retry',
       };
     }
@@ -99,7 +98,7 @@ export function describeMember(err) {
 
   return {
     title: 'That did not go through',
-    body: 'Try again.',
+    body: 'Try again',
     recover: 'retry',
   };
 }

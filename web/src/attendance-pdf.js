@@ -21,7 +21,7 @@ const asBytes = (value) => {
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
-  throw new TypeError('A bundled PDF font is required.');
+  throw new TypeError('A bundled PDF font is required');
 };
 
 const hex4 = (value) => value.toString(16).toUpperCase().padStart(4, '0');
@@ -49,7 +49,7 @@ function parseTrueType(value, name) {
   }
   const need = (tag) => {
     const table = tables.get(tag);
-    if (!table) throw new Error(`${name} has no ${tag} table.`);
+    if (!table) throw new Error(`${name} has no ${tag} table`);
     return table.offset;
   };
 
@@ -84,7 +84,7 @@ function parseTrueType(value, name) {
         (a.platform === 3 ? 2 : a.platform === 0 ? 1 : 0),
   );
   const selected = candidates[0];
-  if (!selected) throw new Error(`${name} has no Unicode cmap.`);
+  if (!selected) throw new Error(`${name} has no Unicode cmap`);
 
   let glyphFor;
   if (selected.format === 12) {
@@ -170,7 +170,7 @@ function createFontBook(fontBytes, fallbackFontBytes) {
   const find = (codePoint) => {
     const font = fonts.find((candidate) => candidate.glyphFor(codePoint));
     if (!font) {
-      throw new Error(`The bundled PDF fonts do not support U+${codePoint.toString(16).toUpperCase()}.`);
+      throw new Error(`The bundled PDF fonts do not support U+${codePoint.toString(16).toUpperCase()}`);
     }
     return font;
   };
@@ -304,7 +304,7 @@ function buildPages(card, attendance, generatedAt, fontBook) {
 
   const tableHeading = () => add('Event | Date | Time | Duration | Categories and credit', { bold: true });
   tableHeading();
-  if (!approved.length) add('No approved events.');
+  if (!approved.length) add('No approved events');
   for (const event of approved) {
     const time = timeDetails(event);
     const lines = [
@@ -467,7 +467,7 @@ export async function loadAttendancePdfFonts(fetchImpl = fetch) {
   const fallbackFontUrl = new URL('../assets/fonts/public-sans/NotoSans-Regular.ttf', baseUrl);
   const load = async (url) => {
     const response = await fetchImpl(url);
-    if (!response.ok) throw new Error('PDF font unavailable.');
+    if (!response.ok) throw new Error('PDF font unavailable');
     return new Uint8Array(await response.arrayBuffer());
   };
   const [fontBytes, fallbackFontBytes] = await Promise.all([
@@ -484,7 +484,7 @@ export function buildAttendancePdf({
   fallbackFontBytes,
   generatedAt = new Date(),
 }) {
-  if (!card?.member || !attendance?.events) throw new Error('Attendance data is incomplete.');
+  if (!card?.member || !attendance?.events) throw new Error('Attendance data is incomplete');
   const fontBook = createFontBook(fontBytes, fallbackFontBytes);
   return encodePdf(buildPages(card, attendance, generatedAt, fontBook), fontBook);
 }

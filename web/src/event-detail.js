@@ -80,7 +80,7 @@ const SOURCE_LABEL = Object.fromEntries(ATTENDANCE_SOURCES.map((row) => [row.val
 // PostgREST answers a write its policy refuses with 200 and an empty array, so
 // every delete below counts what came back. Same sentence the events form uses
 // for the same reason.
-const NOT_WRITTEN = 'The change was refused. Reload the page and try again.';
+const NOT_WRITTEN = 'Not saved, reload the page';
 
 const ATTENDANCE_FUZZY_FLOOR = 0.3;
 
@@ -381,7 +381,7 @@ export function createEventDetail(ctx, host) {
 
       if (!fresh.length) {
         // Deleted from under the officer, by another officer or another tab.
-        ctx.note('That event is gone.', 'warn');
+        ctx.note('Event deleted elsewhere', 'warn');
         close();
         await host.afterChange?.();
         return true;
@@ -767,7 +767,7 @@ export function createEventDetail(ctx, host) {
   function approveAllWaiting() {
     const ids = approvableIds();
     if (!ids.length) {
-      ctx.note('Every waiting record on this event needs a member linked first.', 'warn');
+      ctx.note('Link a member to every waiting record first', 'warn');
       return;
     }
     decide(ids, 'approve');
@@ -1075,7 +1075,7 @@ export function createEventDetail(ctx, host) {
     const needsValue = typed();
     const value = Number(el.addValue.value);
     if (needsValue && (!el.addValue.value.trim() || !Number.isFinite(value) || value < 0)) {
-      el.addError.textContent = 'Type a number.';
+      el.addError.textContent = 'Type a number';
       setHidden(el.addError, false);
       el.addValue.focus();
       return;
@@ -1106,7 +1106,7 @@ export function createEventDetail(ctx, host) {
       }
 
       if (!outcomesCoverEntries(outcomes, entries)) {
-        ctx.note('Attendance result incomplete. Reload and check the event.', 'warn');
+        ctx.note('Result incomplete, reload and check the event', 'warn');
         await reload();
         return;
       }
@@ -1198,7 +1198,7 @@ export function createEventDetail(ctx, host) {
         p_event_id: state.event.id,
         p_published: publishing,
       });
-      const said = publishing ? `${state.event.title} published.` : `${state.event.title} unpublished.`;
+      const said = publishing ? `${state.event.title} published` : `${state.event.title} unpublished`;
       await refreshAfterAttendanceChange(said);
     } catch (err) {
       ctx.fail(err, null);
@@ -1244,7 +1244,7 @@ export function createEventDetail(ctx, host) {
       const gone = await remove('events', { id: `eq.${event.id}` });
       if (!gone.length) throw new Error(NOT_WRITTEN);
 
-      const said = `${event.title} deleted.`;
+      const said = `${event.title} deleted`;
       ctx.note(said);
       announce(said);
       // The list is refreshed before it comes back, so it never draws a row
@@ -1268,7 +1268,7 @@ export function createEventDetail(ctx, host) {
   function exportAttendees() {
     const rows = attendeeCsvRows(sortAttendees(state.records), { typed: typed() });
     downloadCsv(attendeeCsvFilename(state.event.title, state.event.occurred_on), rows);
-    announce(`${plural(rows.length - 1, 'record')} exported.`);
+    announce(`${plural(rows.length - 1, 'record')} exported`);
   }
 
   // -------------------------------------------------------------------------

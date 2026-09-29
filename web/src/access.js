@@ -33,7 +33,7 @@ export function createAccess(ctx) {
         h('td', {}, new Date(entry.created_at).toLocaleString()), h('td', {}, entry.target_email),
         h('td', {}, `${actions[entry.action] ?? entry.action}${entry.new_role ? `: ${roleName(entry.new_role)}` : ''}`),
         h('td', {}, entry.actor_email || 'System'))));
-      if (!entries.length) $('access-status').textContent = 'No leadership accounts authorized.';
+      if (!entries.length) $('access-status').textContent = 'No leadership accounts authorized';
     } catch (err) { ctx.fail(err, load); }
   }
   async function mutate(name, args) {
@@ -44,11 +44,11 @@ export function createAccess(ctx) {
       await callRpc(name, args);
       const identity = await callRpc('leadership_session', {});
       if (identity?.role !== 'admin') { window.location.replace(window.location.pathname); return; }
-      $('access-status').textContent = 'Access updated.';
+      $('access-status').textContent = 'Access updated';
       if (name === 'authorize_leadership_access') $('access-email').value = '';
       await load();
     } catch (err) {
-      if (err?.code === 'PDS16') $('access-status').textContent = 'Keep at least one individual Secretary / Admin.';
+      if (err?.code === 'PDS16') $('access-status').textContent = 'Keep at least one individual Secretary / Admin';
       else if (err?.code === 'PDS03') $('access-status').textContent = err.message;
       else ctx.fail(err, load);
     } finally { lock(false); }

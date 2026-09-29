@@ -88,7 +88,7 @@ async function send(path, { method = 'GET', body, prefer, opts = {} } = {}) {
 
       throw new RpcError(
         parsed?.code ?? `HTTP_${res.status}`,
-        parsed?.message ?? parsed?.error ?? `Request failed with status ${res.status}.`,
+        parsed?.message ?? parsed?.error ?? `Request failed with status ${res.status}`,
         res.status,
         parsed?.hint,
       );
@@ -203,7 +203,7 @@ export async function callRpc(name, args, opts = {}) {
         // consuming a body from a socket that closes early. For a mutation,
         // that is just as commit-ambiguous as fetch rejecting before headers.
         if (err instanceof TypeError) {
-          throw new NetworkError('The response did not complete.', err);
+          throw new NetworkError('The response did not complete', err);
         }
         throw err;
       }

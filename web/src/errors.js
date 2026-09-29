@@ -7,9 +7,18 @@
 // this page; they are mapped anyway so an unexpected one never renders blank.
 
 /** A PDS* or HTTP error carried back from PostgREST or Storage. */
+/**
+ * Server text as a UI label. Postgres, PostgREST and GoTrue end their
+ * messages with a period, and the pages show some of them as they come, so
+ * the period is dropped here once rather than in every migration.
+ */
+export function withoutPeriod(text) {
+  return String(text ?? '').trim().replace(/(?<!\.)\.$/, '');
+}
+
 export class RpcError extends Error {
   constructor(code, message, status, hint) {
-    super(message || code);
+    super(withoutPeriod(message) || code);
     this.name = 'RpcError';
     this.code = code;
     this.status = status;
@@ -20,7 +29,7 @@ export class RpcError extends Error {
 /** The request never got an answer: no signal, DNS, TLS, timeout, dropped socket. */
 export class NetworkError extends Error {
   constructor(message, cause) {
-    super(message || 'The network request did not complete.');
+    super(message || 'The network request did not complete');
     this.name = 'NetworkError';
     this.cause = cause;
   }
@@ -28,22 +37,22 @@ export class NetworkError extends Error {
 
 // Said in more than one place, so each is written once.
 const ALREADY_CHECKED_IN = {
-  title: 'You are already checked in',
-  body: 'Nothing else to do.',
+  title: 'Already checked in',
+  body: '',
   retry: false,
   alreadyDone: true,
 };
 
 const SHOW_AN_OFFICER = {
   title: 'This page is not set up correctly',
-  body: 'Show this screen to an officer.',
+  body: 'Show this screen to an officer',
   retry: false,
 };
 
 const BY_CODE = {
   PDS01: () => ({
     title: 'This check-in link is not valid',
-    body: 'Ask an officer for the current QR code, then scan it again.',
+    body: 'Ask an officer for the current QR code, then scan it again',
     retry: false,
   }),
 
@@ -53,19 +62,19 @@ const BY_CODE = {
   // never on the message, so both sides can reword freely.
   PDS02: () => ({
     title: 'Check-in has not opened yet',
-    body: 'This is the right link. Check-in opens shortly before the event starts.',
+    body: 'Opens shortly before the event starts',
     retry: true,
   }),
 
   PDS10: () => ({
     title: 'Check-in for this event has closed',
-    body: 'If you were there, find an officer: they can add you from the roster.',
+    body: 'An officer can add you from the roster',
     retry: false,
   }),
 
   PDS03: (message) => ({
     title: 'Check what you entered',
-    body: message || 'Check your name and any numbers, then try again.',
+    body: message || 'Check your name and any numbers, then try again',
     retry: true,
   }),
 
@@ -98,7 +107,7 @@ const BY_CODE = {
     if (stage === 'submit') {
       return {
         title: 'The photo needs taking again',
-        body: 'The upload expired. Take it again, then check in.',
+        body: 'The upload expired',
         retry: true,
         retakePhoto: true,
       };
@@ -107,7 +116,7 @@ const BY_CODE = {
     if (details.outstandingGrants >= 3) {
       return {
         title: 'Your earlier photos are still sending',
-        body: 'Wait a few seconds, then tap the photo button again.',
+        body: 'Wait a few seconds, then tap the photo button again',
         retry: true,
         offerSkipPhoto: true,
       };
@@ -115,7 +124,7 @@ const BY_CODE = {
 
     return {
       title: 'The photo could not be started',
-      body: 'Tap the photo button again. If that does not work, reload this page, or check in without the photo.',
+      body: 'Tap the photo button again, reload the page, or check in without a photo',
       retry: true,
       offerSkipPhoto: true,
     };
@@ -125,19 +134,19 @@ const BY_CODE = {
 
   PDS06: () => ({
     title: 'This needs an officer',
-    body: 'Show this screen to an officer.',
+    body: 'Show this screen to an officer',
     retry: false,
   }),
 
   PDS07: () => ({
     title: 'This needs an officer',
-    body: 'Show this screen to an officer.',
+    body: 'Show this screen to an officer',
     retry: false,
   }),
 
   PDS08: () => ({
     title: 'This event is not set up yet',
-    body: 'Tell an officer.',
+    body: 'Tell an officer',
     retry: true,
   }),
 
@@ -146,7 +155,7 @@ const BY_CODE = {
   // time this copy is reached.
   PDS09: () => ({
     title: 'Lots of people are checking in',
-    body: 'Tap the button again. Nothing you typed is lost.',
+    body: 'Tap the button again',
     retry: true,
   }),
 };
@@ -154,7 +163,7 @@ const BY_CODE = {
 const HTTP_FALLBACK = {
   400: {
     title: 'Something went wrong',
-    body: 'Try again. If it keeps happening, show this screen to an officer.',
+    body: 'Try again, or show this screen to an officer',
     retry: true,
   },
   401: SHOW_AN_OFFICER,
@@ -163,7 +172,7 @@ const HTTP_FALLBACK = {
   409: ALREADY_CHECKED_IN,
   413: {
     title: 'That photo is too large',
-    body: 'Take it again at a lower resolution.',
+    body: 'Take it again at a lower resolution',
     retry: true,
     retakePhoto: true,
   },
@@ -181,7 +190,7 @@ export function describe(err, stage, details) {
   if (err instanceof NetworkError) {
     return {
       title: 'No connection right now',
-      body: 'Nothing you typed is lost. Tap the button again when you have a signal.',
+      body: 'Tap the button again once you have signal',
       retry: true,
     };
   }
@@ -196,7 +205,7 @@ export function describe(err, stage, details) {
     if (stage === 'upload' && [400, 403, 404].includes(err.status)) {
       return {
         title: 'The photo needs taking again',
-        body: 'The upload window has passed. Take it again, then check in.',
+        body: 'The upload window has passed',
         retry: true,
         retakePhoto: true,
       };
@@ -206,7 +215,7 @@ export function describe(err, stage, details) {
     if (err.status >= 500) {
       return {
         title: 'Check-in is not responding',
-        body: 'Wait a few seconds and try again.',
+        body: 'Wait a few seconds and try again',
         retry: true,
       };
     }
@@ -214,7 +223,7 @@ export function describe(err, stage, details) {
 
   return {
     title: 'Something went wrong',
-    body: 'Try again. If it keeps happening, show this screen to an officer.',
+    body: 'Try again, or show this screen to an officer',
     retry: true,
   };
 }
@@ -222,13 +231,13 @@ export function describe(err, stage, details) {
 /** Not configured yet: the placeholders in config.js are still in place. */
 export const NOT_CONFIGURED = {
   title: 'Check-in is not connected yet',
-  body: 'An officer needs to fill in web/config.js before an event.',
+  body: 'An officer needs to fill in web/config.js before an event',
   retry: false,
 };
 
 /** No ?e= in the URL at all, so somebody typed the address by hand. */
 export const NO_TOKEN = {
   title: 'This link is missing its event code',
-  body: 'Scan the QR code at the event rather than typing the address.',
+  body: 'Scan the QR code at the event',
   retry: false,
 };

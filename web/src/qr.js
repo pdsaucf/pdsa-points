@@ -594,7 +594,7 @@ function totalPenalty(grid, size) {
 export function encodeQR(text) {
   const bytes = Array.from(text, (ch) => ch.charCodeAt(0) & 0xff);
   const version = chooseVersion(bytes.length);
-  if (!version) throw new Error('Text is too long for a version 1-10 QR code at error correction level M.');
+  if (!version) throw new Error('Text is too long for a version 1-10 QR code at error correction level M');
 
   const dataCodewords = buildCodewords(version, bytes);
   const codewords = interleave(version, dataCodewords);

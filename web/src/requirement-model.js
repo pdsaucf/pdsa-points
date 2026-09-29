@@ -162,7 +162,7 @@ export function nextOrder(siblings) {
 const PROBLEM_COPY = {
   measures_nothing: {
     title: 'Measures nothing',
-    body: 'Add at least one category.',
+    body: 'Add at least one category',
     codes: [
       'threshold_without_category',
       'threshold_without_categories',
@@ -172,17 +172,17 @@ const PROBLEM_COPY = {
   },
   empty_group: {
     title: 'Empty group',
-    body: 'A group with nothing in it passes for everybody.',
+    body: 'Passes for every member while empty',
     codes: ['empty_group', 'empty_group_node', 'group_without_children'],
   },
   archived_category: {
     title: 'Measures a retired category',
-    body: 'Swap it for an active one, or bring the category back.',
+    body: 'Swap it for an active one, or restore the category',
     codes: ['rule_on_archived_category', 'archived_category', 'category_archived'],
   },
   too_many_required: {
     title: 'Asks for more than it holds',
-    body: 'Lower the number, or add more to this group.',
+    body: 'Lower the number, or add more to this group',
     codes: [
       'min_children_exceeds_children',
       'group_min_too_high',
@@ -191,7 +191,7 @@ const PROBLEM_COPY = {
   },
   no_requirements: {
     title: 'No requirements yet',
-    body: 'Nobody can qualify until this has something in it.',
+    body: 'Add a requirement to make Honorary status reachable',
     codes: ['set_without_root', 'no_root', 'empty_set', 'set_is_empty'],
   },
   needs_a_number: {
@@ -206,7 +206,7 @@ const PROBLEM_COPY = {
   },
   duplicated: {
     title: 'Measured twice',
-    body: 'Two requirements measure the same category.',
+    body: 'Two requirements measure the same category',
     codes: ['duplicate_category', 'category_measured_twice'],
   },
 };
@@ -232,7 +232,8 @@ export function plainly(message) {
     .replace(/\bnodes?\b/gi, 'requirement')
     .replace(/\bthresholds?\b/gi, 'requirement')
     .replace(/\bschemas?\b/gi, 'setup')
-    .trim();
+    .trim()
+    .replace(/(?<!\.)\.$/, '');
 }
 
 /**
@@ -255,7 +256,7 @@ export function describeProblem(problem) {
     code: problem?.code ?? 'unknown',
     nodeId: problem?.node_id ?? null,
     title: 'Needs attention',
-    body: plainly(problem?.message) || 'Check this requirement before publishing.',
+    body: plainly(problem?.message) || 'Check this requirement before publishing',
   };
 }
 

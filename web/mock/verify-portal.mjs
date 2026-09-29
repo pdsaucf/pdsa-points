@@ -969,7 +969,7 @@ await check('a name nobody on the roster has shows the compact result and retain
 
   assert.equal(dom.$('scorecard').hidden, true, 'a scorecard was drawn for nobody');
   assert.equal(dom.$('no-match-title').textContent, 'Name not found');
-  assert.match(dom.$('no-match').textContent, /Check the spelling\. Only paid members are listed\./);
+  assert.match(dom.$('no-match').textContent, /Only paid members are listed/);
   assert.match(dom.$('no-match').textContent, /pdsa\.ucf@gmail\.com/);
   assert.equal(dom.$('no-match-contact').getAttribute('href'), 'mailto:pdsa.ucf@gmail.com');
   assert.equal(dom.$('lookup-name').value, 'Nobody Whatsoever');

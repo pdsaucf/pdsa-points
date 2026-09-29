@@ -74,7 +74,7 @@ const SETTLE_MS = 450;
 // A write that came back having changed nothing. On this screen that means the
 // set stopped being a draft underneath the officer, which is a page that is out
 // of date rather than a mistake they made.
-const NOT_CHANGED = 'Nothing was changed. Reload the page.';
+const NOT_CHANGED = 'Not saved, reload the page';
 
 // The last option in every category picker, which is not a category.
 const NEW_CATEGORY = 'new';
@@ -328,7 +328,7 @@ export function createRequirements(ctx) {
     state.rows.clear();
 
     if (!state.root) {
-      el.tree.replaceChildren(h('p', { class: 'muted' }, 'Nothing to check yet.'));
+      el.tree.replaceChildren(h('p', { class: 'muted' }, 'No requirements to check'));
       return;
     }
 
@@ -338,7 +338,7 @@ export function createRequirements(ctx) {
         h(
           'div',
           { class: 'rule-empty' },
-          h('p', { class: 'muted' }, 'No requirements yet.'),
+          h('p', { class: 'muted' }, 'No requirements yet'),
           canEdit()
             ? h(
                 'button',
@@ -595,7 +595,7 @@ export function createRequirements(ctx) {
   function paintPreviewLine() {
     const root = state.root ? state.counts.get(state.root.id) : null;
     if (!root) {
-      el.previewLine.textContent = state.previewFailed ? 'Preview unavailable.' : '';
+      el.previewLine.textContent = state.previewFailed ? 'Preview unavailable' : '';
       return;
     }
     const was =
@@ -772,7 +772,7 @@ export function createRequirements(ctx) {
         },
       ]);
       if (!rows?.length) throw new Error('nothing came back');
-      await reloadTree('Added a requirement.');
+      await reloadTree('Requirement added');
       focusRow(rows[0].id);
     } catch (err) {
       setSaving(false);
@@ -789,7 +789,7 @@ export function createRequirements(ctx) {
         ctx.note(NOT_CHANGED, 'warn');
         return;
       }
-      await reloadTree(`Removed ${item.label}.`);
+      await reloadTree(`Removed ${item.label}`);
     } catch (err) {
       setSaving(false);
       ctx.fail(err, null);
@@ -807,7 +807,7 @@ export function createRequirements(ctx) {
       for (const change of changes) {
         await patch('requirement_nodes', { id: `eq.${change.id}` }, { sort_order: change.sort_order });
       }
-      await reloadTree('Moved.');
+      await reloadTree('Moved');
       focusRow(item.id);
     } catch (err) {
       setSaving(false);
@@ -839,7 +839,7 @@ export function createRequirements(ctx) {
         ctx.note(NOT_CHANGED, 'warn');
         return;
       }
-      await reloadTree(`Ungrouped ${item.label}.`);
+      await reloadTree(`Ungrouped ${item.label}`);
     } catch (err) {
       setSaving(false);
       ctx.fail(err, null);
@@ -882,7 +882,7 @@ export function createRequirements(ctx) {
     state.categoryById.set(category.id, category);
     // The category manager is showing the same rows, so it re-reads them.
     ctx.onCategoriesChanged?.();
-    setSaving(false, `${category.name} added.`);
+    setSaving(false, `${category.name} added`);
 
     await addCategory(item, category);
   }
@@ -928,7 +928,7 @@ export function createRequirements(ctx) {
       await insert('requirement_node_categories', [
         { node_id: item.id, category_id: category.id },
       ]);
-      await reloadTree(`Added ${category.name}.`);
+      await reloadTree(`Added ${category.name}`);
     } catch (err) {
       setSaving(false);
       ctx.fail(err, null);
@@ -947,7 +947,7 @@ export function createRequirements(ctx) {
         ctx.note(NOT_CHANGED, 'warn');
         return;
       }
-      await reloadTree(`Removed ${category.name}.`);
+      await reloadTree(`Removed ${category.name}`);
     } catch (err) {
       setSaving(false);
       ctx.fail(err, null);
@@ -1060,7 +1060,7 @@ export function createRequirements(ctx) {
 
       if (created && created.academic_year_id !== ctx.year.id) {
         const where = (ctx.years ?? []).find((year) => year.id === created.academic_year_id);
-        ctx.note(`The copy was made in ${where?.label ?? 'another year'}.`, 'warn');
+        ctx.note(`Copy made in ${where?.label ?? 'another year'}`, 'warn');
         return;
       }
 
@@ -1083,7 +1083,7 @@ export function createRequirements(ctx) {
       const result = await callRpc('publish_requirement_set', { p_set_id: state.set.id });
       setSaving(false);
       const version = result?.version ?? state.set.version;
-      const said = `Published version ${version}.`;
+      const said = `Published version ${version}`;
       ctx.note(said);
       announce(said);
       state.chosenSetId = state.set.id;
@@ -1101,7 +1101,7 @@ export function createRequirements(ctx) {
     el.publishTitle.textContent = `Publish version ${state.set.version}`;
     el.publishMeta.textContent = `${ctx.year.label}, ${state.set.name}`;
     el.publishPreview.textContent = root
-      ? `${root.passing} of ${root.total} members would qualify.`
+      ? `${root.passing} of ${root.total} members would qualify`
       : '';
     el.publishProblems.replaceChildren(...problems.map(problemItem));
     setHidden(el.publishProblems, problems.length === 0);
@@ -1125,8 +1125,8 @@ export function createRequirements(ctx) {
     );
     el.discardMeta.textContent = `${ctx.year.label}, ${setMeta(state.set)}`;
     el.discardEffect.textContent = published
-      ? `Members stay judged by version ${published.version}.`
-      : 'Nothing is published for this year, so nobody qualifies until one is.';
+      ? `Version ${published.version} stays in effect`
+      : 'No published version for this year';
 
     if (!(await decide(el.discardDialog, el.discardForm))) return;
 
@@ -1141,7 +1141,7 @@ export function createRequirements(ctx) {
         return;
       }
       setSaving(false);
-      const said = `Discarded version ${version}.`;
+      const said = `Discarded version ${version}`;
       ctx.note(said);
       announce(said);
       state.chosenSetId = null;
@@ -1194,13 +1194,13 @@ export function createRequirements(ctx) {
     el.startDraft.addEventListener('click', startDraft);
 
     el.editAsDraft.addEventListener('click', () =>
-      cloneFrom(state.set.id, { said: 'Draft started from the published version.' }),
+      cloneFrom(state.set.id, { said: 'Draft started from the published version' }),
     );
 
     el.copyRun.addEventListener('click', () => {
       const sourceId = el.copyFrom.value;
       if (!sourceId) return;
-      cloneFrom(sourceId, { said: 'Copied.' });
+      cloneFrom(sourceId, { said: 'Copied' });
     });
 
     el.publish.addEventListener('click', publish);

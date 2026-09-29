@@ -32,14 +32,14 @@ import { $, h, announce, setHidden, plural, shortDate } from './ui.js';
 // sane menu rather than a free-typed number of months.
 const RETENTION_MONTHS = [1, 3, 6, 9, 12, 18, 24, 36];
 
-const NEVER_ON_A_TIMER = 'Photos are never deleted automatically. Someone has to clear them.';
+const NEVER_ON_A_TIMER = 'Never deleted automatically';
 
 // deleteAndFinish()'s bookkeepingFailed case: Storage may well have deleted
 // the bytes, but finish_purge_run() never confirmed it, so the run stays
 // outstanding until it is retried. Same sentence everywhere it can happen
 // (a fresh purge, a reclaim, or finishing an old run), since the state it
 // describes is the same state in all three.
-const BOOKKEEPING_INCOMPLETE = 'Bookkeeping incomplete. Will show as outstanding.';
+const BOOKKEEPING_INCOMPLETE = 'Delete not confirmed, listed as outstanding';
 
 const monthsLabel = (n) => (Number(n) === 1 ? '1 month' : `${n} months`);
 
@@ -179,7 +179,7 @@ export function createStorage(ctx) {
     const orphaned = Number(usage.orphaned_count ?? 0);
     setHidden(el.orphaned, orphaned === 0);
     if (orphaned) {
-      el.orphanedText.textContent = `${plural(orphaned, 'upload')} never submitted, size unknown.`;
+      el.orphanedText.textContent = `${plural(orphaned, 'upload')} never submitted, size unknown`;
       el.reclaim.disabled = state.busy;
     }
   }
@@ -199,8 +199,7 @@ export function createStorage(ctx) {
     setHidden(el.ready, false);
     el.readyBody.textContent =
       `${plural(totalPhotos, 'photo')} from ${plural(rows.length, 'event')} ` +
-      `before ${cutoffLabel(state.retentionMonths)}. ` +
-      `All of them have been reviewed. Frees about ${formatBytes(totalBytes)}.`;
+      `before ${cutoffLabel(state.retentionMonths)}, all reviewed, about ${formatBytes(totalBytes)}`;
     el.review.disabled = state.busy;
   }
 
@@ -452,16 +451,16 @@ export function createStorage(ctx) {
       );
 
       const parts = [];
-      if (evidenceCount) parts.push(`${plural(evidenceCount, 'photo')} cleared.`);
+      if (evidenceCount) parts.push(`${plural(evidenceCount, 'photo')} cleared`);
       if (bookkeepingFailed) {
         parts.push(BOOKKEEPING_INCOMPLETE);
       } else if (failedCount > 0) {
-        parts.push(`${plural(failedCount, 'photo')} could not be deleted from storage.`);
+        parts.push(`${plural(failedCount, 'photo')} could not be deleted from storage`);
       }
       if (ineligible.length) {
-        parts.push(`${plural(ineligible.length, 'event')} no longer eligible.`);
+        parts.push(`${plural(ineligible.length, 'event')} no longer eligible`);
       }
-      const said = parts.join(' ') || 'Nothing was cleared.';
+      const said = parts.join(', ') || 'No photos cleared';
       const tone = bookkeepingFailed || failedCount > 0 || ineligible.length ? 'warn' : 'ok';
       ctx.note(said, tone);
       announce(said);
@@ -490,13 +489,13 @@ export function createStorage(ctx) {
         run?.object_paths ?? [],
       );
 
-      const parts = [count ? `${plural(count, 'upload')} reclaimed.` : 'Nothing to reclaim.'];
+      const parts = [count ? `${plural(count, 'upload')} reclaimed` : 'No uploads to reclaim'];
       if (bookkeepingFailed) {
         parts.push(BOOKKEEPING_INCOMPLETE);
       } else if (failedCount > 0) {
-        parts.push(`${plural(failedCount, 'upload')} could not be deleted from storage.`);
+        parts.push(`${plural(failedCount, 'upload')} could not be deleted from storage`);
       }
-      const said = parts.join(' ');
+      const said = parts.join(', ');
       ctx.note(said, bookkeepingFailed || failedCount > 0 ? 'warn' : 'ok');
       announce(said);
     } catch (err) {
@@ -528,10 +527,10 @@ export function createStorage(ctx) {
       }
 
       const parts = [];
-      if (deletedCount) parts.push(`${plural(deletedCount, 'photo')} confirmed deleted.`);
+      if (deletedCount) parts.push(`${plural(deletedCount, 'photo')} confirmed deleted`);
       if (bookkeepingFailed) parts.push(BOOKKEEPING_INCOMPLETE);
-      else if (failedCount) parts.push(`${plural(failedCount, 'photo')} still could not be deleted.`);
-      const said = parts.join(' ') || 'Nothing left to confirm.';
+      else if (failedCount) parts.push(`${plural(failedCount, 'photo')} still could not be deleted`);
+      const said = parts.join(', ') || 'No deletes left to confirm';
       ctx.note(said, bookkeepingFailed || failedCount ? 'warn' : 'ok');
       announce(said);
     } catch (err) {
@@ -559,7 +558,7 @@ export function createStorage(ctx) {
         { value: months },
       );
       if (!rows.length) {
-        ctx.note('Nothing was changed. Reload the page.', 'warn');
+        ctx.note('Not saved, reload the page', 'warn');
         return;
       }
       state.retentionMonths = months;

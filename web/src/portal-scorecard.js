@@ -82,7 +82,7 @@ export function createScorecard(ctx) {
 
       if (!answer?.set || !nodes.length) {
         el.honoraryList.replaceChildren();
-        el.honoraryNote.textContent = 'The requirements for this year are not published yet.';
+        el.honoraryNote.textContent = 'Not published yet for this year';
         setHidden(el.honoraryNote, false);
         return;
       }
@@ -95,7 +95,7 @@ export function createScorecard(ctx) {
       );
       setHidden(el.honoraryNote, root?.min_children_passing === null);
       if (root?.min_children_passing !== null && root?.min_children_passing !== undefined) {
-        el.honoraryNote.textContent = `Any ${root.min_children_passing} of these.`;
+        el.honoraryNote.textContent = `Any ${root.min_children_passing} of these`;
       }
     } catch {
       // The box is an explanation, not the page. A member who came here for

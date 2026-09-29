@@ -38,7 +38,7 @@ import { csvFilename, downloadCsv } from './csv.js';
 import { $, h, announce, setHidden, plural } from './ui.js';
 
 const HONORARY_FILTERS = {
-  all: 'Everyone',
+  all: 'All members',
   honorary: 'Honorary only',
   close: 'One requirement away',
   not_honorary: 'Not honorary yet',
@@ -260,8 +260,8 @@ export function createProgress(ctx) {
 
     if (!rows.length) {
       const anybody = state.members.length > 0;
-      el.emptyTitle.textContent = anybody ? 'No members match' : 'Nobody on the roster';
-      el.emptyBody.textContent = anybody ? '' : 'Add them on the Members tab.';
+      el.emptyTitle.textContent = anybody ? 'No members match' : 'No members';
+      el.emptyBody.textContent = anybody ? '' : 'Add members on the Members tab';
       return;
     }
 
@@ -414,7 +414,7 @@ export function createProgress(ctx) {
   function exportCsv() {
     const rows = exportRows();
     downloadCsv(csvFilename('progress', ctx.year.label), rows);
-    announce(`${plural(rows.length - 1, 'member')} exported.`);
+    announce(`${plural(rows.length - 1, 'member')} exported`);
   }
 
   // -------------------------------------------------------------------------

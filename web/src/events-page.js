@@ -64,13 +64,13 @@ function describeEventsError(err) {
   if (err instanceof NetworkError) {
     return {
       title: 'No connection',
-      body: 'Nothing is lost. Try again when you have a signal.',
+      body: 'Try again once you have signal',
     };
   }
   if (err instanceof RpcError && err.status >= 500) {
-    return { title: 'Not responding', body: 'Wait a few seconds, then try again.' };
+    return { title: 'Not responding', body: 'Wait a few seconds, then try again' };
   }
-  return { title: 'Could not load events', body: 'Try again.' };
+  return { title: 'Could not load events', body: 'Try again' };
 }
 
 function fail(err) {
@@ -241,7 +241,7 @@ export function start() {
 
   if (!IS_CONFIGURED) {
     el.messageTitle.textContent = 'This page is not connected yet';
-    el.messageBody.textContent = 'Ask an officer.';
+    el.messageBody.textContent = 'Ask an officer';
     setHidden(el.messageAction, true);
     setHidden(el.message, false);
     setHidden(el.loading, true);

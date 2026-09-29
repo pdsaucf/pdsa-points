@@ -90,7 +90,7 @@ is not obvious, then **what to do**. Then stop.
   Write `Duplicate photo`, not `Marcus Bell sent the same photo as another event`.
 - Names, event titles, dates and times go in metadata or subtext, not inside the
   heading: `Marcus Bell, Aug 10 Soap Carving, 3:10 PM`.
-- Descriptions are one sentence, ideally under 15 words. Omit them entirely when the
+- Descriptions are one clause, ideally under 15 words. Omit them entirely when the
   heading and metadata already say it.
 - Buttons are 1 to 3 words.
 - Never repeat information already visible elsewhere in the same component.
@@ -103,6 +103,30 @@ is not obvious, then **what to do**. Then stop.
 - Chain causes with "so", "therefore", "rather than", "which means".
 - Use several sentences where a status line works.
 - Sound conversational, apologetic or legalistic.
+
+**No pronouncements**
+
+A clipped fragment closed with a period (`Everything.`, `Nobody has checked in yet.`,
+`Upcoming published events. No sign-in.`) reads as an assistant passing judgment,
+and it is a hallmark of AI-generated interfaces. UI copy is written as labels.
+
+- No closing period on any UI string: headings, labels, empty states, descriptions,
+  helper lines, toasts, errors and screen reader announcements.
+- One clause per string, never two sentences. Where two facts are needed, split
+  them into heading and body, or join them with a comma.
+- Empty states name what is absent (`No check-ins`), not who has failed to act.
+  Never open copy with `Nobody`, `Nothing`, `Everything` or `Everyone`.
+- Label the state rather than addressing the reader: `Already checked in`, not
+  `You are already checked in`.
+- Server messages lose their closing period in `RpcError` (`web/src/errors.js`), so
+  a Postgres `raise exception` message may keep its own punctuation.
+
+`scripts/check_ui_copy.mjs` enforces the period, sentence and opener rules over
+`web/`, and runs in `npm test`, `npm run check` and `web/`'s `npm run check`. A
+literal that is not copy takes a `copy-ok` comment on its line; a document written
+by the club (the Honorary FAQ) sits between `<!-- copy-ok:start -->` and
+`<!-- copy-ok:end -->`. The privacy policy and terms of use are documents and are
+not checked.
 
 **Established terms, used consistently**
 
@@ -125,7 +149,7 @@ sentence.
 ```
 Late check-in
 Grace Okonkwo, Aug 9 Give Kids A Smile, 7:40 PM
-Check-in closed at 7:35 PM.
+Check-in closed at 7:35 PM
 [ Approve ]  [ Decline ]
 ```
 

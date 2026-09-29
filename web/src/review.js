@@ -376,8 +376,8 @@ export function createReview(ctx) {
       setHidden(el.empty, false);
       el.emptyBody.textContent =
         state.eventFilter === 'all'
-          ? 'Every check-in for this year has been reviewed.'
-          : 'Every check-in for that event has been reviewed.';
+          ? 'All check-ins for this year reviewed'
+          : 'All check-ins for this event reviewed';
       return;
     }
 
@@ -597,8 +597,8 @@ export function createReview(ctx) {
           'li',
           { class: 'no-suggestions' },
           state.roster && state.roster.length
-            ? 'No close match on the roster.'
-            : 'The roster is empty.',
+            ? 'No close match on the roster'
+            : 'Roster is empty',
         ),
       );
     }
@@ -794,7 +794,7 @@ export function createReview(ctx) {
 
       drop(ids);
       const verb = decision === 'approve' ? 'Approved' : 'Declined';
-      const said = `${verb} ${plural(Number(count) || ids.length, 'check-in')}.`;
+      const said = `${verb} ${plural(Number(count) || ids.length, 'check-in')}`;
       ctx.note(said);
       announce(said);
       render();
@@ -841,7 +841,7 @@ export function createReview(ctx) {
         p_record_id: record.id,
         p_member_id: member.id,
       });
-      onResolved(record, member, `Linked to ${member.display_name}.`);
+      onResolved(record, member, `Linked to ${member.display_name}`);
     } catch (err) {
       ctx.fail(err, () => resolveToMember(record, member));
     } finally {
@@ -864,7 +864,7 @@ export function createReview(ctx) {
       const display = `${details.first_name} ${details.last_name}`.trim();
       const member = { id: memberId, display_name: display };
       if (state.roster) state.roster.push(member);
-      onResolved(record, member, `${display} added to the roster and linked.`);
+      onResolved(record, member, `${display} added to the roster and linked`);
     } catch (err) {
       ctx.fail(err, () => resolveToNewMember(record));
     } finally {
@@ -881,7 +881,7 @@ export function createReview(ctx) {
     record.flags = record.flags.filter((f) => f !== 'not_enrolled');
     state.resolved.add(record.id);
 
-    const settled = `${said} Not approved yet.`;
+    const settled = `${said}, not approved yet`;
     ctx.note(settled);
     announce(settled);
 
@@ -1063,7 +1063,7 @@ export function createReview(ctx) {
         ),
       ),
     );
-    el.photoHint.textContent = 'Arrow keys move between photos.';
+    el.photoHint.textContent = 'Arrow keys move between photos';
     if (!el.photoDialog.open) el.photoDialog.showModal();
   }
 
@@ -1109,7 +1109,7 @@ export function createReview(ctx) {
 
     if (!evidence?.sha256) {
       el.photoBody.replaceChildren(
-        h('p', { class: 'muted' }, 'The other photo is no longer available.'),
+        h('p', { class: 'muted' }, 'Other photo no longer available'),
       );
       return;
     }
@@ -1149,8 +1149,8 @@ export function createReview(ctx) {
         }),
       );
       el.photoHint.textContent = others.length
-        ? 'Same image on both records.'
-        : 'The other record no longer exists.';
+        ? 'Same image on both records'
+        : 'Other record no longer exists';
     } catch (err) {
       const copy = describeOfficer(err);
       el.photoBody.replaceChildren(h('p', { class: 'muted' }, `${copy.title}. ${copy.body}`));
@@ -1194,7 +1194,7 @@ export function createReview(ctx) {
     node?.scrollIntoView({ block: 'nearest' });
 
     const record = state.records.find((r) => r.id === state.cursorId);
-    if (record) announce(`${nameOf(record)}. ${eventLabel(record)}.`);
+    if (record) announce(`${nameOf(record)}, ${eventLabel(record)}`);
   }
 
   function currentRecord() {
@@ -1236,7 +1236,7 @@ export function createReview(ctx) {
       // An unmatched record cannot be approved, so the shortcut says why
       // rather than sending a call that is certain to come back PDS06.
       if (!record.member_id) {
-        const said = 'Link this check-in to a member first.';
+        const said = 'Link a member first';
         ctx.note(said, 'warn');
         announce(said);
         return;

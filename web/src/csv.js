@@ -124,7 +124,7 @@ export function readRoster(text) {
   // first would silently shift every number after the blank.
   const rows = parseCsv(text);
   const hasContent = (row) => row.some((cell) => String(cell ?? '').trim());
-  if (!rows.some(hasContent)) return fail('Empty file', 'There is nothing in it to read.');
+  if (!rows.some(hasContent)) return fail('Empty file', '');
 
   const header = rows[0].map(normaliseHeader);
   const missing = REQUIRED.filter((column) => !header.includes(column));
@@ -132,7 +132,7 @@ export function readRoster(text) {
     const found = header.filter(Boolean).join(', ') || 'nothing';
     return fail(
       'Missing a column',
-      `The first row has to name ${missing.join(' and ')}. It names ${found}.`,
+      `Needs ${missing.join(' and ')}, found ${found}`,
     );
   }
 
@@ -157,14 +157,14 @@ export function readRoster(text) {
     if (!first || !last) {
       return fail(
         `Row ${number} has no name`,
-        'Every row needs a first name and a last name. Fix the file and choose it again.',
+        'Fix the file and choose it again',
       );
     }
 
     people.push({ first_name: first, last_name: last, row: number });
   }
 
-  if (!people.length) return fail('No people in the file', 'It has a header row and nothing else.');
+  if (!people.length) return fail('No people in the file', 'Header row only');
 
   return { ...dedupe(people), problem: null };
 }

@@ -67,7 +67,7 @@ export function createCandidatePicker(ctx) {
     'div',
     { class: 'retro-picker' },
     mergeLine,
-    h('p', { class: 'muted small' }, 'Not approved yet.'),
+    h('p', { class: 'muted small' }, 'Not approved yet'),
     list,
     h('div', { class: 'retro-actions' }, linkButton),
   );
@@ -163,7 +163,7 @@ export function createCandidatePicker(ctx) {
     if (state.followedMerge) {
       const survivorId = state.resolvedMemberId;
       mergeLine.replaceChildren(
-        'This member was merged. ',
+        'Merged into another member ',
         h(
           'button',
           { type: 'button', class: 'button button-small', onClick: () => ctx.openMember(survivorId) },

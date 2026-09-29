@@ -42,7 +42,7 @@ try {
   assert.equal(signedOutDom.$('signin-google').disabled, false);
   window.location.assign = () => { throw new Error('Navigation failed'); };
   signedOutDom.$('signin-google').click();
-  await until(() => signedOutDom.$('google-status').textContent === 'Google sign-in failed. Try again.');
+  await until(() => signedOutDom.$('google-status').textContent === 'Google sign-in failed, try again');
   assert.equal(signedOutDom.$('signin-google').disabled, false, 'Google sign-in can be retried');
   let destination = null;
   window.location.assign = (url) => { destination = url; };

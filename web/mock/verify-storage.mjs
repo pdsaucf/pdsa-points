@@ -211,8 +211,8 @@ await check('every column of digits on this screen is tabular', () => {
 });
 
 await check('the two spec lines in the confirmation dialog are the real ones', () => {
-  assert.match(adminHtml, /Attendance records, points and Honorary status are all kept\./);
-  assert.match(adminHtml, /Only the photos are deleted\. This can't be undone\./);
+  assert.match(adminHtml, /Deletes photos only, not attendance, points or Honorary status/);
+  assert.match(adminHtml, /Can't be undone/);
 });
 
 // ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ await check('the usage bar is the server figure, rendered, not a client sum', as
 
 await check('the orphaned upload is shown to an officer, size marked unknown', () => {
   assert.equal(dom.$('storage-orphaned').hidden, false);
-  assert.match(dom.$('storage-orphaned-text').textContent, /1 upload never submitted, size unknown\./);
+  assert.match(dom.$('storage-orphaned-text').textContent, /1 upload never submitted, size unknown/);
 });
 
 await check('"ready to clear" is the live preview, not a hardcoded count', async () => {
@@ -252,7 +252,7 @@ await check('"ready to clear" is the live preview, not a hardcoded count', async
   assert.equal(
     dom.$('storage-ready-body').textContent,
     `${plural(totalPhotos, 'photo')} from ${plural(rows.length, 'event')} ` +
-      `before ${cutoffLabel(12)}. All of them have been reviewed. Frees about ${formatBytes(totalBytes)}.`,
+      `before ${cutoffLabel(12)}, all reviewed, about ${formatBytes(totalBytes)}`,
   );
 
   // The eligibility rule, proven against fixtures this suite controls rather
@@ -448,7 +448,7 @@ await check(
 
     dom.click(dom.$('storage-finish'));
     await until(
-      () => dom.$('screen-message-title').textContent.includes('Bookkeeping incomplete'),
+      () => dom.$('screen-message-title').textContent.includes('Delete not confirmed'),
       'a failed finish_purge_run was not reported',
     );
 

@@ -413,8 +413,8 @@ export function createRoster(ctx) {
 
     if (!rows.length) {
       const anybody = state.members.length > 0;
-      el.emptyTitle.textContent = anybody ? 'No members match' : 'Nobody on the roster';
-      el.emptyBody.textContent = anybody ? '' : 'Add one, or import a CSV.';
+      el.emptyTitle.textContent = anybody ? 'No members match' : 'No members';
+      el.emptyBody.textContent = anybody ? '' : 'Add a member or import a CSV';
       return;
     }
 
@@ -609,7 +609,7 @@ export function createRoster(ctx) {
         h(
           'div',
           { class: 'dupe-actions' },
-          h('p', { class: 'muted small' }, 'Records move to the row you keep.'),
+          h('p', { class: 'muted small' }, 'Records move to the row you keep'),
           h(
             'button',
             {
@@ -654,8 +654,8 @@ export function createRoster(ctx) {
       const moved = Number(result?.moved ?? 0);
       const dropped = Number(result?.dropped ?? 0);
       const said = dropped
-        ? `${plural(moved, 'record')} moved to ${keptName}. ${plural(dropped, 'duplicate')} dropped.`
-        : `${plural(moved, 'record')} moved to ${keptName}.`;
+        ? `${plural(moved, 'record')} moved to ${keptName}, ${plural(dropped, 'duplicate')} dropped`
+        : `${plural(moved, 'record')} moved to ${keptName}`;
       ctx.note(said);
       announce(said);
       await load();
@@ -766,7 +766,7 @@ export function createRoster(ctx) {
     const first = el.addFirst.value.trim();
     const last = el.addLast.value.trim();
     if (!first || !last) {
-      el.addError.textContent = 'First and last name are both required.';
+      el.addError.textContent = 'First and last name required';
       setHidden(el.addError, false);
       return;
     }
@@ -784,7 +784,7 @@ export function createRoster(ctx) {
     const [matched] = matchRoster([{ first_name: first, last_name: last, row: 1 }], state.everyMember);
     const matchedId = matched.verdict === 'exact' ? matched.match.id : null;
     if (matchedId && state.enrolled.has(matchedId)) {
-      el.addError.textContent = `${matched.match.display_name} is already on the roster.`;
+      el.addError.textContent = `${matched.match.display_name} is already on the roster`;
       setHidden(el.addError, false);
       return;
     }
@@ -795,7 +795,7 @@ export function createRoster(ctx) {
     try {
       const result = await enrollPerson({ first_name: first, last_name: last }, matchedId);
       const name = matchedId ? matched.match.display_name : `${first} ${last}`;
-      const said = result?.was_created ? `${name} added.` : `${name} added to ${ctx.year.label}.`;
+      const said = result?.was_created ? `${name} added` : `${name} added to ${ctx.year.label}`;
       ctx.note(said);
       announce(said);
       await load();
@@ -856,8 +856,8 @@ export function createRoster(ctx) {
     if (!people.length) {
       refuse(
         unusable.length
-          ? 'No line has both a first and a last name.'
-          : 'Paste one name per line.',
+          ? 'No line has both a first and a last name'
+          : 'Paste one name per line',
       );
       return;
     }
@@ -927,7 +927,7 @@ export function createRoster(ctx) {
     }
 
     const wrote = added.length + returning.length;
-    const said = `${plural(wrote, 'member')} added.`;
+    const said = `${plural(wrote, 'member')} added`;
     announce(said);
     showPasteReport({
       pasted: people.length + repeated.length + unusable.length,
@@ -987,7 +987,7 @@ export function createRoster(ctx) {
       'refused',
       report.refused.map((entry) => [entry.name, entry.message].filter(Boolean).join(': ')),
     );
-    group('warn', report.unknown, 'unknown', ['Paste them again.']);
+    group('warn', report.unknown, 'unknown', ['Paste them again']);
 
     el.pasteResultGroups.replaceChildren(...groups);
     el.pasteResultDialog.showModal();
@@ -1017,10 +1017,10 @@ export function createRoster(ctx) {
         academic_year_id: `eq.${ctx.year.id}`,
       });
       if (!gone.length) {
-        ctx.note('Nothing was changed. Reload the page.', 'warn');
+        ctx.note('Not saved, reload the page', 'warn');
         return;
       }
-      ctx.note(`${member.display_name} removed from ${ctx.year.label}.`);
+      ctx.note(`${member.display_name} removed from ${ctx.year.label}`);
       state.onRemoved?.();
       await load();
       ctx.onRosterChanged?.();
@@ -1046,7 +1046,7 @@ export function createRoster(ctx) {
     el.importForm.reset();
     setHidden(el.importProblem, true);
     setHidden(el.importTable, true);
-    el.importSummary.textContent = 'Choose a CSV with first_name and last_name columns.';
+    el.importSummary.textContent = 'Choose a CSV with first_name and last_name columns';
     el.importRun.disabled = true;
     el.importDialog.showModal();
   }
@@ -1059,7 +1059,7 @@ export function createRoster(ctx) {
     try {
       text = await file.text();
     } catch {
-      showImportProblem('That file could not be read', 'Choose it again.');
+      showImportProblem('That file could not be read', 'Choose it again');
       return;
     }
 
@@ -1120,7 +1120,7 @@ export function createRoster(ctx) {
 
     el.importSkipped.replaceChildren(
       ...state.skipped.map((entry) =>
-        h('li', { class: 'problem' }, `Row ${entry.row} skipped. ${entry.reason}.`),
+        h('li', { class: 'problem' }, `Row ${entry.row} skipped: ${entry.reason}`),
       ),
     );
     setHidden(el.importSkipped, state.skipped.length === 0);
@@ -1268,19 +1268,19 @@ export function createRoster(ctx) {
         });
       }
 
-      const said = `${plural(created, 'member')} added, ${done} on the roster.`;
+      const said = `${plural(created, 'member')} added, ${done} on the roster`;
       if (unknown) {
         // Re-running is safe: the import is idempotent, so whatever did land
         // is found rather than written again. The preview is left alone, so
         // nothing here reads as a finished run.
-        const stalled = `${said} ${plural(unknown, 'row')} unknown. Import the file again.`;
+        const stalled = `${said}, ${plural(unknown, 'row')} unknown, import the file again`;
         ctx.note(stalled, 'warn');
         announce(stalled);
       } else if (refused.length) {
         // The count of refusals is the heading over the list, so the strip
         // carries what landed and the list carries what did not.
         ctx.note(said, 'warn');
-        announce(`${said} ${plural(refused.length, 'row')} refused.`);
+        announce(`${said}, ${plural(refused.length, 'row')} refused`);
         state.incoming = [];
       } else {
         ctx.note(said);
@@ -1376,7 +1376,7 @@ export function createRoster(ctx) {
   function exportCsv() {
     const rows = exportRows();
     downloadCsv(csvFilename('roster', ctx.year.label), rows);
-    announce(`${plural(rows.length - 1, 'member')} exported.`);
+    announce(`${plural(rows.length - 1, 'member')} exported`);
   }
 
   // -------------------------------------------------------------------------

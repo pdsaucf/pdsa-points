@@ -27,18 +27,6 @@ export function formatCloseTime(isoTimestamp) {
   return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-/** 'Thanks, Abigail.' Display names are 'First Last', so the first word is the name. */
-export function firstName(displayName) {
-  const trimmed = String(displayName ?? '').trim();
-  if (!trimmed) return '';
-  if (trimmed.includes(',')) {
-    // 'Catto, Abigail' sorts that way in some rosters.
-    const after = trimmed.split(',')[1]?.trim();
-    if (after) return after.split(/\s+/)[0];
-  }
-  return trimmed.split(/\s+/)[0];
-}
-
 /**
  * The number field label, for an event that collects one.
  *

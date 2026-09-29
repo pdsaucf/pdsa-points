@@ -452,7 +452,7 @@ await check('a wrong passcode is refused, and leaves nothing signed in behind it
   auth.forgetSession();
   await assert.rejects(() => auth.signInWithPasscode('not the passcode'), (err) => {
     assert.equal(err.status, 400, 'a wrong passcode came back as something other than 400');
-    assert.equal(describeSignIn(err), 'Incorrect passcode.');
+    assert.equal(describeSignIn(err), 'Incorrect passcode');
     return true;
   });
   assert.equal(auth.currentSession(), null, 'a refused passcode left a session in storage');

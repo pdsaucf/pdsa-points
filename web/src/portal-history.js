@@ -141,24 +141,24 @@ export function createHistory() {
     setHidden(el.tableWrap, true);
     setHidden(el.cards, true);
     el.filters.replaceChildren();
-    announce('Loading attendance.');
+    announce('Loading attendance');
 
     try {
       const loaded = await rpc('portal_attendance', { p_member_id: memberId });
       if (current !== memberId) return;
       if (validateHandler && !validateHandler(loaded)) {
-        throw new Error('Attendance response did not match the requested member.');
+        throw new Error('Attendance response did not match the requested member');
       }
       answer = loaded;
       setHidden(el.loading, true);
       paint();
       readyHandler?.(loaded);
-      announce('Attendance loaded.');
+      announce('Attendance loaded');
     } catch {
       if (current !== memberId) return;
       setHidden(el.loading, true);
       setHidden(el.error, false);
-      announce('Attendance unavailable.');
+      announce('Attendance unavailable');
     }
   }
 

@@ -885,7 +885,7 @@ await check('an Events schema drift banner reloads Events without reloading Revi
   assert.equal(dom.$('panel-events').hidden, false);
   assert.equal(dom.$('screen-message').hidden, false);
   assert.equal(dom.$('screen-message-title').textContent, 'Events unavailable');
-  assert.equal(dom.$('screen-message-body').textContent, 'Try again.');
+  assert.equal(dom.$('screen-message-body').textContent, 'Try again');
   assert.equal(dom.$('screen-message-action').textContent, 'Reload Events');
 
   const captured = captureRequests();
@@ -1515,7 +1515,7 @@ await check('the publish-after-save dialog offers to publish an event whose rele
   assert.match(meta, /Verify Publish After Dialog Shows/, 'the meta line does not name the event');
   assert.match(
     meta,
-    /Next drop is [A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/,
+    /next drop [A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/,
     `the meta line does not read a release label: "${meta}"`,
   );
 

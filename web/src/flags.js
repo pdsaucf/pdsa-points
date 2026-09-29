@@ -44,14 +44,14 @@ export const FLAG_ORDER = [
 export const FLAG_COPY = {
   unmatched_name: {
     headline: 'Member not matched',
-    detail: 'Link this check-in to a member or add them as a new member before awarding points.',
+    detail: 'Link a member or add a new one before approving',
     actions: ['resolve'],
     severity: 'stop',
   },
 
   member_entered_value: {
     headline: 'Member-entered points',
-    detail: 'Confirm the entered number before approving.',
+    detail: 'Confirm the number before approving',
     actions: ['approve', 'reject'],
     severity: 'look',
   },
@@ -66,28 +66,28 @@ export const FLAG_COPY = {
 
   possible_duplicate_person: {
     headline: 'Similar name on the roster',
-    detail: 'Confirm this is the right person before approving.',
+    detail: 'Confirm the right person before approving',
     actions: ['approve', 'reject'],
     severity: 'look',
   },
 
   duplicate_photo: {
     headline: 'Duplicate photo',
-    detail: 'The same image was submitted for another event.',
+    detail: 'Same image as a check-in for another event',
     actions: ['compare', 'approve', 'reject'],
     severity: 'look',
   },
 
   not_enrolled: {
     headline: 'Not on this year of the roster',
-    detail: 'Usually a returning member who has not signed up this year.',
+    detail: 'Usually a returning member',
     actions: ['enroll', 'reject'],
     severity: 'look',
   },
 
   missing_evidence: {
     headline: 'Photo missing',
-    detail: 'This event requires a photo.',
+    detail: 'Required for this event',
     actions: ['approve', 'reject'],
     severity: 'look',
     override: true,

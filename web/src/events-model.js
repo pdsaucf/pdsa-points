@@ -287,11 +287,11 @@ export function parseCredit(value) {
 export function validateCategoryRows(rows) {
   const submitted = (rows ?? []).filter((row) => row.credit_mode === 'from_submission');
   if (submitted.length > 1) {
-    return 'Only one category can ask the member to type the number.';
+    return 'Only one category can ask the member to type the number';
   }
   const withCategory = (rows ?? []).filter((row) => row.category_id);
   const missing = (rows ?? []).some((row) => !row.category_id);
-  if (missing) return 'Pick a category for every row, or remove it.';
+  if (missing) return 'Pick a category for every row, or remove it';
 
   // A blank or non-numeric credit box. Caught here rather than coerced,
   // because every coercion of it lands on a number the database will store
@@ -299,10 +299,10 @@ export function validateCategoryRows(rows) {
   const badCredit = (rows ?? []).some(
     (row) => row.credit_mode !== 'from_submission' && !Number.isFinite(row.fixed_credit),
   );
-  if (badCredit) return 'Type a credit for every category.';
+  if (badCredit) return 'Type a credit for every category';
   const seen = new Set();
   for (const row of withCategory) {
-    if (seen.has(row.category_id)) return 'The same category is on this event twice.';
+    if (seen.has(row.category_id)) return 'Category added twice';
     seen.add(row.category_id);
   }
   return null;

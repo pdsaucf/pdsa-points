@@ -457,8 +457,8 @@ export function createEvents(ctx) {
     // WHEN, or, off, that nothing will (CLAUDE.md: never repeat information
     // already visible elsewhere in the same component).
     el.autoPublishNote.textContent = state.autoPublishEnabled
-      ? 'Next drop is Monday, 8:00 AM.'
-      : 'No automatic drop. Queued events wait for Publish.';
+      ? 'Next drop Monday, 8:00 AM'
+      : 'Queued events wait for Publish';
   }
 
   async function changeAutoPublish(enabled) {
@@ -472,11 +472,11 @@ export function createEvents(ctx) {
         { value: enabled },
       );
       if (!rows.length) {
-        ctx.note('Nothing was changed. Reload the page.', 'warn');
+        ctx.note('Not saved, reload the page', 'warn');
         return;
       }
       state.autoPublishEnabled = enabled;
-      const said = enabled ? 'Automatic publishing turned on.' : 'Automatic publishing turned off.';
+      const said = enabled ? 'Automatic publishing on' : 'Automatic publishing off';
       ctx.note(said);
       announce(said);
       // Every queued card's status line, and which events count as visible at
@@ -518,8 +518,8 @@ export function createEvents(ctx) {
       const filtered = state.events.length > 0;
       el.emptyTitle.textContent = filtered ? 'No events match' : 'No events yet';
       el.emptyBody.textContent = filtered
-        ? 'Clear the search, or pick another tab.'
-        : 'Create the first event for this year.';
+        ? 'Clear the search or pick another tab'
+        : 'Create the first event for this year';
       setHidden(el.empty, false);
       setHidden(el.list, true);
       if (restoreDetailFocus) state.detailOriginEventId = null;
@@ -1093,7 +1093,7 @@ export function createEvents(ctx) {
     ctx.onCategoriesChanged?.();
     if (row) row.category_id = category.id;
     renderCategoryRows();
-    const said = `${category.name} added.`;
+    const said = `${category.name} added`;
     ctx.note(said);
     announce(said);
   }
@@ -1232,26 +1232,26 @@ export function createEvents(ctx) {
 
     const fields = fieldsFromForm();
     if (!fields.title) {
-      showFormError('Type a title.');
+      showFormError('Type a title');
       el.title.focus();
       return;
     }
     if (!fields.occurred_on) {
-      showFormError('Pick a date.');
+      showFormError('Pick a date');
       el.date.focus();
       return;
     }
     if (Boolean(el.starts.value) !== Boolean(el.ends.value)) {
-      showFormError('Enter both event times, or leave both blank.');
+      showFormError('Enter both event times, or leave both blank');
       (el.starts.value ? el.ends : el.starts).focus();
       return;
     }
     if ((el.starts.value && !fields.starts_at) || (el.ends.value && !fields.ends_at)) {
-      showFormError('Enter valid Eastern times.');
+      showFormError('Enter valid Eastern times');
       return;
     }
     if (fields.starts_at && new Date(fields.ends_at) <= new Date(fields.starts_at)) {
-      showFormError('Event end must be after event start.');
+      showFormError('End must be after start');
       el.ends.focus();
       return;
     }
@@ -1309,7 +1309,7 @@ export function createEvents(ctx) {
       return;
     }
 
-    const said = wasEdit ? `${fields.title} saved.` : `${fields.title} created.`;
+    const said = wasEdit ? `${fields.title} saved` : `${fields.title} created`;
     ctx.note(said);
     announce(said);
     hideForm();
@@ -1366,13 +1366,13 @@ export function createEvents(ctx) {
       } else {
         copyLinkFallback(url);
       }
-      el.qrCopyStatus.textContent = 'Copied.';
+      el.qrCopyStatus.textContent = 'Copied';
     } catch {
       try {
         copyLinkFallback(url);
-        el.qrCopyStatus.textContent = 'Copied.';
+        el.qrCopyStatus.textContent = 'Copied';
       } catch {
-        el.qrCopyStatus.textContent = 'Could not copy. Select the link instead.';
+        el.qrCopyStatus.textContent = 'Could not copy, select the link';
       }
     }
   }
@@ -1437,12 +1437,12 @@ export function createEvents(ctx) {
     // Monday drop for any event, so there is no drop to promise here either.
     if (!event || event.is_visible || !state.autoPublishEnabled || !releasesAfterEvent(event)) return;
     el.publishAfterMeta.textContent =
-      `${shortDate(event.occurred_on)} ${event.title}. Next drop is ${releaseAtLabel(event.release_at)}.`;
+      `${shortDate(event.occurred_on)} ${event.title}, next drop ${releaseAtLabel(event.release_at)}`;
     const confirmed = await decideDialog(el.publishAfterDialog, el.publishAfterForm);
     if (!confirmed) return;
     try {
       await callRpc('set_event_published', { p_event_id: event.id, p_published: true });
-      const said = `${event.title} published.`;
+      const said = `${event.title} published`;
       ctx.note(said);
       announce(said);
       await load({ quiet: true });
@@ -1525,7 +1525,7 @@ export function createEvents(ctx) {
     setHidden(el.empty, true);
     setHidden(el.detailView, true);
     setHidden(el.toolbar, false);
-    if (wasEditing) ctx.note('Not saved. The year changed.', 'warn');
+    if (wasEditing) ctx.note('Not saved, the year changed', 'warn');
   }
 
   return {
