@@ -18,6 +18,10 @@ Design docs, signed off before implementation:
 - [docs/07-officer-roles.md](docs/07-officer-roles.md) - Secretary, Secretary Director and Officer permissions
 - [docs/08-leadership-access.md](docs/08-leadership-access.md) - approved Google leadership
   access, shared-admin fallback and deployment setup
+- [docs/09-event-signups.md](docs/09-event-signups.md) - sign-up forms, the scheduled
+  confirmation email, waitlists and drops, and the officer's sheet
+- [docs/10-google-calendar.md](docs/10-google-calendar.md) - posting live events to the
+  Member Calendar, and handing the connection to the next board
 
 ## House rules
 
@@ -179,9 +183,13 @@ Breaking any of these reintroduces a problem the design exists to solve:
    queue makes that cheap; it does not skip the step.
 7. **Photos are never deleted on a timer.** Purging is an operator action, and only
    reviewed records are eligible.
-8. **A member has no email address, and the member portal is not an account.** Somebody
-   types their name and reads their own points. Nothing collects an address anywhere in
-   the product; `members.email` is a column holding history that nothing reads.
+8. **The member portal is not an account, and a member's email is a destination, never a
+   login.** Somebody types their name and reads their own points. `members.email` (loaded
+   from the dues records by the roster import) is where that member's sign-up
+   confirmation goes: `signup_due_emails()` reads it, officers see it, and nothing public
+   ever returns it. A sign-up for a member is always emailed at the roster address, never
+   at one typed beside the name (docs/09-event-signups.md). Guests on open events give an
+   address used only for that sign-up's confirmation.
 9. **What the portal exposes is club-facing figures, plus a member's own event-by-event
    attendance for the current year, and nothing else.** Category totals, point totals,
    the honorary verdict, the published rules, and (through `portal_attendance()`) every
@@ -202,8 +210,15 @@ Breaking any of these reintroduces a problem the design exists to solve:
    records, or (through `portal_events()`) a member, an attendance status, or
    `events.notes`. The portal has no login, so this is readable by anyone who can open
    the site and type a name, the same decision the leaderboard already makes, and
-   `/events` needs no name at all. Widening that surface further means editing the
-   written-out list in `test/privileges.test.mjs` on purpose.
+   `/events` needs no name at all. Migration 30 widens it for sign-ups, precisely:
+   `portal_events()` adds whether an event is members only, when it was released, and its
+   sign-up form with going and waitlist counts and the email schedule (never a name, an
+   address or an answer); `portal_member_names()` lists this year's active roster, the
+   leaderboard's names without totals, for the autocomplete; `portal_signup_submit()`
+   answers with a place in line and when the email goes out; and the three
+   `portal_signup*` link functions answer, by emailed token, only for that one sign-up.
+   Widening that surface further means editing the written-out list in
+   `test/privileges.test.mjs` on purpose.
 
 ## Review workflow
 

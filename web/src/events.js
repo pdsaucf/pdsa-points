@@ -20,12 +20,13 @@
 // defaults to queued (docs/05-events-page.md), and publishing is a separate
 // action, Publish/Unpublish, on the list card and on the detail toolbar,
 // wired to set_event_published() rather than saved through this form's
-// save_event_config() call. The other way an event becomes visible needs no
+// save_event() call. A new event dated within two weeks is offered Publish
+// right after Save. The other way an event becomes visible needs no
 // button at all: every Monday at 8:00 AM America/New_York, a queued event
 // dated within the next 14 days drops on its own, gated by the
 // events_auto_publish row this screen also reads and writes above the list.
 // Both routes land on the same is_visible computed column, which is what the
-// dashed-versus-solid card border and the release_at line below are drawn
+// Published / Not published pill and the release_at line below are drawn
 // from.
 //
 // Event fields, category links and the photo requirement are saved by one RPC.
@@ -38,6 +39,14 @@ import { uniqueSlug } from './category-model.js';
 import { nextOrder } from './requirement-model.js';
 import { encodeQR, qrToSvgElement, qrDrawToCanvas } from './qr.js';
 import { createEventDetail } from './event-detail.js';
+import {
+  DEFAULT_BODY,
+  DEFAULT_SUBJECT,
+  PLACEHOLDERS,
+  confirmByLabel,
+  emailAt,
+  renderEmail,
+} from './signup-email.js';
 import {
   EVENT_SORTS,
   EVENT_STATUS_FILTERS,
@@ -63,7 +72,7 @@ import {
   releasesAfterEvent,
   releaseAtLabel,
 } from './events-model.js';
-import { $, h, chevron, announce, setHidden, shortDate, plural } from './ui.js';
+import { $, h, chevron, moveButton, announce, setHidden, shortDate, plural } from './ui.js';
 
 
 // Thrown when a write comes back refused. PostgREST answers a write the
@@ -120,7 +129,26 @@ export function createEvents(ctx) {
     location: $('event-location'),
     attire: $('event-attire'),
     signup: $('event-signup'),
+    signupLinkField: $('event-signup-link-field'),
     description: $('event-description'),
+
+    membersOnly: $('event-members-only'),
+    signupsEnabled: $('event-signups-enabled'),
+    signupFields: $('event-signup-fields'),
+    signupCapacity: $('event-signup-capacity'),
+    signupCloses: $('event-signup-closes'),
+    signupQuestions: $('event-signup-questions'),
+    signupQuestionAdd: $('event-signup-question-add'),
+    emailDays: $('event-signup-email-days'),
+    emailTime: $('event-signup-email-time'),
+    confirmHours: $('event-signup-confirm-hours'),
+    emailWhen: $('event-signup-email-when'),
+    emailSubject: $('event-signup-email-subject'),
+    emailBody: $('event-signup-email-body'),
+    emailPlaceholders: $('event-signup-email-placeholders'),
+    emailReset: $('event-signup-email-reset'),
+    emailPreviewSubject: $('event-signup-email-preview-subject'),
+    emailPreviewBody: $('event-signup-email-preview-body'),
 
     categories: $('event-categories'),
     categoryAdd: $('event-category-add'),
@@ -148,6 +176,7 @@ export function createEvents(ctx) {
     publishAfterDialog: $('event-publish-after-dialog'),
     publishAfterForm: $('event-publish-after-form'),
     publishAfterMeta: $('event-publish-after-meta'),
+    publishAfterDrop: $('event-publish-after-drop'),
   };
 
   const state = {
@@ -200,6 +229,10 @@ export function createEvents(ctx) {
     draft: null,
     categoryRows: [], // [{ key, category_id, credit_mode, fixed_credit }]
     evidence: null, // { kind, prompt } or null for "not required"
+    // The sign-up form's questions as edited: { key, id, kind, prompt,
+    // required, choices } with choices one per line, as the officer typed.
+    signupQuestions: [],
+    draftSignup: null, // set by Duplicate alongside draft
     closesAutoLinked: true, // whether the close time still tracks the date field
     saveEventId: null, // stable across a failed create, so retry cannot duplicate it
     // Only a deliberate trip from a card into its detail gets a return
@@ -361,9 +394,14 @@ export function createEvents(ctx) {
       if (!eventsError) {
         try {
           const events = eventsResult.value;
-          const counts = await loadCounts(events.map((row) => row.id));
+          const ids = events.map((row) => row.id);
+          const [counts, signupCounts] = await Promise.all([loadCounts(ids), loadSignupCounts(ids)]);
           if (token !== state.loadToken) return;
-          state.events = events.map((row) => ({ ...row, counts: counts.get(row.id) ?? { approved: 0, pending: 0 } }));
+          state.events = events.map((row) => ({
+            ...row,
+            counts: counts.get(row.id) ?? { approved: 0, pending: 0 },
+            signupCounts: signupCounts.get(row.id) ?? { going: 0, waitlist: 0 },
+          }));
         } catch (err) {
           eventsError = err;
         }
@@ -441,6 +479,22 @@ export function createEvents(ctx) {
     return counts;
   }
 
+  /** Going and waitlisted sign-ups per event, from the view that ranks them. */
+  async function loadSignupCounts(eventIds) {
+    const counts = new Map();
+    if (!eventIds.length) return counts;
+    const rows = await select('v_event_signups', {
+      select: 'event_id,state',
+      filters: { event_id: `in.(${eventIds.join(',')})`, state: 'in.(going,waitlist)' },
+    });
+    for (const row of rows) {
+      const entry = counts.get(row.event_id) ?? { going: 0, waitlist: 0 };
+      entry[row.state] += 1;
+      counts.set(row.event_id, entry);
+    }
+    return counts;
+  }
+
   // -------------------------------------------------------------------------
   // The global auto-publish toggle
   // -------------------------------------------------------------------------
@@ -458,7 +512,7 @@ export function createEvents(ctx) {
     // already visible elsewhere in the same component).
     el.autoPublishNote.textContent = state.autoPublishEnabled
       ? 'Next drop Monday, 8:00 AM'
-      : 'Queued events wait for Publish';
+      : 'Hidden events wait for Publish';
   }
 
   async function changeAutoPublish(enabled) {
@@ -735,31 +789,50 @@ export function createEvents(ctx) {
         evidence ? h('span', { class: 'muted small' }, 'photo required') : null,
       ),
       chips,
+      h('span', { class: 'event-counts muted small' }, countsLabel(event)),
+      // One column, two different facts: whether the event is on /events
+      // (the pill, which the card's left edge repeats in colour), and whether
+      // the QR code is taking attendance (the dot line).
       h(
         'span',
-        { class: 'event-counts muted small' },
-        `${event.counts.approved} approved, ${event.counts.pending} waiting`,
-      ),
-      h(
-        'span',
-        {
-          class: 'event-checkin-status',
-          dataset: { status: status.toLowerCase() },
-        },
-        h('span', { class: 'event-status-dot', 'aria-hidden': 'true' }),
-        `Check-in ${status.toLowerCase()}`,
-      ),
-      h(
-        'span',
-        {
-          class: 'event-publish-status',
-          dataset: { visible: String(publish.visible), warn: String(publish.warn) },
-        },
-        publish.label,
-        publish.detail ? h('span', { class: 'event-publish-detail' }, publish.detail) : null,
+        { class: 'event-status-stack' },
+        h(
+          'span',
+          {
+            class: 'event-publish-status',
+            dataset: { visible: String(publish.visible), warn: String(publish.warn) },
+          },
+          h('span', { class: 'event-publish-pill' }, publish.label),
+          publish.detail ? h('span', { class: 'event-publish-detail' }, publish.detail) : null,
+        ),
+        h(
+          'span',
+          {
+            class: 'event-checkin-status',
+            dataset: { status: status.toLowerCase() },
+          },
+          h('span', { class: 'event-status-dot', 'aria-hidden': 'true' }),
+          `Attendance check-in ${status.toLowerCase()}`,
+        ),
       ),
       actions,
     );
+  }
+
+  /** '12 of 20 signed up, 3 on waitlist, 8 attended, 2 to review' */
+  function countsLabel(event) {
+    const parts = [];
+    const signups = event.signupCounts;
+    if (event.signups_enabled || signups?.going || signups?.waitlist) {
+      const going = signups?.going ?? 0;
+      parts.push(event.signup_capacity
+        ? `${going} of ${event.signup_capacity} signed up`
+        : `${going} signed up`);
+      if (signups?.waitlist) parts.push(`${signups.waitlist} on waitlist`);
+    }
+    parts.push(`${event.counts.approved} attended`);
+    if (event.counts.pending) parts.push(`${event.counts.pending} to review`);
+    return parts.join(', ');
   }
 
   function creditLabel(link) {
@@ -823,6 +896,19 @@ export function createEvents(ctx) {
    */
   function duplicate(event) {
     state.draft = duplicateDraft(event, todayIsoDate());
+    // The form comes along with the event. Questions get new ids on save,
+    // because a question belongs to exactly one event.
+    state.draftSignup = {
+      members_only: Boolean(event.members_only),
+      signups_enabled: Boolean(event.signups_enabled),
+      signup_capacity: event.signup_capacity ?? null,
+      signup_email_days_before: event.signup_email_days_before,
+      signup_email_time: event.signup_email_time,
+      signup_confirm_hours: event.signup_confirm_hours,
+      signup_email_subject: event.signup_email_subject,
+      signup_email_body: event.signup_email_body,
+      event_signup_questions: (event.event_signup_questions ?? []).map(({ id, ...question }) => question),
+    };
     const from = state.view;
     openForm(null);
     // Duplicate is pressed from the event being copied, so Cancel goes back to
@@ -851,7 +937,9 @@ export function createEvents(ctx) {
     // Read once and cleared, so Duplicate fills this form in and the next New
     // event opens blank. Ignored entirely when an event is being edited.
     const draft = event ? null : state.draft;
+    const signupSource = event ?? (draft ? state.draftSignup : null);
     state.draft = null;
+    state.draftSignup = null;
 
     // Edit pressed on the detail screen goes back to it, not to the list:
     // Cancel should return an officer to where they were, and after a save
@@ -915,8 +1003,33 @@ export function createEvents(ctx) {
       ? { kind: evidenceRow.kind, prompt: evidenceRow.prompt }
       : draft?.evidence ?? null;
 
+    el.membersOnly.checked = Boolean(signupSource?.members_only);
+    el.signupsEnabled.checked = Boolean(signupSource?.signups_enabled);
+    el.signupCapacity.value = signupSource?.signup_capacity ?? '';
+    // Not carried by Duplicate: a close time belongs to one date.
+    el.signupCloses.value = event?.signup_closes_at
+      ? toNewYorkDatetimeLocalValue(event.signup_closes_at)
+      : '';
+    el.emailDays.value = String(signupSource?.signup_email_days_before ?? 2);
+    el.emailTime.value = String(signupSource?.signup_email_time ?? '18:00').slice(0, 5);
+    el.confirmHours.value = String(signupSource?.signup_confirm_hours ?? 24);
+    el.emailSubject.value = signupSource?.signup_email_subject ?? DEFAULT_SUBJECT;
+    el.emailBody.value = signupSource?.signup_email_body ?? DEFAULT_BODY;
+    state.signupQuestions = [...(signupSource?.event_signup_questions ?? [])]
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((question) => ({
+        key: rowKey(),
+        // Duplicate drops the ids (a question belongs to one event): new ones.
+        id: question.id ?? crypto.randomUUID(),
+        kind: question.kind,
+        prompt: question.prompt,
+        required: Boolean(question.is_required),
+        choices: (question.options ?? []).join('\n'),
+      }));
+
     renderCategoryRows();
     renderEvidenceFields();
+    renderSignupFields();
 
     setHidden(el.list, true);
     setHidden(el.empty, true);
@@ -1164,6 +1277,256 @@ export function createEvents(ctx) {
     state.evidence.prompt = el.evidencePrompt.value.trim() || null;
   }
 
+  // -- sign-ups -------------------------------------------------------------
+
+  const QUESTION_KINDS = [
+    { value: 'short_text', label: 'Short answer' },
+    { value: 'long_text', label: 'Paragraph' },
+    { value: 'single_choice', label: 'Multiple choice' },
+    { value: 'multi_choice', label: 'Checkboxes' },
+  ];
+  const isChoiceKind = (kind) => kind === 'single_choice' || kind === 'multi_choice';
+
+  /** The form section follows its checkbox: the link field when off, the builder when on. */
+  function renderSignupFields() {
+    const on = el.signupsEnabled.checked;
+    setHidden(el.signupFields, !on);
+    setHidden(el.signupLinkField, on);
+    renderSignupQuestions();
+    renderEmailPreview();
+  }
+
+  // -- the confirmation email ---------------------------------------------
+
+  /** The field a placeholder chip inserts into: whichever was used last. */
+  let emailTarget = null;
+
+  function insertPlaceholder(token) {
+    const field = emailTarget ?? el.emailBody;
+    const start = field.selectionStart ?? field.value.length;
+    const end = field.selectionEnd ?? field.value.length;
+    field.value = `${field.value.slice(0, start)}${token}${field.value.slice(end)}`;
+    field.focus();
+    field.setSelectionRange(start + token.length, start + token.length);
+    renderEmailPreview();
+  }
+
+  /**
+   * When the email goes out for this event, and the email itself, filled in
+   * with the first real sign-up's name when there is one, as the database
+   * will fill it in.
+   */
+  function renderEmailPreview() {
+    if (!el.signupsEnabled.checked) return;
+    const occurredOn = el.date.value;
+    const sendAt = emailAt(occurredOn, Number(el.emailDays.value || 0), el.emailTime.value || '18:00');
+    const hours = Number(el.confirmHours.value || 24);
+    const starts = fromNewYorkDatetimeLocalValue(el.starts.value, state.editingEvent?.starts_at ?? null);
+    const ends = fromNewYorkDatetimeLocalValue(el.ends.value, state.editingEvent?.ends_at ?? null);
+    let confirmBy = sendAt ? new Date(sendAt.getTime() + hours * 3600000) : new Date();
+    if (starts && confirmBy > new Date(starts)) confirmBy = new Date(starts);
+
+    if (!sendAt) {
+      el.emailWhen.textContent = '';
+    } else if (sendAt <= new Date()) {
+      el.emailWhen.textContent = 'Sends right after each sign-up, this time has passed';
+    } else {
+      el.emailWhen.textContent = `Sends ${confirmByLabel(sendAt)}, confirm by ${confirmByLabel(confirmBy)}`;
+    }
+
+    const values = {
+      name: 'Grace Okonkwo',
+      event: {
+        title: el.title.value.trim() || 'Event title',
+        occurred_on: occurredOn,
+        starts_at: starts,
+        ends_at: ends,
+        location: el.location.value.trim() || null,
+      },
+      confirmBy,
+    };
+    el.emailPreviewSubject.textContent = renderEmail(el.emailSubject.value || DEFAULT_SUBJECT, values);
+    el.emailPreviewBody.textContent = renderEmail(el.emailBody.value || DEFAULT_BODY, values);
+  }
+
+  function renderSignupQuestions() {
+    el.signupQuestions.replaceChildren(
+      ...state.signupQuestions.map((question, index) => renderSignupQuestion(question, index)),
+    );
+  }
+
+  function renderSignupQuestion(question, index) {
+    const last = state.signupQuestions.length - 1;
+    const promptId = `signup-q-${question.key}`;
+    const choicesId = `signup-q-choices-${question.key}`;
+    const move = (delta) => {
+      const list = state.signupQuestions;
+      const [moved] = list.splice(index, 1);
+      list.splice(index + delta, 0, moved);
+      renderSignupQuestions();
+      const buttons = el.signupQuestions.querySelectorAll(`[data-key="${question.key}"] .button-icon`);
+      (delta < 0 ? buttons[0] : buttons[1])?.focus();
+    };
+
+    const kind = h(
+      'select',
+      {
+        class: 'select',
+        'aria-label': `Question ${index + 1} type`,
+        onChange: (change) => {
+          question.kind = change.target.value;
+          renderSignupQuestions();
+        },
+      },
+      ...QUESTION_KINDS.map((option) =>
+        h('option', { value: option.value, selected: option.value === question.kind }, option.label)),
+    );
+
+    return h(
+      'li',
+      { class: 'signup-question', dataset: { key: question.key } },
+      h(
+        'div',
+        { class: 'signup-question-head' },
+        h('span', { class: 'signup-question-number', 'aria-hidden': 'true' }, String(index + 1)),
+        h('input', {
+          id: promptId,
+          class: 'input',
+          type: 'text',
+          maxlength: '300',
+          autocomplete: 'off',
+          placeholder: 'Question',
+          'aria-label': `Question ${index + 1}`,
+          value: question.prompt,
+          onInput: (input) => {
+            question.prompt = input.target.value;
+          },
+        }),
+        kind,
+      ),
+      isChoiceKind(question.kind)
+        ? h(
+            'div',
+            { class: 'signup-question-choices' },
+            h('label', { class: 'label', for: choicesId }, 'Choices, one per line'),
+            h('textarea', {
+              id: choicesId,
+              class: 'input',
+              rows: String(Math.max(3, question.choices.split('\n').length)),
+              value: question.choices,
+              onInput: (input) => {
+                question.choices = input.target.value;
+              },
+            }),
+          )
+        : null,
+      h(
+        'div',
+        { class: 'signup-question-foot' },
+        h(
+          'label',
+          { class: 'event-checkbox' },
+          h('input', {
+            type: 'checkbox',
+            checked: question.required,
+            onChange: (change) => {
+              question.required = change.target.checked;
+            },
+          }),
+          'Required',
+        ),
+        moveButton({
+          direction: 'up',
+          title: `Move question ${index + 1} up`,
+          disabled: index === 0,
+          onClick: () => move(-1),
+        }),
+        moveButton({
+          direction: 'down',
+          title: `Move question ${index + 1} down`,
+          disabled: index === last,
+          onClick: () => move(1),
+        }),
+        h('button', {
+          type: 'button',
+          class: 'button button-small button-danger',
+          'aria-label': `Remove question ${index + 1}`,
+          onClick: () => {
+            state.signupQuestions.splice(index, 1);
+            renderSignupQuestions();
+            el.signupQuestionAdd.focus();
+          },
+        }, 'Remove'),
+      ),
+    );
+  }
+
+  function addSignupQuestion() {
+    // The id is made here, not by the server, so a retried save cannot give
+    // the same question a second id and strand the answers under the first.
+    const question = { key: rowKey(), id: crypto.randomUUID(), kind: 'short_text', prompt: '', required: false, choices: '' };
+    state.signupQuestions.push(question);
+    renderSignupQuestions();
+    document.getElementById(`signup-q-${question.key}`)?.focus();
+  }
+
+  /** What save_event() takes as p_signup_form, or an error to show. */
+  function signupFormFromFields() {
+    const capacityText = el.signupCapacity.value.trim();
+    const capacity = capacityText === '' ? null : Number(capacityText);
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 5000)) {
+      return { error: 'Spots must be a whole number from 1 to 5000', focus: el.signupCapacity };
+    }
+    const questions = [];
+    for (const [index, question] of state.signupQuestions.entries()) {
+      const prompt = question.prompt.trim();
+      if (!prompt) {
+        return { error: `Question ${index + 1} needs a prompt`, focus: document.getElementById(`signup-q-${question.key}`) };
+      }
+      const options = isChoiceKind(question.kind)
+        ? [...new Set(question.choices.split('\n').map((line) => line.trim()).filter(Boolean))]
+        : [];
+      if (isChoiceKind(question.kind) && !options.length) {
+        return { error: `Question ${index + 1} needs choices`, focus: document.getElementById(`signup-q-choices-${question.key}`) };
+      }
+      questions.push({ id: question.id, kind: question.kind, prompt, required: question.required, options });
+    }
+    const days = Number(el.emailDays.value);
+    if (!Number.isInteger(days) || days < 0 || days > 30) {
+      return { error: 'Send the email 0 to 30 days before', focus: el.emailDays };
+    }
+    const hours = Number(el.confirmHours.value);
+    if (!Number.isInteger(hours) || hours < 1 || hours > 168) {
+      return { error: 'Confirm within 1 to 168 hours', focus: el.confirmHours };
+    }
+    if (!el.emailTime.value) {
+      return { error: 'Pick a time for the email', focus: el.emailTime };
+    }
+    if (el.signupsEnabled.checked) {
+      // The server refuses this too; saying it here points at the field.
+      const sendAt = emailAt(el.date.value, days, el.emailTime.value);
+      const starts = fromNewYorkDatetimeLocalValue(el.starts.value, state.editingEvent?.starts_at ?? null);
+      const eventStart = starts ? new Date(starts) : emailAt(el.date.value, -1, '00:00');
+      if (sendAt && eventStart && sendAt >= eventStart) {
+        return { error: 'Send the email before the event starts', focus: el.emailDays };
+      }
+    }
+    return {
+      form: {
+        email_days_before: days,
+        email_time: el.emailTime.value,
+        confirm_hours: hours,
+        email_subject: el.emailSubject.value.trim(),
+        email_body: el.emailBody.value.trim(),
+        enabled: el.signupsEnabled.checked,
+        members_only: el.membersOnly.checked,
+        capacity,
+        closes_at: fromNewYorkDatetimeLocalValue(el.signupCloses.value, state.editingEvent?.signup_closes_at ?? null),
+        questions,
+      },
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Close time and date wiring
   // -------------------------------------------------------------------------
@@ -1273,20 +1636,27 @@ export function createEvents(ctx) {
       return;
     }
 
+    const signup = signupFormFromFields();
+    if (signup.error) {
+      showFormError(signup.error);
+      signup.focus?.focus();
+      return;
+    }
+
     setHidden(el.error, true);
     ctx.clearMessage();
     setBusy(true);
 
-    await saveEvent(fields, desiredCategories);
+    await saveEvent(fields, desiredCategories, signup.form);
 
     setBusy(false);
   }
 
-  async function saveEvent(fields, desiredCategories) {
+  async function saveEvent(fields, desiredCategories, signupForm) {
     const wasEdit = Boolean(state.editingEvent);
     const savedYearId = ctx.year.id;
     try {
-      await callRpc('save_event_config', {
+      await callRpc('save_event', {
         p_event_id: state.saveEventId,
         p_academic_year_id: ctx.year.id,
         p_event: fields,
@@ -1296,6 +1666,7 @@ export function createEvents(ctx) {
           : null,
         p_expected_config_version: wasEdit ? state.editingEvent.config_version : null,
         p_create: !wasEdit,
+        p_signup_form: signupForm,
       });
     } catch (err) {
       if (err?.code === 'PDS15') {
@@ -1323,7 +1694,7 @@ export function createEvents(ctx) {
     // year that isn't this save's own: today's UUID-keyed .find() would
     // just fail to match and no-op anyway, but this makes that intentional.
     if (ctx.year.id === savedYearId) {
-      await maybeOfferImmediatePublish(state.events.find((row) => row.id === state.saveEventId));
+      await maybeOfferImmediatePublish(state.events.find((row) => row.id === state.saveEventId), { created: !wasEdit });
     }
   }
 
@@ -1422,22 +1793,33 @@ export function createEvents(ctx) {
   }
 
   /**
-   * docs/05-events-page.md: an event created late enough that its Monday
-   * release lands after its own date will never auto-publish. Offered right
-   * after Save because that is the one moment the officer is already
-   * looking at this event; the alternative is hoping they notice the
-   * "Publishes after the event" warning on the list later.
+   * Right after Save, the one moment the officer is looking at this event:
+   *
+   *   a new event dated within two weeks, which the Monday drop would
+   *   otherwise hold back until the next Monday, and
+   *   any event whose drop lands after its own date, which would otherwise
+   *   never publish at all (docs/05-events-page.md).
    *
    * release_at and is_visible are read off the reloaded row, never
    * recomputed here: the Monday arithmetic lives in Postgres on purpose.
    */
-  async function maybeOfferImmediatePublish(event) {
-    // Same reasoning as eventPublishStatus() in events-model.js: with the
-    // auto-publish toggle off, fn_event_is_visible() never fires from the
-    // Monday drop for any event, so there is no drop to promise here either.
-    if (!event || event.is_visible || !state.autoPublishEnabled || !releasesAfterEvent(event)) return;
-    el.publishAfterMeta.textContent =
-      `${shortDate(event.occurred_on)} ${event.title}, next drop ${releaseAtLabel(event.release_at)}`;
+  async function maybeOfferImmediatePublish(event, { created = false } = {}) {
+    if (!event || event.is_visible) return;
+    const today = todayInNewYork(ctx.now?.() ?? new Date());
+    const daysOut = daysBetween(today, event.occurred_on);
+    const soon = created && daysOut >= 0 && daysOut <= 14;
+    // With the auto-publish toggle off there is no drop to promise, and an
+    // event that never drops is only worth asking about when it is new.
+    const missesDrop = state.autoPublishEnabled && releasesAfterEvent(event);
+    if (!soon && !missesDrop) return;
+
+    const when = daysOut === 0 ? 'today' : daysOut === 1 ? 'tomorrow' : `${daysOut} days out`;
+    el.publishAfterMeta.textContent = `${shortDate(event.occurred_on)} ${event.title}, ${when}`;
+    el.publishAfterDrop.textContent = !state.autoPublishEnabled
+      ? 'Automatic publishing is off'
+      : missesDrop
+        ? 'Monday drop lands after the event'
+        : `Monday drop ${releaseAtLabel(event.release_at)}`;
     const confirmed = await decideDialog(el.publishAfterDialog, el.publishAfterForm);
     if (!confirmed) return;
     try {
@@ -1450,6 +1832,15 @@ export function createEvents(ctx) {
     } catch (err) {
       ctx.fail(err, null);
     }
+  }
+
+  /** Whole days from one 'YYYY-MM-DD' to another. */
+  function daysBetween(from, to) {
+    const parse = (value) => {
+      const [y, m, d] = String(value).slice(0, 10).split('-').map(Number);
+      return Date.UTC(y, m - 1, d);
+    };
+    return Math.round((parse(to) - parse(from)) / 86400000);
   }
 
   // -------------------------------------------------------------------------
@@ -1491,6 +1882,35 @@ export function createEvents(ctx) {
     el.evidenceRequired.addEventListener('change', onEvidenceRequiredChange);
     el.evidenceKind.addEventListener('change', onEvidenceKindChange);
     el.evidencePrompt.addEventListener('input', onEvidencePromptChange);
+    el.signupsEnabled.addEventListener('change', renderSignupFields);
+    el.signupQuestionAdd.addEventListener('click', addSignupQuestion);
+    el.emailPlaceholders.replaceChildren(
+      ...PLACEHOLDERS.map((placeholder) => {
+        const chip = h('button', {
+          type: 'button',
+          class: 'chip-button',
+          'aria-label': `Insert ${placeholder.label}`,
+          onClick: () => insertPlaceholder(placeholder.token),
+        }, placeholder.label);
+        // Keeps the caret where it was in the field being written.
+        chip.addEventListener('mousedown', (down) => down.preventDefault());
+        return chip;
+      }),
+    );
+    for (const field of [el.emailSubject, el.emailBody]) {
+      field.addEventListener('focus', () => {
+        emailTarget = field;
+      });
+    }
+    el.emailReset.addEventListener('click', () => {
+      el.emailSubject.value = DEFAULT_SUBJECT;
+      el.emailBody.value = DEFAULT_BODY;
+      renderEmailPreview();
+    });
+    for (const field of [el.emailDays, el.emailTime, el.confirmHours, el.emailSubject, el.emailBody,
+                         el.title, el.date, el.starts, el.ends, el.location]) {
+      field.addEventListener('input', renderEmailPreview);
+    }
 
     el.newCategoryDialog.querySelector('[data-close]')?.addEventListener('click', () => el.newCategoryDialog.close());
     el.qrDialog.querySelector('[data-close]')?.addEventListener('click', () => el.qrDialog.close());

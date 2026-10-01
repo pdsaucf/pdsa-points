@@ -228,23 +228,24 @@ export function eventPublishStatus(event, autoPublishEnabled, now = new Date()) 
     const canUnpublish = !autoPublishEnabled || releaseStillFuture;
     return { visible: true, label: 'Published', detail: null, warn: false, canUnpublish };
   }
+  // Every hidden event reads Not published. The detail line says whether the
+  // Monday drop is coming, and warns when it lands after the event itself.
   if (!autoPublishEnabled) {
-    // The toggle is off: no drop is coming, so a card must not promise one.
-    return { visible: false, label: 'Queued', detail: null, warn: false, canUnpublish: false };
+    return { visible: false, label: 'Not published', detail: null, warn: false, canUnpublish: false };
   }
   if (releasesAfterEvent(event)) {
     return {
       visible: false,
-      label: 'Not visible',
-      detail: 'Publishes after the event',
+      label: 'Not published',
+      detail: 'Drop lands after the event',
       warn: true,
       canUnpublish: false,
     };
   }
   return {
     visible: false,
-    label: `Publishes ${releaseAtLabel(event?.release_at)}`,
-    detail: null,
+    label: 'Not published',
+    detail: `Publishes ${releaseAtLabel(event?.release_at)}`,
     warn: false,
     canUnpublish: false,
   };

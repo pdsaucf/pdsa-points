@@ -85,6 +85,7 @@ export function createMember(ctx) {
     recordValueLabel: $('record-value-label'),
     recordError: $('record-error'),
     editDialog: $('member-edit-dialog'),
+    editEmail: $('member-edit-email'),
     editForm: $('member-edit-form'),
     editFirst: $('member-edit-first'),
     editLast: $('member-edit-last'),
@@ -145,7 +146,7 @@ export function createMember(ctx) {
       const [members, enrollments, categories, statuses, totals, records] =
         await Promise.all([
           select('members', {
-            select: 'id,first_name,last_name,preferred_name,display_name,created_at,archived_at,merged_into_id',
+            select: 'id,first_name,last_name,preferred_name,display_name,email,created_at,archived_at,merged_into_id',
             filters: { id: `eq.${state.memberId}` },
             limit: 1,
           }),
@@ -296,6 +297,7 @@ export function createMember(ctx) {
     el.meta.textContent = [
       state.joined ? `Joined ${monthYear(state.joined)}` : null,
       ctx.year.label,
+      member.email ?? 'No email on file',
     ]
       .filter(Boolean)
       .join(', ');
@@ -596,6 +598,7 @@ export function createMember(ctx) {
     el.editFirst.value = state.member.first_name ?? '';
     el.editLast.value = state.member.last_name ?? '';
     el.editPreferred.value = state.member.preferred_name ?? '';
+    el.editEmail.value = state.member.email ?? '';
     el.editDialog.showModal();
   }
 
@@ -605,6 +608,12 @@ export function createMember(ctx) {
     const last = el.editLast.value.trim();
     if (!first || !last) {
       el.editError.textContent = 'First and last name required';
+      setHidden(el.editError, false);
+      return;
+    }
+    const email = el.editEmail.value.trim();
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      el.editError.textContent = 'Not an email address';
       setHidden(el.editError, false);
       return;
     }
@@ -620,6 +629,7 @@ export function createMember(ctx) {
           first_name: first,
           last_name: last,
           preferred_name: el.editPreferred.value.trim() || null,
+          email: email || null,
         },
       );
       if (!rows.length) {
@@ -630,7 +640,8 @@ export function createMember(ctx) {
       await load();
       ctx.onMemberChanged?.();
     } catch (err) {
-      ctx.fail(err, null);
+      if (err?.code === '23505') ctx.note('Email used by another member', 'warn');
+      else ctx.fail(err, null);
     } finally {
       setBusy(false);
     }

@@ -104,6 +104,9 @@
               <button id="tab-access" type="button" class="menu-item" aria-selected="false" aria-controls="panel-access">
                 Access
               </button>
+              <button id="tab-connections" type="button" class="menu-item" aria-selected="false" aria-controls="panel-connections">
+                Connections
+              </button>
             </div>
           </div>
         </nav>
@@ -195,6 +198,131 @@
         </ul>
         <h2 class="panel-title">Access history</h2>
         <div class="access-scroll"><table class="board-table"><thead><tr><th>Time</th><th>Account</th><th>Change</th><th>By</th></tr></thead><tbody id="access-audit"></tbody></table></div>
+      </main>
+
+      <!--
+        Connections: the Member Calendar and the sign-up emails. Every board
+        hands this over to the next, so the steps are written out on the
+        screen itself (docs/10-google-calendar.md, docs/09-event-signups.md).
+      -->
+      <main id="panel-connections" class="panel-view" hidden>
+        <h1 class="panel-title">Connections</h1>
+
+        <section class="connection" aria-labelledby="calendar-heading">
+          <div class="connection-head">
+            <h2 id="calendar-heading" class="connection-title">Member Calendar</h2>
+            <span id="calendar-state" class="connection-state"></span>
+          </div>
+          <p id="calendar-detail" class="connection-detail"></p>
+
+          <form id="calendar-form" class="connection-form" novalidate>
+            <label class="label" for="calendar-id">Calendar ID</label>
+            <input
+              id="calendar-id"
+              class="input"
+              type="text"
+              maxlength="300"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="something@group.calendar.google.com"
+            />
+            <label class="event-checkbox">
+              <input id="calendar-enabled" type="checkbox" />
+              Post live events to this calendar
+            </label>
+            <p id="calendar-error" class="field-error" hidden></p>
+            <div class="connection-actions">
+              <button type="submit" class="button button-primary">Save</button>
+            </div>
+          </form>
+
+          <div class="connection-share">
+            <p class="label">Share the calendar with</p>
+            <p class="connection-share-row">
+              <code id="calendar-service-email" class="connection-code"></code>
+              <button id="calendar-copy" type="button" class="button button-small">Copy</button>
+            </p>
+          </div>
+
+          <!-- copy-ok:start: a handover guide, written as a document -->
+          <details class="connection-guide" open>
+            <summary>Connect a calendar</summary>
+            <ol>
+              <li>Open Google Calendar on a computer, signed in to the account that owns the club calendar.</li>
+              <li>In the left column, point at the calendar, click the three dots, then <b>Settings and sharing</b>.</li>
+              <li>Under <b>Share with specific people or groups</b>, click <b>Add people and groups</b>, paste the address shown above, choose <b>Make changes to events</b>, and click <b>Send</b>.</li>
+              <li>Scroll down to <b>Integrate calendar</b> and copy the <b>Calendar ID</b>.</li>
+              <li>Paste it into Calendar ID on this page, tick <b>Post live events to this calendar</b>, and click <b>Save</b>.</li>
+              <li>Within 5 minutes the status at the top of this section turns green and live events appear on the calendar.</li>
+            </ol>
+          </details>
+
+          <details class="connection-guide">
+            <summary>New school year: switch to a new calendar</summary>
+            <ol>
+              <li>Make the new calendar in Google Calendar (for example, Member Calendar 2027-2028) and make it public the way the old one was.</li>
+              <li>Share it with the address above, exactly as in Connect a calendar.</li>
+              <li>Paste the new Calendar ID here and click <b>Save</b>.</li>
+            </ol>
+            <p>What happens: upcoming events move to the new calendar within 5 minutes. Events that already happened stay on the old calendar as that year's record. Nothing needs to change on the server.</p>
+          </details>
+
+          <details class="connection-guide">
+            <summary>What gets posted, and when</summary>
+            <ul>
+              <li>An event is posted when it goes live on the events page: when an officer publishes it, or at the Monday 8:00 AM drop.</li>
+              <li>Edits (time, place, title, description) show up on the calendar within 5 minutes.</li>
+              <li>Unpublishing or deleting an event takes it off the calendar.</li>
+              <li>Each calendar event has the time, location, description, attire and a link to sign up. Paid-member events say Members only in the title.</li>
+              <li>Do not edit these events in Google Calendar directly. The next change on this site overwrites them. Change the event here instead.</li>
+              <li>Turning off <b>Post live events</b> stops posting. Events already on the calendar stay there.</li>
+            </ul>
+          </details>
+
+          <details class="connection-guide">
+            <summary>One-time server setup (for whoever maintains the site)</summary>
+            <p>Only needed once, or if the service account key is ever lost or rotated. The share address above comes from this key.</p>
+            <ol>
+              <li>In Google Cloud Console, create (or reuse) a project, enable the <b>Google Calendar API</b>, and create a <b>service account</b>. No roles are needed.</li>
+              <li>On the service account, open <b>Keys</b>, add a JSON key, and download it.</li>
+              <li>In a terminal in this repository: <code>supabase secrets set GOOGLE_SERVICE_ACCOUNT_JSON="$(cat key.json)"</code>, then delete the downloaded file.</li>
+              <li>Deploy the function: <code>supabase functions deploy sync-calendar</code>.</li>
+              <li>Schedule it every 5 minutes with the SQL in docs/10-google-calendar.md.</li>
+            </ol>
+          </details>
+          <!-- copy-ok:end -->
+        </section>
+
+        <section class="connection" aria-labelledby="email-heading">
+          <div class="connection-head">
+            <h2 id="email-heading" class="connection-title">Sign-up emails</h2>
+            <span id="email-state" class="connection-state"></span>
+          </div>
+          <p id="email-detail" class="connection-detail"></p>
+
+          <!-- copy-ok:start: a handover guide, written as a document -->
+          <details class="connection-guide">
+            <summary>How sign-up emails work</summary>
+            <ul>
+              <li>Each event's sign-up form sets when its confirmation email goes out (days before, and the time). Emails go out within 5 minutes of that time.</li>
+              <li>Paid members are emailed at the address on the roster, never one they type. Guests are emailed at the address they enter.</li>
+              <li>People who do not confirm in time are dropped, and the waitlist moves up.</li>
+              <li>Emails are sent through Resend from the address shown above. The Resend account belongs to the club email (pdsa.ucf@gmail.com), so it passes to the next board with that inbox.</li>
+            </ul>
+          </details>
+
+          <details class="connection-guide">
+            <summary>One-time server setup (for whoever maintains the site)</summary>
+            <ol>
+              <li>Sign up at resend.com with pdsa.ucf@gmail.com, add the domain pdsaucf.com, and add the DNS records Resend lists wherever pdsaucf.com is managed.</li>
+              <li>Create an API key in Resend.</li>
+              <li>In a terminal in this repository: <code>supabase secrets set RESEND_API_KEY=re_... SIGNUP_EMAIL_FROM="PDSA UCF &lt;events@pdsaucf.com&gt;"</code></li>
+              <li>Deploy the function: <code>supabase functions deploy send-signup-emails</code>.</li>
+              <li>Schedule it every 5 minutes with the SQL in docs/09-event-signups.md.</li>
+            </ol>
+          </details>
+          <!-- copy-ok:end -->
+        </section>
       </main>
       <!--
         Events: what the QR code on the wall points at. The list and the form
@@ -302,6 +430,23 @@
             <div id="event-detail-stats" class="event-stats"></div>
             <p id="event-detail-sources" class="muted small" hidden></p>
 
+            <section id="signup-block" class="member-block" aria-labelledby="signup-title" hidden>
+              <div class="toolbar">
+                <h3 id="signup-title" class="zone-title">Sign-ups</h3>
+                <p id="signup-summary" class="muted small signup-summary"></p>
+                <button id="signup-add" type="button" class="button">Add sign-up</button>
+                <button id="signup-export" type="button" class="button">Export CSV</button>
+              </div>
+              <div id="signup-filters" class="filter-tabs" aria-label="Show sign-ups"></div>
+              <p id="signup-empty" class="muted" hidden></p>
+              <div class="attendee-scroll">
+                <table id="signup-table" class="board board-plain signup-sheet" hidden>
+                  <thead id="signup-head"></thead>
+                  <tbody id="signup-rows"></tbody>
+                </table>
+              </div>
+            </section>
+
             <section class="member-block" aria-labelledby="attendee-title">
               <div class="toolbar">
                 <h3 id="attendee-title" class="zone-title">Attendance</h3>
@@ -376,18 +521,114 @@
             <label class="label" for="event-attire">Attire</label>
             <input id="event-attire" class="input" type="text" maxlength="200" autocomplete="off" />
 
-            <label class="label" for="event-signup">Sign-up</label>
-            <input
-              id="event-signup"
-              class="input"
-              type="text"
-              maxlength="500"
-              autocomplete="off"
-              placeholder="Link or text"
-            />
-
             <label class="label" for="event-description">Description</label>
             <textarea id="event-description" class="input" rows="3" maxlength="600"></textarea>
+
+            <h3 class="zone-title">Sign-ups</h3>
+            <label class="event-checkbox">
+              <input id="event-members-only" type="checkbox" />
+              Paid members only
+            </label>
+            <label class="event-checkbox">
+              <input id="event-signups-enabled" type="checkbox" />
+              Sign-up form on the events page
+            </label>
+
+            <div id="event-signup-link-field">
+              <label class="label" for="event-signup">Sign-up link or note</label>
+              <input
+                id="event-signup"
+                class="input"
+                type="text"
+                maxlength="500"
+                autocomplete="off"
+                placeholder="Link or text"
+              />
+            </div>
+
+            <div id="event-signup-fields" class="signup-fields" hidden>
+              <div class="signup-settings">
+                <div>
+                  <label class="label" for="event-signup-capacity">Spots</label>
+                  <input
+                    id="event-signup-capacity"
+                    class="input"
+                    type="number"
+                    min="1"
+                    max="5000"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="No limit"
+                  />
+                </div>
+                <div>
+                  <label class="label" for="event-signup-closes">Sign-ups close</label>
+                  <input id="event-signup-closes" class="input" type="datetime-local" />
+                  <p class="muted small field-hint">Blank closes at the event start</p>
+                </div>
+              </div>
+
+              <h4 class="signup-questions-title">Questions</h4>
+              <p class="muted small field-hint">Name is always asked, and email for guests</p>
+              <ol id="event-signup-questions" class="signup-question-list"></ol>
+              <button id="event-signup-question-add" type="button" class="button button-small">
+                Add question
+              </button>
+
+              <h4 class="signup-questions-title">Confirmation email</h4>
+              <div class="signup-email-timing">
+                <div>
+                  <label class="label" for="event-signup-email-days">Days before</label>
+                  <input
+                    id="event-signup-email-days"
+                    class="input"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                </div>
+                <div>
+                  <label class="label" for="event-signup-email-time">At</label>
+                  <input id="event-signup-email-time" class="input" type="time" step="300" />
+                </div>
+                <div>
+                  <label class="label" for="event-signup-confirm-hours">Confirm within (hours)</label>
+                  <input
+                    id="event-signup-confirm-hours"
+                    class="input"
+                    type="number"
+                    min="1"
+                    max="168"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                </div>
+              </div>
+              <p id="event-signup-email-when" class="signup-email-when"></p>
+              <p class="muted small field-hint">Sent within 5 minutes of this time, unconfirmed sign-ups drop when the window ends</p>
+
+              <label class="label" for="event-signup-email-subject">Subject</label>
+              <input id="event-signup-email-subject" class="input" type="text" maxlength="200" autocomplete="off" />
+              <label class="label" for="event-signup-email-body">Message</label>
+              <textarea id="event-signup-email-body" class="input" rows="8" maxlength="4000"></textarea>
+              <div class="signup-email-insert">
+                <span class="muted small">Insert</span>
+                <div id="event-signup-email-placeholders" class="chip-row"></div>
+                <button id="event-signup-email-reset" type="button" class="button button-small">Use default</button>
+              </div>
+
+              <div class="signup-email-preview" aria-labelledby="event-signup-email-preview-title">
+                <p id="event-signup-email-preview-title" class="signup-email-preview-label">Preview</p>
+                <p id="event-signup-email-preview-subject" class="signup-email-preview-subject"></p>
+                <p id="event-signup-email-preview-body" class="signup-email-preview-body"></p>
+                <p class="signup-email-preview-actions" aria-hidden="true">
+                  <span class="signup-email-preview-button">Confirm spot</span>
+                  <span class="signup-email-preview-link">Cancel sign-up</span>
+                </p>
+              </div>
+            </div>
 
             <h3 class="zone-title">Counts toward</h3>
             <div id="event-categories" class="event-category-list"></div>
@@ -1064,18 +1305,48 @@
     </dialog>
 
     <!--
-      An event created late enough that its Monday release lands after its
-      own date will never auto-publish (docs/05-events-page.md). Offered
-      right after Save, since that is the one moment the officer is already
-      looking at this event.
+      Offered right after Save for a new event dated within two weeks, and for
+      any event whose Monday drop lands after its own date
+      (docs/05-events-page.md).
     -->
     <dialog id="event-publish-after-dialog" class="dialog">
       <form id="event-publish-after-form" method="dialog" novalidate>
-        <h2 class="dialog-title">Publishes after the event</h2>
-        <p id="event-publish-after-meta" class="muted small event-publish-after-meta"></p>
+        <h2 class="dialog-title">Publish now?</h2>
+        <p id="event-publish-after-meta" class="event-publish-after-meta"></p>
+        <p id="event-publish-after-drop" class="muted small"></p>
         <div class="dialog-actions">
-          <button type="button" class="button" data-close>Leave queued</button>
-          <button type="submit" class="button button-primary">Publish now</button>
+          <button type="button" class="button" data-close>Not now</button>
+          <button type="submit" class="button button-primary">Publish</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Somebody who signed up in person: confirmed at once, no email. -->
+    <dialog id="signup-add-dialog" class="dialog">
+      <form id="signup-add-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Add sign-up</h2>
+        <label class="label" for="signup-add-name">Name</label>
+        <input id="signup-add-name" class="input" type="text" autocomplete="off" maxlength="200" />
+        <div id="signup-add-choices" class="signup-add-choices" role="radiogroup" aria-label="Who" hidden></div>
+        <div id="signup-add-guest" hidden>
+          <label class="label" for="signup-add-email">Email (optional)</label>
+          <input id="signup-add-email" class="input" type="email" autocomplete="off" />
+        </div>
+        <p id="signup-add-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="signup-remove-dialog" class="dialog">
+      <form id="signup-remove-form" method="dialog" novalidate>
+        <h2 class="dialog-title">Remove sign-up</h2>
+        <p id="signup-remove-who" class="muted small"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button button-danger">Remove</button>
         </div>
       </form>
     </dialog>
@@ -1347,6 +1618,9 @@ Grace Okonkwo"
         <input id="member-edit-last" class="input" type="text" autocomplete="off" required />
         <label class="label" for="member-edit-preferred">Preferred name (optional)</label>
         <input id="member-edit-preferred" class="input" type="text" autocomplete="off" />
+        <label class="label" for="member-edit-email">Email</label>
+        <input id="member-edit-email" class="input" type="email" autocomplete="off" maxlength="254" />
+        <p class="muted small">Sign-up confirmations go here</p>
         <p id="member-edit-error" class="field-error" hidden></p>
         <div class="dialog-actions">
           <button type="button" class="button" data-close>Cancel</button>

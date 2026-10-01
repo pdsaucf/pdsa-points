@@ -95,9 +95,16 @@ Sep 12 Give Kids A Smile, Publishes after the event
 ## Admin
 
 The event form gains Location, Attire, Sign-up and Description, and a Publish control.
-The list distinguishes the two states without reading a label: a queued event's card has
-a dashed border, a visible event's card has a solid one. Queued cards also carry the
-release instant, so an officer knows when it goes out.
+The list shows the two states as a pill: a green `Published` pill for an event on
+`/events`, an orange `Not published` pill for one that is not, with the drop time or a
+warning under it. The
+pill sits directly above `Attendance check-in open`, so the two statuses read as two
+different facts in one column. (The dashed border this replaced was too easy to miss.)
+Not-published cards also carry the release instant, so an officer knows when it goes
+out.
+
+A new event dated within two weeks gets a `Publish now?` prompt right after Save, with
+its Monday drop time, so an officer can release it at once instead of waiting.
 
 ```
 Publishes Mon Sep 7, 8:00 AM
