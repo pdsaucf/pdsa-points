@@ -341,6 +341,433 @@ body {
 }
 
 /* --------------------------------------------------------------------------- */
+/* New, and members only                                                        */
+/* --------------------------------------------------------------------------- */
+
+/* A gold ribbon folded across the top right corner. Gold is a fill here, with
+   --gold-ink on it, never a foreground on the page background. */
+.event-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.event-card[data-new='true'] .event-card-title {
+  padding-right: 3rem;
+}
+
+.event-ribbon {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6rem;
+  height: 6rem;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.event-ribbon > span {
+  position: absolute;
+  top: 1.125rem;
+  right: -2.25rem;
+  width: 8.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--gold-ink);
+  background: var(--gold);
+  box-shadow: 0 1px 3px rgba(42, 39, 33, 0.25);
+  transform: rotate(45deg);
+}
+
+.event-members-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.event-open-badge {
+  align-self: flex-start;
+  margin: 0;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Sign-ups                                                                     */
+/* --------------------------------------------------------------------------- */
+
+.signup-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.event-card-spots {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ok);
+  font-variant-numeric: tabular-nums;
+}
+
+.event-card-spots[data-full='true'] {
+  color: var(--danger);
+}
+
+.event-card-spots[data-closed='true'] {
+  color: var(--ink-muted);
+}
+
+.signup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.signup-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.signup-optional {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+}
+
+textarea.input {
+  resize: vertical;
+}
+
+.signup-names {
+  position: absolute;
+  top: calc(100% - 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(42, 39, 33, 0.14);
+}
+
+.signup-field:has(> .signup-names) {
+  /* The list sits under the field it belongs to, not under the guest block. */
+  position: relative;
+}
+
+.signup-name-option {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.signup-name-option:hover,
+.signup-name-option[aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.signup-picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  padding: 0.375rem 0.75rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+}
+
+.signup-picked-name {
+  font-weight: 700;
+}
+
+.signup-tag {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+}
+
+.link-button {
+  margin-left: auto;
+  padding: 0.25rem 0;
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.signup-email-note {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.signup-picked + .signup-email-note {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.signup-guest:empty {
+  display: none;
+}
+
+.signup-guest {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.signup-choices {
+  gap: 0.25rem;
+}
+
+.signup-choices legend {
+  margin-bottom: 0.25rem;
+}
+
+.signup-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.signup-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.signup-choice input {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.signup-form[data-blocked='true'] > .signup-field:not(:first-child),
+.signup-form[data-blocked='true'] .signup-submit {
+  display: none;
+}
+
+.signup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.signup-members-only,
+.signup-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  padding: 0.75rem 0.875rem;
+  border-radius: 10px;
+}
+
+.signup-members-only {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+
+.signup-members-only p,
+.signup-error p {
+  margin: 0;
+}
+
+.signup-members-only-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.signup-error {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+}
+
+.signup-error-title {
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.signup-done {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.875rem;
+  background: var(--ok-soft);
+  border: 1px solid var(--ok);
+  border-radius: 10px;
+}
+
+.signup-done p {
+  margin: 0;
+}
+
+.signup-done-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+}
+
+.signup-pill {
+  display: inline-block;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ok);
+  background: var(--surface);
+  border: 1px solid var(--ok);
+  border-radius: 999px;
+}
+
+.signup-pill[data-state='waitlist'] {
+  color: var(--gold-ink);
+  background: var(--gold);
+  border-color: transparent;
+}
+
+.signup-pill[data-state='dropped'],
+.signup-pill[data-state='cancelled'] {
+  color: var(--ink-muted);
+  border-color: var(--line-strong);
+}
+
+/* The page a confirmation email opens. */
+.signup-link {
+  margin-bottom: 1.5rem;
+}
+
+.signup-link-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1.125rem;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.signup-link-card p {
+  margin: 0;
+}
+
+.signup-link-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.signup-link-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+}
+
+.signup-link-reply {
+  font-weight: 600;
+}
+
+.signup-link-reply[data-reply='confirmed'] {
+  color: var(--ok);
+}
+
+.signup-link-confirm {
+  align-self: stretch;
+  margin-top: 0.25rem;
+}
+
+.signup-link-cancel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.signup-link-card .link-button {
+  margin-left: 0;
+}
+
+.button-danger {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------- */
 /* Empty state                                                                  */
 /* --------------------------------------------------------------------------- */
 

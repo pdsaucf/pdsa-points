@@ -1319,6 +1319,111 @@ export function buildDatabase() {
     },
   ];
 
+  // ---- sign-ups (docs/09-event-signups.md) ---------------------------------
+  // A full members-only clinic with a waitlist, released yesterday so it wears
+  // the New ribbon, and an open GBM with a handful of guests.
+  const etAt = (date, hour) => {
+    const probe = new Date(`${date}T12:00:00Z`);
+    const offset = probe.toLocaleString('en-US', { timeZone: 'America/New_York', timeZoneName: 'shortOffset' })
+      .match(/GMT([+-]\d+)/)?.[1] ?? '-4';
+    return new Date(`${date}T${String(hour).padStart(2, '0')}:00:00${offset.startsWith('-') ? '-' : '+'}${offset.replace(/[+-]/, '').padStart(2, '0')}:00`).toISOString();
+  };
+  const clinicDate = daysFromNow(6);
+  const gbmDate = daysFromNow(9);
+  const signupEvents = [
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea5',
+      academic_year_id: YEAR_CURRENT,
+      title: 'Clinical Workshop: Crown Prep',
+      occurred_on: clinicDate,
+      starts_at: etAt(clinicDate, 18),
+      ends_at: etAt(clinicDate, 20),
+      is_published: true,
+      published_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      location: 'HPA II, Room 108',
+      attire: 'Scrubs',
+      description: 'Hands-on crown preparation on typodonts with UCF dental residents.',
+      members_only: true,
+      signups_enabled: true,
+      signup_capacity: 20,
+      category_id: CATEGORIES[3].id,
+    },
+    {
+      id: 'e0000000-0000-4000-a000-000000000ea6',
+      academic_year_id: YEAR_CURRENT,
+      title: 'GBM 4: Residency Panel',
+      occurred_on: gbmDate,
+      starts_at: etAt(gbmDate, 19),
+      ends_at: etAt(gbmDate, 20),
+      is_published: true,
+      published_at: '2026-08-01T12:00:00.000Z',
+      location: 'Student Union, Key West Ballroom',
+      attire: 'Casual',
+      description: 'Residents from four specialties on how they matched.',
+      members_only: false,
+      signups_enabled: true,
+      signup_capacity: null,
+      category_id: CATEGORIES[0].id,
+    },
+  ];
+  const Q = (n) => `q5000000-0000-4000-a000-${String(n).padStart(12, '0')}`;
+  const signupQuestions = [
+    { id: Q(1), event_id: signupEvents[0].id, position: 1, kind: 'single_choice', prompt: 'Year', is_required: true, options: ['Freshman', 'Sophomore', 'Junior', 'Senior'] },
+    { id: Q(2), event_id: signupEvents[0].id, position: 2, kind: 'single_choice', prompt: 'Scrub size', is_required: true, options: ['XS', 'S', 'M', 'L', 'XL'] },
+    { id: Q(3), event_id: signupEvents[0].id, position: 3, kind: 'short_text', prompt: 'Phone number', is_required: true, options: [] },
+    { id: Q(4), event_id: signupEvents[0].id, position: 4, kind: 'long_text', prompt: 'Anything we should know', is_required: false, options: [] },
+    { id: Q(5), event_id: signupEvents[1].id, position: 1, kind: 'multi_choice', prompt: 'Specialties you want to hear from', is_required: false, options: ['Ortho', 'Endo', 'OMFS', 'Pedo'] },
+  ];
+  const years = ['Freshman', 'Sophomore', 'Junior', 'Senior'];
+  const sizes = ['XS', 'S', 'M', 'L', 'XL'];
+  const signupRows = [];
+  const signupMembers = members.filter((m) => m.id.startsWith('m1000000'));
+  signupMembers.slice(0, 22).forEach((member, index) => {
+    const at = new Date(Date.now() - (30 - index) * 60 * 60 * 1000).toISOString();
+    signupRows.push({
+      id: `s5000000-0000-4000-a000-${String(index + 1).padStart(12, '0')}`,
+      event_id: signupEvents[0].id,
+      member_id: member.id,
+      name: member.display_name,
+      email: member.email,
+      answers: {
+        [Q(1)]: years[index % 4],
+        [Q(2)]: sizes[index % 5],
+        [Q(3)]: `407-555-${String(1000 + index * 37).slice(-4)}`,
+        ...(index % 6 === 0 ? { [Q(4)]: 'Left-handed, needs a left-handed station' } : {}),
+      },
+      // Emailed yesterday: most confirmed, two still to reply, one dropped.
+      status: index < 17 ? 'confirmed' : 'held',
+      created_at: at,
+      emailed_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
+      confirm_by: index === 21
+        ? new Date(Date.now() - 60 * 60 * 1000).toISOString()
+        : new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+      confirmed_at: index < 17 ? at : null,
+      cancelled_at: null,
+      cancelled_by: null,
+    });
+  });
+  [['Riley Chen', 'riley.chen@gmail.com', ['Ortho', 'OMFS']], ['Sam Patel', 'sam.patel@gmail.com', []],
+   ['Jordan Brooks', 'jbrooks@gmail.com', ['Endo']]].forEach(([name, email, picks], index) => {
+    const at = new Date(Date.now() - (10 - index) * 60 * 60 * 1000).toISOString();
+    signupRows.push({
+      id: `s5000000-0000-4000-a000-${String(100 + index).padStart(12, '0')}`,
+      event_id: signupEvents[1].id,
+      member_id: null,
+      name,
+      email,
+      answers: picks.length ? { [Q(5)]: picks } : {},
+      status: 'held',
+      created_at: at,
+      emailed_at: null,
+      confirm_by: null,
+      confirmed_at: null,
+      cancelled_at: null,
+      cancelled_by: null,
+    });
+  });
+
   let historySeq = 0;
   const approve = (memberId, eventId, value = null) => {
     historySeq += 1;
@@ -1466,6 +1571,7 @@ export function buildDatabase() {
       ...portalEvents.map(({ category_id, ...event }) => event),
       ...storageEvents,
       ...eventsPageEvents,
+      ...signupEvents.map(({ category_id, ...event }) => event),
     ].map((event) => ({
       config_version: 1,
       term_id: null,
@@ -1483,6 +1589,17 @@ export function buildDatabase() {
       // Migration 29's default: a fixture event is already-published history
       // unless the row below says otherwise.
       is_published: true,
+      // Migration 30's defaults.
+      members_only: false,
+      signups_enabled: false,
+      signup_capacity: null,
+      signup_closes_at: null,
+      signup_email_days_before: 2,
+      signup_email_time: '18:00',
+      signup_confirm_hours: 24,
+      signup_email_subject: null,
+      signup_email_body: null,
+      published_at: null,
       ...event,
       checkin_token: event.checkin_token ?? CHECKIN_TOKENS[event.id] ?? `tok-${event.id.slice(-12)}`,
     })),
@@ -1500,8 +1617,16 @@ export function buildDatabase() {
         credit_mode: 'fixed',
         fixed_credit: 1,
       })),
+      ...signupEvents.map((event) => ({
+        event_id: event.id,
+        category_id: event.category_id,
+        credit_mode: 'fixed',
+        fixed_credit: 1,
+      })),
     ],
     event_evidence_requirements: EVENT_EVIDENCE.map((row) => ({ ...row })),
+    event_signup_questions: signupQuestions,
+    event_signups: signupRows,
     requirement_sets: sets,
     requirement_nodes: nodes,
     requirement_node_categories: nodeCategories,
@@ -1527,6 +1652,30 @@ export function buildDatabase() {
       { key: 'storage_warn_percent', value: 75, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
       { key: 'storage_quota_bytes', value: 1073741824, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
       { key: 'events_auto_publish', value: true, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      // Migration 31: the Member Calendar, connected, and the email job running.
+      { key: 'google_calendar_id', value: 'c_8f2k1pdsa2026@group.calendar.google.com', updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      { key: 'google_calendar_enabled', value: true, updated_by: null, updated_at: '2026-08-01T00:00:00.000Z' },
+      {
+        key: 'calendar_status',
+        value: {
+          ok: true,
+          enabled: true,
+          service_email: 'pdsa-calendar@pdsa-points.iam.gserviceaccount.com',
+          calendar_id: 'c_8f2k1pdsa2026@group.calendar.google.com',
+          calendar_name: 'Member Calendar 2026-2027',
+          posted: 0,
+          removed: 0,
+          checked_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        },
+        updated_by: null,
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
+      {
+        key: 'email_status',
+        value: { ok: true, from: 'PDSA UCF <events@pdsaucf.com>', sent: 0, failed: 0, checked_at: new Date(Date.now() - 3 * 60 * 1000).toISOString() },
+        updated_by: null,
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
     ],
     purge_runs: purgeRuns,
     purge_run_objects: purgeRunObjects,

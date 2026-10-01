@@ -96,6 +96,19 @@ let db;
 // published or has not been dropped by the Monday auto-publish rule. That
 // boundary is asserted in test/events_page.test.mjs.
 //
+// THE portal_signup* FUNCTIONS ARE A FOURTH WIDENING (migration 30,
+// docs/09-event-signups.md). portal_signup_submit() holds a spot on a visible
+// event and answers with going or waitlist and when the email goes out, never
+// an address. The other three take the 192-bit token emailed to whoever signed
+// up, and answer only for that one sign-up: its state, the name on it, and
+// the event. signup_due_emails(), which mints tokens, is service_role only and
+// is not on this list: a token reaching a browser would be the confirmation
+// itself.
+// portal_events() also gains sign-up counts and questions, never names.
+// portal_member_names() is this year's active roster, ids and names only: the
+// list portal_leaderboard() already publishes, without the totals, for the
+// sign-up autocomplete.
+//
 // Full signatures rather than bare names. Postgres identifies a function by
 // name AND argument types, so an overload is a different function with its own
 // ACL: adding `search_members(text, text)` alongside the existing one and
@@ -115,8 +128,13 @@ const ANON_MAY_EXECUTE = [
   'portal_events()',
   'portal_find_members(text)',
   'portal_leaderboard()',
+  'portal_member_names()',
   'portal_requirements()',
   'portal_scorecard(uuid)',
+  'portal_signup(text)',
+  'portal_signup_cancel(text)',
+  'portal_signup_confirm(text)',
+  'portal_signup_submit(uuid,uuid,text,text,jsonb)',
   'search_members(text,text,text)',
   'submit_checkin(text,uuid,text,text,numeric,jsonb,text)',
 ];

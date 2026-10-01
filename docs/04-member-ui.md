@@ -13,7 +13,7 @@ roster identity yet, so its confirmation has no portal link.
 
 ## There is no sign-in
 
-**Members do not have email addresses, and the club is not collecting any.** The imported
+**Members have no account here.** (Their roster email, since migration 30, is only where a sign-up confirmation goes.) The imported
 roster carries names only. The first version of this portal was built around magic-link
 auth and a claim flow: a member signed in, and either their address matched a roster row
 or an officer confirmed which row was theirs. That whole apparatus existed to answer one
@@ -289,5 +289,6 @@ Migration 24 removed the unused claim RPCs and `member_claims`. The public porta
 anonymous and read-only. `profiles` and the role enum came back later for leadership
 accounts only ([07-officer-roles.md](07-officer-roles.md)); members still have none.
 
-`members.email` is likewise still a column, holding whatever was imported into it. Nothing
-reads it and nothing writes it.
+`members.email` is read again since migration 30, for one purpose: it is where a
+member's event sign-up confirmation is sent ([09-event-signups.md](09-event-signups.md)).
+It is still never shown on a public page, and the portal is still not an account.

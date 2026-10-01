@@ -34,6 +34,9 @@ import {
   handleStorageSign,
   resetAdmin,
   serveSignedObject,
+  sendDueSignupEmails,
+  mintSignupLink,
+  signupOutbox,
 } from './admin-server.mjs';
 import { MOCK_PASSCODE } from './admin-fixtures.mjs';
 
@@ -582,6 +585,19 @@ export function startMock(port = PORT) {
       }
       if (handleAuth(req, res, url, body, { json, pds })) return;
       json(res, 404, { error: 'not found', message: `No auth endpoint ${url.pathname}` });
+      return;
+    }
+
+    if (url.pathname === '/__mock/outbox') {
+      json(res, 200, signupOutbox);
+      return;
+    }
+    if (url.pathname === '/__mock/signup-link') {
+      json(res, 200, mintSignupLink(url.searchParams.get('id')));
+      return;
+    }
+    if (url.pathname === '/__mock/send-due') {
+      json(res, 200, sendDueSignupEmails());
       return;
     }
 

@@ -294,14 +294,20 @@ await check('a header written any of the ways a person writes it is accepted', (
   assert.deepEqual(people, [{ first_name: 'Abby', last_name: 'Catto', row: 2 }]);
 });
 
-await check('a column this product no longer has is ignored, not refused', () => {
-  // Last year's export still carries an address, and a file that will not load
-  // because of a column nothing reads would be a refusal for its own sake.
+await check('an email column is read, and a bad address names its row', () => {
+  // Migration 30: the roster address is where a member's sign-up
+  // confirmation goes, so the column is read rather than ignored, and an
+  // address that is not one stops the file the way half a name does.
   const { people, problem } = csv.readRoster(
-    'first_name,last_name,email\nAbby,Catto,407-555-0100\n',
+    'first_name,last_name,email\nAbby,Catto,abby@example.com\nAaron,Ozan,\n',
   );
-  assert.equal(problem, null, 'a file with an email column was refused');
-  assert.deepEqual(people, [{ first_name: 'Abby', last_name: 'Catto', row: 2 }]);
+  assert.equal(problem, null);
+  assert.deepEqual(people, [
+    { first_name: 'Abby', last_name: 'Catto', row: 2, email: 'abby@example.com' },
+    { first_name: 'Aaron', last_name: 'Ozan', row: 3 },
+  ]);
+  const bad = csv.readRoster('first_name,last_name,email\nAbby,Catto,407-555-0100\n');
+  assert.match(bad.problem.title, /Row 2/);
 });
 
 await check('a file without the columns it needs says which ones', () => {

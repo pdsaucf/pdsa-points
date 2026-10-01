@@ -51,6 +51,10 @@ test('the deployment guard probes event and leadership signatures without office
     'set_leadership_role',
     'revoke_leadership_access',
     'list_leadership_audit',
+    'save_event',
+    'add_event_signup',
+    'remove_event_signup',
+    'set_member_emails',
   ]);
   assert.equal(requests.length, ADMIN_RPC_PROBES.length);
   for (let index = 0; index < ADMIN_RPC_PROBES.length; index += 1) {
@@ -128,7 +132,7 @@ test('the deployment guard probes the exact Events startup GET without officer c
   assert.equal(requests[0].init.body, undefined);
   assert.equal(
     requests[0].url,
-    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cconfig_version%2Clocation%2Cattire%2Csignup%2Cdescription%2Cis_published%2Crelease_at%2Cis_visible%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
+    'https://example.supabase.co/rest/v1/events?select=id%2Ctitle%2Coccurred_on%2Cstarts_at%2Cends_at%2Cterm_id%2Ccheckin_token%2Ccheckin_closes_at%2Cconfig_version%2Clocation%2Cattire%2Csignup%2Cdescription%2Cis_published%2Crelease_at%2Cis_visible%2Cmembers_only%2Csignups_enabled%2Csignup_capacity%2Csignup_closes_at%2Cpublished_at%2Csignup_email_days_before%2Csignup_email_time%2Csignup_confirm_hours%2Csignup_email_subject%2Csignup_email_body%2Cevent_signup_questions%28id%2Cposition%2Ckind%2Cprompt%2Cis_required%2Coptions%29%2Cevent_categories%28category_id%2Ccredit_mode%2Cfixed_credit%2Ccategories%28id%2Cname%29%29%2Cevent_evidence_requirements%28id%2Ckind%2Cis_required%2Cprompt%29&academic_year_id=eq.a0000000-0000-4000-a000-000000000001&order=occurred_on.desc',
   );
   assert.equal(EVENTS_STARTUP_PROBE.query, new URL(requests[0].url).search.slice(1));
 });

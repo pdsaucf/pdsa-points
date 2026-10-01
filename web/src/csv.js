@@ -153,6 +153,9 @@ export function readRoster(text) {
 
     const first = cell('first_name');
     const last = cell('last_name');
+    // Optional. The address a member's sign-up confirmations go to
+    // (docs/09-event-signups.md). Dues forms call it either of these.
+    const email = (at.email !== undefined ? cell('email') : at.email_address !== undefined ? cell('email_address') : '');
 
     if (!first || !last) {
       return fail(
@@ -161,7 +164,10 @@ export function readRoster(text) {
       );
     }
 
-    people.push({ first_name: first, last_name: last, row: number });
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return fail(`Row ${number} has an email that is not valid`, 'Fix the file and choose it again');
+    }
+    people.push({ first_name: first, last_name: last, row: number, ...(email ? { email } : {}) });
   }
 
   if (!people.length) return fail('No people in the file', 'Header row only');

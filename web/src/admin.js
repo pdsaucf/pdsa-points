@@ -11,6 +11,7 @@ import { createRoster } from './roster.js';
 import { createMember } from './member.js';
 import { createAccess } from './access.js';
 import { createStorage } from './storage.js';
+import { createConnections } from './connections.js';
 import { createSearch } from './search.js';
 import { $, h, announce, setHidden, wireMenu } from './ui.js';
 import { installButtonIcons } from './icons.js';
@@ -19,8 +20,8 @@ import { installButtonIcons } from './icons.js';
 // year changes, so switching tabs costs nothing. Events is first: it is where
 // an officer's day starts (make the event, print the code), and the app lands
 // on it (see start()). The last four sit behind the Settings menu.
-const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage', 'access'];
-const SETTINGS_TABS = ['requirements', 'categories', 'storage', 'access'];
+const TABS = ['events', 'review', 'progress', 'roster', 'requirements', 'categories', 'storage', 'access', 'connections'];
+const SETTINGS_TABS = ['requirements', 'categories', 'storage', 'access', 'connections'];
 
 // The tabs each role is shown. Postgres holds the boundary; this only keeps
 // doors that will not open off the screen. See docs/07-officer-roles.md.
@@ -49,6 +50,7 @@ const PANEL_RECOVERY = {
   member: 'Member',
   storage: 'Storage',
   access: 'Access',
+  connections: 'Connections',
 };
 
 const el = {};
@@ -69,6 +71,7 @@ const app = {
   roster: null,
   member: null,
   storage: null,
+  connections: null,
   storageReloadQueue: Promise.resolve(),
   tab: 'events',
   returnTab: 'roster',
@@ -417,9 +420,11 @@ function startApp() {
     app.requirements = createRequirements(context('requirements'));
     app.categories = createCategories(context('categories'));
     app.access = createAccess(context('access'));
+    app.connections = createConnections(context('connections'));
     app.requirements.mount();
     app.categories.mount();
     app.access.mount();
+    app.connections.mount();
   }
   app.events.mount();
   app.progress.mount();
@@ -455,6 +460,7 @@ function cacheElements() {
       categories: $('tab-categories'),
       storage: $('tab-storage'),
       access: $('tab-access'),
+      connections: $('tab-connections'),
     },
     panels: {
       events: $('panel-events'),
@@ -465,6 +471,7 @@ function cacheElements() {
       categories: $('panel-categories'),
       storage: $('panel-storage'),
       access: $('panel-access'),
+      connections: $('panel-connections'),
       member: $('panel-member'),
     },
     tabReviewCount: $('tab-review-count'),

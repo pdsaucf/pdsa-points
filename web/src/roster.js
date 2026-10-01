@@ -1046,7 +1046,7 @@ export function createRoster(ctx) {
     el.importForm.reset();
     setHidden(el.importProblem, true);
     setHidden(el.importTable, true);
-    el.importSummary.textContent = 'Choose a CSV with first_name and last_name columns';
+    el.importSummary.textContent = 'Choose a CSV with first_name, last_name and email columns';
     el.importRun.disabled = true;
     el.importDialog.showModal();
   }
@@ -1227,6 +1227,8 @@ export function createRoster(ctx) {
     // Every row that resolved to somebody, whether created or matched. Scanned
     // for earlier check-ins once the run itself is done; see scanImportRetro().
     const linkedIds = new Set();
+    // Roster addresses from an email column, saved after the rows land.
+    const emails = [];
     let created = 0;
     let done = 0;
     let unknown = 0;
@@ -1265,10 +1267,27 @@ export function createRoster(ctx) {
           if (result?.was_created) created += 1;
           done += 1;
           if (result?.member_id) linkedIds.add(result.member_id);
+          if (result?.member_id && row?.email) emails.push({ member_id: result.member_id, email: row.email, row });
         });
       }
 
-      const said = `${plural(created, 'member')} added, ${done} on the roster`;
+      let emailed = 0;
+      for (let at = 0; at < emails.length; at += 200) {
+        const chunk = emails.slice(at, at + 200);
+        const saved = await callRpc('set_member_emails', {
+          p_rows: chunk.map(({ member_id, email }) => ({ member_id, email })),
+        });
+        (Array.isArray(saved) ? saved : []).forEach((result, index) => {
+          const { row } = chunk[index];
+          if (result?.error) {
+            refused.push({ row: row.row, name: `${row.first_name} ${row.last_name}`, message: `${result.error}: ${row.email}` });
+          } else {
+            emailed += 1;
+          }
+        });
+      }
+
+      const said = `${plural(created, 'member')} added, ${done} on the roster${emails.length ? `, ${plural(emailed, 'email')} saved` : ''}`;
       if (unknown) {
         // Re-running is safe: the import is idempotent, so whatever did land
         // is found rather than written again. The preview is left alone, so
