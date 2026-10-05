@@ -30,6 +30,8 @@
 // the alternative is bytes in the bucket that nothing in the database points
 // at and no purge run will ever find.
 
+import { EVENT_SELECT as EVENTS_LIST_SELECT } from './events-contract.js';
+import { createSignupSheet } from './event-signups.js';
 import { select, remove, callRpc, deleteEvidenceObjects } from './rest.js';
 import { NetworkError } from './errors.js';
 import { downloadCsv } from './csv.js';
@@ -68,12 +70,9 @@ const RECORD_SELECT = [
 
 // The same shape the list reads, because this screen re-reads the event for
 // itself rather than trusting the copy it was handed. See open().
-const EVENT_SELECT = [
-  'id,title,occurred_on,starts_at,ends_at,term_id,checkin_token,checkin_closes_at,config_version',
-  'location,attire,signup,description,is_published,release_at,is_visible',
-  'event_categories(category_id,credit_mode,fixed_credit,categories(id,name))',
-  'event_evidence_requirements(id,kind,is_required,prompt)',
-].join(',');
+// The same columns the list reads, so Edit opened from here gets the sign-up
+// form too.
+const EVENT_SELECT = EVENTS_LIST_SELECT;
 
 const SOURCE_LABEL = Object.fromEntries(ATTENDANCE_SOURCES.map((row) => [row.value, row.label]));
 
@@ -338,6 +337,24 @@ export function createEventDetail(ctx, host) {
 
   const typed = () => collectsTypedValue(state.event);
 
+  // The sign-up sheet sits above the attendance list. A change there re-reads
+  // this event, and the list behind it for its counts.
+  const signups = createSignupSheet(ctx, {
+    afterChange: async () => {
+      await reload({ quietFailure: true });
+      await host.afterChange?.();
+    },
+  });
+
+  /** An event anybody checked into or signed up for is not empty. */
+  const deletable = () => canDeleteEvent(state.records) && !signups.hasAny();
+
+  function syncDelete() {
+    const can = deletable();
+    el.remove.disabled = state.busy || !can;
+    el.remove.title = can ? 'Delete this event' : 'Events with check-ins or sign-ups cannot be deleted';
+  }
+
   // -------------------------------------------------------------------------
   // Reading
   // -------------------------------------------------------------------------
@@ -427,7 +444,7 @@ export function createEventDetail(ctx, host) {
     el.title.textContent = event.title ?? '';
 
     const status = eventStatus(event.checkin_closes_at);
-    el.status.textContent = `Check-in ${status.toLowerCase()}`;
+    el.status.textContent = `Attendance check-in ${status.toLowerCase()}`;
     el.status.dataset.status = status.toLowerCase();
 
     el.meta.textContent = shortDate(event.occurred_on);
@@ -439,7 +456,12 @@ export function createEventDetail(ctx, host) {
     const offerButton = !publish.visible || publish.canUnpublish;
     setHidden(el.publish, !offerButton);
     if (offerButton) el.publish.textContent = publish.visible ? 'Unpublish' : 'Publish';
-    el.publishStatus.textContent = publish.detail ? `${publish.label}, ${publish.detail}` : publish.label;
+    el.publishStatus.replaceChildren(
+      ...[
+        h('span', { class: 'event-publish-pill' }, publish.label),
+        publish.detail ? h('span', { class: 'event-publish-detail' }, publish.detail) : null,
+      ].filter(Boolean),
+    );
     el.publishStatus.dataset.visible = String(publish.visible);
     el.publishStatus.dataset.warn = String(publish.warn);
 
@@ -475,6 +497,7 @@ export function createEventDetail(ctx, host) {
     renderHeader();
     renderStats();
     renderAttendees();
+    signups.show(state.event, state.records, state.roster).then(syncDelete);
     setHidden(el.body, false);
   }
 
@@ -517,9 +540,7 @@ export function createEventDetail(ctx, host) {
 
     // Deleting an event Postgres would refuse is not a button worth offering:
     // attendance_records.event_id is `on delete restrict`.
-    const deletable = canDeleteEvent(state.records);
-    el.remove.disabled = !deletable;
-    el.remove.title = deletable ? 'Delete this event' : 'Events with check-ins cannot be deleted';
+    syncDelete();
 
     // Only the records this button will actually send. An unmatched name is
     // waiting too, and it is exactly what the button cannot approve, so a
@@ -681,7 +702,7 @@ export function createEventDetail(ctx, host) {
     }
     // Delete answers to the event's own state as well as to a write in
     // flight, so it cannot simply follow `on` back to enabled.
-    el.remove.disabled = on || !canDeleteEvent(state.records);
+    el.remove.disabled = on || !deletable();
     renderAttendees();
   }
 
@@ -1212,7 +1233,7 @@ export function createEventDetail(ctx, host) {
   // -------------------------------------------------------------------------
 
   function askToDelete() {
-    if (!canDeleteEvent(state.records)) return;
+    if (!deletable()) return;
     el.deleteWhat.textContent = `${state.event.title}, ${shortDate(state.event.occurred_on)}`;
     state.deleteId = state.event.id;
     el.deleteDialog.showModal();
@@ -1229,7 +1250,7 @@ export function createEventDetail(ctx, host) {
     // Re-asked rather than trusted: the officer may have approved somebody on
     // this event in another tab since the dialog opened, and the button that
     // opened it is the only thing that checked.
-    if (!canDeleteEvent(state.records)) return;
+    if (!deletable()) return;
     deleteEvent();
   }
 
@@ -1286,6 +1307,7 @@ export function createEventDetail(ctx, host) {
     state.loadToken += 1;
     state.event = null;
     state.records = [];
+    signups.dismiss();
     setHidden(el.view, true);
   }
 
@@ -1327,7 +1349,10 @@ export function createEventDetail(ctx, host) {
   }
 
   return {
-    mount: wire,
+    mount() {
+      wire();
+      signups.mount();
+    },
     open,
     close,
     dismiss,

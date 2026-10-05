@@ -1514,9 +1514,9 @@ await check('the publish-after-save dialog offers to publish an event whose rele
   const meta = dom.$('event-publish-after-meta').textContent;
   assert.match(meta, /Verify Publish After Dialog Shows/, 'the meta line does not name the event');
   assert.match(
-    meta,
-    /next drop [A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/,
-    `the meta line does not read a release label: "${meta}"`,
+    dom.$('event-publish-after-drop').textContent,
+    /^Monday drop lands after the event$/,
+    'the dialog does not say the drop misses the event',
   );
 
   dom.click(dom.$('event-publish-after-dialog').querySelector('[data-close]'));
@@ -1650,7 +1650,7 @@ await check('event cards separate headings, status metadata, counts, and actions
     () =>
       eventRowFor('Soap Carving')
         ?.querySelector('.event-checkin-status')
-        ?.textContent.trim() === 'Check-in closed',
+        ?.textContent.trim() === 'Attendance check-in closed',
     'the closed card never rendered',
   );
 
@@ -1681,16 +1681,23 @@ await check('event cards separate headings, status metadata, counts, and actions
     assert.equal(status?.tagName, 'SPAN', 'check-in status is not plain metadata');
     assert.equal(status.getAttribute('role'), null, 'check-in status has an interactive role');
     assert.equal(status.querySelector('button, a'), null, 'check-in status contains a control');
-    assert.match(status.textContent.trim(), /^Check-in (open|closed)$/);
+    assert.match(status.textContent.trim(), /^Attendance check-in (open|closed)$/);
     assert.equal(status.querySelector('.event-status-dot')?.getAttribute('aria-hidden'), 'true');
     statuses.add(status.textContent.trim());
 
     const counts = row.querySelector('.event-counts')?.textContent.trim() ?? '';
-    assert.match(counts, /^\d+ approved, \d+ waiting$/);
+    // Sign-ups first when the event has them, then who came: approved
+    // attendance reads as attended, waiting records as to review.
+    assert.match(counts, /^(\d+( of \d+)? signed up, (\d+ on waitlist, )?)?\d+ attended(, \d+ to review)?$/);
     assert.doesNotMatch(counts, /pending/i);
+
+    // The publish pill and the check-in line share one column.
+    const stack = row.querySelector('.event-status-stack');
+    assert.equal(status.parentNode, stack, 'check-in status is not in the status column');
+    assert.match(stack.querySelector('.event-publish-pill')?.textContent ?? '', /^(Published|Not published)$/);
   }
 
-  assert.deepEqual(statuses, new Set(['Check-in open', 'Check-in closed']));
+  assert.deepEqual(statuses, new Set(['Attendance check-in open', 'Attendance check-in closed']));
   assert.ok(
     rows.some((row) => /photo required/.test(row.querySelector('.event-title-cell').textContent)),
     'photo-required metadata disappeared',
@@ -1895,7 +1902,7 @@ await check('Show narrows to what is still open for check-in', () => {
     for (const row of dom.$('event-list').querySelectorAll('.event-row')) {
       assert.equal(
         row.querySelector('.event-checkin-status').textContent.trim(),
-        'Check-in open',
+        'Attendance check-in open',
         `a closed event is under the Open filter: ${row.textContent}`,
       );
     }
@@ -1937,8 +1944,9 @@ await check('the order picker reorders the list without re-reading the server', 
         // Read off its own cell, never off the row's text: a category chip
         // ending in a credit runs straight into the count beside it, and
         // "Socials, 1" plus "64 approved" reads as 164.
-        const [, approved, waiting] =
-          /(\d+) approved, (\d+) waiting/.exec(row.querySelector('.event-counts').textContent) ?? [];
+        const text = row.querySelector('.event-counts').textContent;
+        const approved = /(\d+) attended/.exec(text)?.[1];
+        const waiting = /(\d+) to review/.exec(text)?.[1];
         return Number(approved ?? 0) + Number(waiting ?? 0);
       });
     assert.deepEqual(live, [...live].sort((a, b) => b - a), 'Most check-ins is not in order');
@@ -3544,7 +3552,8 @@ const eventSources = {
 
 await check('event configuration saves through one transactional RPC', () => {
   const source = eventSources['src/events.js'];
-  assert.match(source, /callRpc\(\s*'save_event_config'/);
+  // save_event() is save_event_config() plus the sign-up form, in one call.
+  assert.match(source, /callRpc\(\s*'save_event'/);
   for (const [label, moduleSource] of Object.entries(eventSources)) {
     assert.doesNotMatch(moduleSource, /insert\(\s*'events'/, `${label} inserts events directly`);
     assert.doesNotMatch(moduleSource, /patch\(\s*'events'/, `${label} updates events directly`);

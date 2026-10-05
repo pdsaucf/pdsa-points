@@ -70,6 +70,34 @@ const ADMIN_RPC_PROBES = [
     args: { p_access_id: '00000000-0000-4000-a000-000000000001' },
   },
   { name: 'list_leadership_audit', args: {} },
+  {
+    name: 'save_event',
+    args: {
+      p_event_id: '00000000-0000-4000-a000-000000000001',
+      p_academic_year_id: '00000000-0000-4000-a000-000000000001',
+      p_event: {},
+      p_categories: [],
+      p_evidence: null,
+      p_expected_config_version: null,
+      p_create: false,
+      p_signup_form: null,
+    },
+  },
+  {
+    name: 'add_event_signup',
+    args: {
+      p_event_id: '00000000-0000-4000-a000-000000000001',
+      p_member_id: null,
+      p_name: 'deployment-contract-probe',
+      p_email: null,
+      p_answers: {},
+    },
+  },
+  {
+    name: 'remove_event_signup',
+    args: { p_signup_id: '00000000-0000-4000-a000-000000000001' },
+  },
+  { name: 'set_member_emails', args: { p_rows: [] } },
 ];
 
 const EXPECTED_DENIALS = new Set(['42501', 'PDS07']);

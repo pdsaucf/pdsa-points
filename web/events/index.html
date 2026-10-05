@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Events | PDSA UCF</title>
-    <meta name="description" content="Upcoming PDSA UCF events: date, time, location and how to sign up." />
+    <meta name="description" content="Upcoming PDSA UCF events: date, time, location and sign-ups." />
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#59328f" />
     <meta name="robots" content="noindex" />
@@ -15,9 +15,9 @@
   </head>
   <body>
     <!--
-      TOUCHES NO TABLE (invariant 3). This page calls portal_events() and
-      nothing else: no name typed, no login, no personalization. /me already
-      answers "what did I attend"; this page answers "what is happening".
+      TOUCHES NO TABLE (invariant 3). This page calls portal_events(), the
+      sign-up functions and nothing else, with no login. /me answers "what did
+      I attend"; this page answers "what is happening" and takes sign-ups.
     -->
     <main id="app" class="app">
       <p class="brand-row">
@@ -39,6 +39,9 @@
         <p id="screen-message-body" class="message-body"></p>
         <button id="screen-message-action" type="button" class="button button-secondary" hidden></button>
       </div>
+
+      <!-- The link in a confirmation email lands here: ?signup=<token>. -->
+      <section id="signup-link" class="signup-link" aria-live="polite" hidden></section>
 
       <section id="loading" class="view-centred" aria-busy="true">
         <p class="spinner" aria-hidden="true"></p>

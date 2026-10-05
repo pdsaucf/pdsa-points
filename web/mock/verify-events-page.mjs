@@ -176,7 +176,7 @@ await check('every column of digits on this screen is tabular', () => {
   assert.match(eventsCss, /body\s*{[^}]*font-variant-numeric:\s*tabular-nums/);
 });
 
-await check('the page touches no table: it calls portal_events() and nothing else', () => {
+await check('the page touches no table: it calls the public event and sign-up functions and nothing else', () => {
   const code = eventsPageSource.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
   for (const verb of ['select', 'insert', 'patch', 'remove']) {
     assert.doesNotMatch(
@@ -189,7 +189,14 @@ await check('the page touches no table: it calls portal_events() and nothing els
   assert.doesNotMatch(code, /from '\.\/auth\.js'/, 'events-page.js imports the session');
   assert.match(code, /rpc\(\s*'portal_events'/, 'events-page.js never calls portal_events()');
   const otherRpcNames = [...code.matchAll(/rpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(otherRpcNames)], ['portal_events'], 'the page calls something other than portal_events()');
+  // Migration 30 added sign-ups: the roster names for the autocomplete, the
+  // submit, and the three functions behind the emailed link.
+  assert.deepEqual(
+    [...new Set(otherRpcNames)].sort(),
+    ['portal_events', 'portal_member_names', 'portal_signup', 'portal_signup_cancel',
+     'portal_signup_confirm', 'portal_signup_submit'].sort(),
+    'the page calls something other than its public functions',
+  );
 });
 
 await check('the page is anonymous: no accessToken is ever passed to rpc()', () => {

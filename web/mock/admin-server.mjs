@@ -171,6 +171,8 @@ export function resetAdmin() {
   pendingRowRefusal = null;
   pendingShortResult = false;
   pendingDeleteFailures = null;
+  signupTokens.clear();
+  signupOutbox.length = 0;
 }
 
 export function adminState() {
@@ -399,6 +401,7 @@ const RELATIONS = {
   },
   events: {
     event_categories: { table: 'event_categories', kind: 'many', from: 'id', to: 'event_id' },
+    event_signup_questions: { table: 'event_signup_questions', kind: 'many', from: 'id', to: 'event_id' },
     event_evidence_requirements: {
       table: 'event_evidence_requirements',
       kind: 'many',
@@ -991,7 +994,51 @@ function duplicatePairRows() {
   );
 }
 
+/**
+ * v_event_signups, the way migration 30 computes it: live sign-ups ranked by
+ * created_at, going within capacity, waitlist past it; a held sign-up past
+ * confirm_by is dropped and out of line.
+ */
+export function signupRows() {
+  const now = Date.now();
+  const dropped = (row) => row.status === 'held' && row.confirm_by && new Date(row.confirm_by).getTime() <= now;
+  const spots = new Map();
+  const ranked = [...db.event_signups]
+    .filter((row) => row.status !== 'cancelled' && !dropped(row))
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id.localeCompare(b.id));
+  for (const row of ranked) {
+    const n = (spots.get(`n:${row.event_id}`) ?? 0) + 1;
+    spots.set(`n:${row.event_id}`, n);
+    spots.set(row.id, n);
+  }
+  return db.event_signups.map((row) => {
+    const event = db.events.find((one) => one.id === row.event_id);
+    const capacity = event?.signup_capacity ?? null;
+    const spot = spots.get(row.id) ?? null;
+    let state;
+    if (row.status === 'cancelled') state = 'cancelled';
+    else if (dropped(row)) state = 'dropped';
+    else state = capacity === null || spot <= capacity ? 'going' : 'waitlist';
+    let reply = null;
+    if (state === 'going' || state === 'waitlist') {
+      reply = row.status === 'confirmed' ? 'confirmed' : row.emailed_at ? 'awaiting' : 'scheduled';
+    }
+    const scheduled = row.status === 'held' && !row.emailed_at && event
+      ? new Date(Math.max(signupEmailAt(event).getTime(), new Date(row.created_at).getTime())).toISOString()
+      : null;
+    return {
+      added_by_officer: false,
+      ...row,
+      state,
+      reply,
+      email_at: scheduled,
+      waitlist_position: state === 'waitlist' ? spot - capacity : null,
+    };
+  });
+}
+
 const VIEWS = {
+  v_event_signups: signupRows,
   v_attendance_credit: creditRows,
   v_member_category_totals: categoryTotalRows,
   v_member_status: memberStatusRows,
@@ -1333,6 +1380,16 @@ const INSERT_DEFAULTS = {
     // Migration 29 flips the real column default to false: a new event is
     // queued until an officer publishes it or the Monday drop reaches it.
     is_published: false,
+    members_only: false,
+    signups_enabled: false,
+    signup_capacity: null,
+    signup_closes_at: null,
+    signup_email_days_before: 2,
+    signup_email_time: '18:00',
+    signup_confirm_hours: 24,
+    signup_email_subject: null,
+    signup_email_body: null,
+    published_at: null,
     created_by: auth?.userId ?? null,
     created_at: new Date().toISOString(),
     ...row,
@@ -2115,6 +2172,243 @@ function accessMutation(action) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Sign-ups (migration 30)
+// ---------------------------------------------------------------------------
+
+const signupTokens = new Map(); // raw token -> signup id, the mock's token_hash
+export const signupOutbox = []; // what the event-signup function "emailed"
+
+function signupClosesAt(event) {
+  if (event.signup_closes_at) return new Date(event.signup_closes_at);
+  if (event.starts_at) return new Date(event.starts_at);
+  return new Date(new Date(`${event.occurred_on}T00:00:00-04:00`).getTime() + 24 * 60 * 60 * 1000);
+}
+
+function signupByToken(token) {
+  const id = signupTokens.get(String(token ?? ''));
+  return id ? db.event_signups.find((row) => row.id === id) ?? null : null;
+}
+
+function signupView(id) {
+  const view = signupRows().find((row) => row.id === id);
+  const event = db.events.find((one) => one.id === view.event_id);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return {
+    state: view.state,
+    reply: view.reply,
+    waitlist_position: view.waitlist_position,
+    confirm_by: view.confirm_by ?? null,
+    name: view.name,
+    event: {
+      id: event.id,
+      title: event.title,
+      occurred_on: event.occurred_on,
+      starts_at: event.starts_at ?? null,
+      ends_at: event.ends_at ?? null,
+      location: event.location ?? null,
+      attire: event.attire ?? null,
+      past: event.occurred_on < today,
+    },
+  };
+}
+
+function signupFormProblem(form) {
+  if (typeof form !== 'object' || !Array.isArray(form.questions ?? [])) return 'The sign-up form is not valid.';
+  const capacity = form.capacity === null || form.capacity === '' || form.capacity === undefined ? null : Number(form.capacity);
+  if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 5000)) return 'Spots must be between 1 and 5000.';
+  for (const [index, q] of (form.questions ?? []).entries()) {
+    if (!String(q.prompt ?? '').trim()) return `Question ${index + 1} needs a prompt.`;
+    const choice = q.kind === 'single_choice' || q.kind === 'multi_choice';
+    if (choice && !(q.options ?? []).some((o) => String(o).trim())) return `Question ${index + 1} needs choices.`;
+  }
+  return null;
+}
+
+function applySignupForm(eventId, form) {
+  const event = db.events.find((one) => one.id === eventId);
+  if (!event) return;
+  Object.assign(event, {
+    members_only: Boolean(form.members_only),
+    signups_enabled: Boolean(form.enabled),
+    signup_capacity: form.capacity === null || form.capacity === '' || form.capacity === undefined ? null : Number(form.capacity),
+    signup_closes_at: form.closes_at || null,
+    signup_email_days_before: Number(form.email_days_before ?? 2),
+    signup_email_time: form.email_time || '18:00',
+    signup_confirm_hours: Number(form.confirm_hours ?? 24),
+    signup_email_subject: String(form.email_subject ?? '').trim() || null,
+    signup_email_body: String(form.email_body ?? '').trim() || null,
+  });
+  const keep = [];
+  (form.questions ?? []).forEach((q, index) => {
+    const id = q.id || uuid('q9000000-0000-4000-a000-');
+    const choice = q.kind === 'single_choice' || q.kind === 'multi_choice';
+    const options = choice ? [...new Set((q.options ?? []).map((o) => String(o).trim()).filter(Boolean))] : [];
+    const row = { id, event_id: eventId, position: index + 1, kind: q.kind, prompt: String(q.prompt).trim(), is_required: Boolean(q.required), options };
+    const existing = db.event_signup_questions.find((one) => one.id === id);
+    if (existing) Object.assign(existing, row);
+    else db.event_signup_questions.push(row);
+    keep.push(id);
+  });
+  db.event_signup_questions = db.event_signup_questions.filter((row) => row.event_id !== eventId || keep.includes(row.id));
+}
+
+const maskEmail = (email) => {
+  const [local, domain] = String(email).split('@');
+  return domain ? `${local.slice(0, 1)}***@${domain}` : '***';
+};
+
+function signupEmailAt(event) {
+  const days = Number(event.signup_email_days_before ?? 2);
+  const [hh, mm] = String(event.signup_email_time ?? '18:00').split(':').map(Number);
+  const [y, m, d] = String(event.occurred_on).split('-').map(Number);
+  // New York is UTC-4 for the whole fall term the mock covers.
+  return new Date(Date.UTC(y, m - 1, d - days, hh + 4, mm || 0));
+}
+
+/**
+ * portal_signup_submit(), in the mock: the identity rules, the answers, and a
+ * held spot. Sends nothing.
+ */
+function submitSignup(body) {
+  const fail = (code, message) => ({ error: { code, message } });
+  const event = db.events.find((one) => one.id === body.p_event_id);
+  if (!event || !eventIsVisible(event)) return fail('PDS03', 'Unknown event.');
+  if (!event.signups_enabled || Date.now() >= signupClosesAt(event).getTime()) return fail('PDS19', 'Sign-ups are closed.');
+
+  const year = event.academic_year_id;
+  const active = (memberId) => db.member_enrollments.some(
+    (row) => row.member_id === memberId && row.academic_year_id === year && (row.status ?? 'active') === 'active',
+  );
+  let member = null;
+  if (body.p_member_id) {
+    member = db.members.find((one) => one.id === body.p_member_id && active(one.id)) ?? null;
+    if (!member) return fail('PDS17', 'Not on this years roster.');
+  } else if (body.p_email) {
+    member = db.members.find((one) => String(one.email ?? '').toLowerCase() === String(body.p_email).trim().toLowerCase() && active(one.id)) ?? null;
+  }
+  let name;
+  let email;
+  if (member) {
+    if (!member.email) return fail('PDS20', 'No email on file.');
+    name = member.display_name;
+    email = member.email;
+  } else {
+    if (event.members_only) return fail('PDS17', 'Members only.');
+    name = String(body.p_name ?? '').trim().replace(/\s+/g, ' ');
+    email = String(body.p_email ?? '').trim();
+    if (!name) return fail('PDS03', 'Type your full name.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('PDS03', 'Type a valid email.');
+  }
+
+  const answers = {};
+  for (const q of db.event_signup_questions.filter((one) => one.event_id === event.id)) {
+    const raw = body.p_answers?.[q.id];
+    if (q.kind === 'multi_choice') {
+      const list = Array.isArray(raw) ? raw.filter((x) => q.options.includes(x)) : [];
+      if (q.is_required && !list.length) return fail('PDS03', `Answer "${q.prompt}".`);
+      if (list.length) answers[q.id] = q.options.filter((o) => list.includes(o));
+    } else {
+      const text = String(raw ?? '').trim();
+      if (q.is_required && !text) return fail('PDS03', `Answer "${q.prompt}".`);
+      if (text && q.kind === 'single_choice' && !q.options.includes(text)) return fail('PDS03', `Answer "${q.prompt}" is not one of the choices.`);
+      if (text) answers[q.id] = text;
+    }
+  }
+
+  const views = signupRows();
+  const live = views.find((row) => row.event_id === event.id && row.state !== 'cancelled' &&
+    (String(row.email ?? '').toLowerCase() === email.toLowerCase() || (member && row.member_id === member.id)));
+  if (live && live.state !== 'dropped') return fail('PDS18', 'Already signed up.');
+
+  const now = new Date().toISOString();
+  let row = live ? db.event_signups.find((one) => one.id === live.id) : null;
+  if (row) {
+    Object.assign(row, {
+      name, email, member_id: member?.id ?? null, answers, status: 'held', created_at: now,
+      emailed_at: null, confirm_by: null,
+    });
+    for (const [key, id] of signupTokens) if (id === row.id) signupTokens.delete(key);
+  } else {
+    row = {
+      id: uuid('s9000000-0000-4000-a000-'), event_id: event.id, member_id: member?.id ?? null, name, email,
+      answers, status: 'held', created_at: now, emailed_at: null, confirm_by: null, confirmed_at: null,
+      cancelled_at: null, cancelled_by: null, added_by_officer: false,
+    };
+    db.event_signups.push(row);
+  }
+  const view = signupRows().find((one) => one.id === row.id);
+  return {
+    ok: {
+      state: view.state,
+      waitlist_position: view.waitlist_position,
+      email_at: view.email_at,
+      confirm_hours: event.signup_confirm_hours ?? 24,
+      is_member: Boolean(member),
+    },
+  };
+}
+
+/** A link for one sign-up, as if its email had just gone out. Mock only. */
+export function mintSignupLink(signupId) {
+  const row = db.event_signups.find((one) => one.id === signupId);
+  if (!row) return null;
+  const token = randomBytes(24).toString('hex');
+  signupTokens.set(token, row.id);
+  return { token, link: `/events/?signup=${token}` };
+}
+
+/**
+ * The send-signup-emails run, in the mock: every due email gets a token and a
+ * confirm_by and lands in signupOutbox, for /__mock/send-due.
+ */
+export function sendDueSignupEmails() {
+  const sent = [];
+  for (const row of db.event_signups) {
+    if (row.status !== 'held' || row.emailed_at || !row.email) continue;
+    const event = db.events.find((one) => one.id === row.event_id);
+    if (!event || signupEmailAt(event).getTime() > Date.now()) continue;
+    const token = randomBytes(24).toString('hex');
+    const hours = Number(event.signup_confirm_hours ?? 24);
+    const confirmBy = Math.min(Date.now() + hours * 3600000, signupClosesAt({ ...event, signup_closes_at: null }).getTime());
+    row.emailed_at = new Date().toISOString();
+    row.confirm_by = new Date(confirmBy).toISOString();
+    signupTokens.set(token, row.id);
+    const entry = { to: row.email, event: event.title, link: `/events/?signup=${token}`, token };
+    signupOutbox.push(entry);
+    sent.push(entry);
+  }
+  return sent;
+}
+
+function releasedAt(event) {
+  const auto = (db.app_settings.find((row) => row.key === 'events_auto_publish')?.value ?? true) === true;
+  const candidates = [];
+  if (event.is_published && event.published_at) candidates.push(new Date(event.published_at));
+  const release = eventReleaseAt(event);
+  if (auto && release.getTime() <= Date.now()) candidates.push(release);
+  if (!candidates.length) return null;
+  return new Date(Math.min(...candidates.map((d) => d.getTime()))).toISOString();
+}
+
+function signupBlock(event) {
+  const rows = signupRows().filter((row) => row.event_id === event.id);
+  return {
+    open: Date.now() < signupClosesAt(event).getTime(),
+    closes_at: signupClosesAt(event).toISOString(),
+    capacity: event.signup_capacity ?? null,
+    email_at: signupEmailAt(event).toISOString(),
+    email_days_before: Number(event.signup_email_days_before ?? 2),
+    confirm_hours: Number(event.signup_confirm_hours ?? 24),
+    going: rows.filter((row) => row.state === 'going').length,
+    waitlist: rows.filter((row) => row.state === 'waitlist').length,
+    questions: db.event_signup_questions
+      .filter((q) => q.event_id === event.id)
+      .sort((a, b) => a.position - b.position)
+      .map((q) => ({ id: q.id, kind: q.kind, prompt: q.prompt, required: q.is_required, options: q.options })),
+  };
+}
+
 export const ADMIN_RPC = {
   leadership_session(res, body, req, helpers, anonKey) {
     const auth = resolveAuth(req, anonKey);
@@ -2295,6 +2589,177 @@ export const ADMIN_RPC = {
   },
 
   /**
+   * save_event(): save_event_config() plus the sign-up form, in one call.
+   * The form is applied only once the configuration save succeeded.
+   */
+  save_event(res, body, req, helpers, anonKey) {
+    const form = body.p_signup_form ?? null;
+    if (form) {
+      const problem = signupFormProblem(form);
+      if (problem) {
+        helpers.pds(res, 'PDS03', problem);
+        return;
+      }
+    }
+    const wrapped = {
+      ...helpers,
+      json: (r, status, payload) => {
+        if (status === 200 && form) applySignupForm(body.p_event_id, form);
+        helpers.json(r, status, payload);
+      },
+    };
+    ADMIN_RPC.save_event_config(res, body, req, wrapped, anonKey);
+  },
+
+  /** remove_event_signup(p_signup_id uuid): officer, cancels one sign-up. */
+  remove_event_signup(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+    const row = db.event_signups.find((one) => one.id === body.p_signup_id);
+    if (!row) {
+      pds(res, 'PDS03', 'Unknown sign-up.');
+      return;
+    }
+    if (row.status !== 'cancelled') {
+      Object.assign(row, { status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: 'officer' });
+      audit(auth, 'remove_event_signup', 'event', row.event_id, { signup_id: row.id });
+    }
+    record({ fn: 'remove_event_signup', signupId: row.id });
+    json(res, 200, { id: row.id, status: row.status });
+  },
+
+  /** add_event_signup(): officer, confirmed at once, no email. */
+  add_event_signup(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isOfficer(auth)) {
+      pds(res, 'PDS07', 'This action requires an officer account.');
+      return;
+    }
+    const event = db.events.find((one) => one.id === body.p_event_id);
+    if (!event) {
+      pds(res, 'PDS03', 'Unknown event.');
+      return;
+    }
+    const member = body.p_member_id ? db.members.find((one) => one.id === body.p_member_id) : null;
+    if (body.p_member_id && !member) {
+      pds(res, 'PDS03', 'Unknown member.');
+      return;
+    }
+    const name = member ? member.display_name : String(body.p_name ?? '').trim();
+    const email = member ? member.email ?? null : String(body.p_email ?? '').trim() || null;
+    if (!name) {
+      pds(res, 'PDS03', 'Type a name.');
+      return;
+    }
+    if (db.event_signups.some((row) => row.event_id === event.id && row.status !== 'cancelled' &&
+        ((member && row.member_id === member.id) || (email && String(row.email).toLowerCase() === email.toLowerCase())))) {
+      pds(res, 'PDS18', 'Already signed up.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const row = {
+      id: uuid('s9000000-0000-4000-a000-'), event_id: event.id, member_id: member?.id ?? null, name, email,
+      answers: {}, status: 'confirmed', created_at: now, emailed_at: null, confirmed_at: now,
+      cancelled_at: null, cancelled_by: null, added_by_officer: true,
+    };
+    db.event_signups.push(row);
+    audit(auth, 'add_event_signup', 'event', event.id, { signup_id: row.id });
+    record({ fn: 'add_event_signup', eventId: event.id });
+    json(res, 200, { id: row.id });
+  },
+
+  /** set_member_emails(p_rows jsonb): Secretary Director, row by row. */
+  set_member_emails(res, body, req, helpers, anonKey) {
+    const { json, pds } = helpers;
+    const auth = resolveAuth(req, anonKey);
+    if (!isSecretaryDirector(auth)) {
+      pds(res, 'PDS07', 'This action requires a Secretary Director account.');
+      return;
+    }
+    const out = (Array.isArray(body.p_rows) ? body.p_rows : []).map((row) => {
+      const member = db.members.find((one) => one.id === row.member_id);
+      const email = String(row.email ?? '').trim() || null;
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { member_id: row.member_id, error: 'Not an email address' };
+      if (!member) return { member_id: row.member_id, error: 'Unknown member' };
+      if (email && db.members.some((one) => one.id !== member.id && String(one.email ?? '').toLowerCase() === email.toLowerCase())) {
+        return { member_id: row.member_id, error: 'Email used by another member' };
+      }
+      member.email = email;
+      return { member_id: member.id, email };
+    });
+    record({ fn: 'set_member_emails', rows: out.length });
+    json(res, 200, out);
+  },
+
+  /** portal_member_names(): the active roster, ids and names only. */
+  portal_member_names(res, body, req, helpers) {
+    const year = portalYear();
+    const names = db.member_enrollments
+      .filter((row) => row.academic_year_id === year?.id && (row.status ?? 'active') === 'active')
+      .map((row) => ({ row, member: db.members.find((one) => one.id === row.member_id) }))
+      .filter(({ member }) => member && !member.archived_at && !member.merged_into_id)
+      .map(({ row, member }) => ({ member_id: member.id, display_name: member.display_name, joined_on: row.joined_on ?? null }))
+      .sort((a, b) => a.display_name.localeCompare(b.display_name));
+    record({ fn: 'portal_member_names', count: names.length });
+    helpers.json(res, 200, names);
+  },
+
+  portal_signup_submit(res, body, req, helpers) {
+    const result = submitSignup(body);
+    if (result.error) {
+      helpers.pds(res, result.error.code, result.error.message);
+      return;
+    }
+    record({ fn: 'portal_signup_submit', eventId: body.p_event_id });
+    helpers.json(res, 200, result.ok);
+  },
+
+  portal_signup(res, body, req, helpers) {
+    const row = signupByToken(body.p_token);
+    if (!row) {
+      helpers.pds(res, 'PDS21', 'Link not valid.');
+      return;
+    }
+    record({ fn: 'portal_signup' });
+    helpers.json(res, 200, signupView(row.id));
+  },
+
+  portal_signup_confirm(res, body, req, helpers) {
+    const row = signupByToken(body.p_token);
+    if (!row) {
+      helpers.pds(res, 'PDS21', 'Link not valid.');
+      return;
+    }
+    if (row.status === 'held') {
+      if (new Date(row.confirm_by).getTime() <= Date.now()) {
+        helpers.pds(res, 'PDS21', 'Confirmation window passed.');
+        return;
+      }
+      Object.assign(row, { status: 'confirmed', confirmed_at: new Date().toISOString() });
+    }
+    record({ fn: 'portal_signup_confirm' });
+    helpers.json(res, 200, signupView(row.id));
+  },
+
+  portal_signup_cancel(res, body, req, helpers) {
+    const row = signupByToken(body.p_token);
+    if (!row) {
+      helpers.pds(res, 'PDS21', 'Link not valid.');
+      return;
+    }
+    if (row.status !== 'cancelled') {
+      Object.assign(row, { status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: 'self' });
+    }
+    record({ fn: 'portal_signup_cancel' });
+    helpers.json(res, 200, signupView(row.id));
+  },
+
+  /**
    * set_event_published(p_event_id uuid, p_published boolean) returns jsonb.
    * Publishing is a separate action from saving configuration, so it is not
    * routed through save_event_config().
@@ -2321,6 +2786,8 @@ export const ADMIN_RPC = {
       return;
     }
 
+    if (published && !event.is_published) event.published_at = new Date().toISOString();
+    if (!published) event.published_at = null;
     event.is_published = published;
     event.config_version = Number(event.config_version ?? 1) + 1;
 
@@ -4847,8 +5314,11 @@ export const ADMIN_RPC = {
           ends_at: event.ends_at ?? null,
           location: event.location ?? null,
           attire: event.attire ?? null,
-          signup: event.signup ?? null,
+          signup: event.signups_enabled ? null : event.signup ?? null,
           description: event.description ?? null,
+          members_only: Boolean(event.members_only),
+          released_at: releasedAt(event),
+          signups: event.signups_enabled ? signupBlock(event) : null,
           categories,
         };
       });

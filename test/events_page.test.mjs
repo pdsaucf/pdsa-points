@@ -409,7 +409,7 @@ test('portal_events returns the eight facts and categories for a visible upcomin
 
   assert.deepEqual(Object.keys(event).sort(), [
     'attire', 'categories', 'description', 'ends_at', 'id', 'location',
-    'occurred_on', 'signup', 'starts_at', 'title',
+    'members_only', 'occurred_on', 'released_at', 'signup', 'signups', 'starts_at', 'title',
   ]);
   assert.equal(event.location, 'Chemistry Building Room 101');
   assert.equal(event.attire, 'Business casual');
@@ -451,7 +451,8 @@ test('portal_events carries no member, no attendance, no note and no token', asy
   `);
 
   const answer = await portalEvents();
-  const text = JSON.stringify(answer);
+  // members_only is a fact about the event (migration 30), not a member.
+  const text = JSON.stringify(answer).replaceAll('"members_only"', '');
   assert.ok(!text.includes('member'), 'portal_events carries a member field');
   assert.ok(!text.includes('tok-narrow-surface-secret'), 'portal_events leaked the checkin_token');
   assert.ok(!text.includes('private officer setup note'), 'portal_events leaked notes');
