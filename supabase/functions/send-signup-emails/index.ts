@@ -15,8 +15,8 @@
 //   SITE_URL            optional, defaults to https://points.pdsaucf.com
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the platform.
 //
-// Only a caller holding the service role key may run it: the timer passes it
-// in Authorization, and nobody else has it.
+// Only a caller holding a service-role key may run it: the timer passes one
+// in Authorization, and nobody else has it. See isServiceRole().
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -72,6 +72,29 @@ async function send(due: Due): Promise<'sent' | 'rejected' | 'unknown'> {
   return 'rejected';
 }
 
+/**
+ * Whether the caller holds a service-role key. The platform verifies every
+ * key's signature before a request reaches this function (verify_jwt, pinned
+ * on for this function in supabase/config.toml), so reading the role claim
+ * of a verified key is enough. Comparing the header to
+ * SUPABASE_SERVICE_ROLE_KEY byte for byte is not: a project can hold more
+ * than one valid service-role key, and the timer sends the one an officer
+ * copied from the dashboard.
+ */
+function isServiceRole(req: Request): boolean {
+  const header = req.headers.get('Authorization') ?? '';
+  if (SERVICE_KEY && header === `Bearer ${SERVICE_KEY}`) return true;
+  const payload = header.replace(/^Bearer\s+/i, '').split('.')[1];
+  if (!payload) return false;
+  try {
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const claims = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')));
+    return claims?.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
+
 // How the last run went, for Settings, Connections. Never the key.
 const report = (status: Record<string, unknown>) =>
   rpc('report_integration_status', {
@@ -80,7 +103,7 @@ const report = (status: Record<string, unknown>) =>
   }).catch(() => null);
 
 Deno.serve(async (req) => {
-  if (req.headers.get('Authorization') !== `Bearer ${SERVICE_KEY}` || !SERVICE_KEY) {
+  if (!isServiceRole(req)) {
     return new Response('Forbidden', { status: 403 });
   }
   if (!SUPABASE_URL || !RESEND_API_KEY || !FROM) {

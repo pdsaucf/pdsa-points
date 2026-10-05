@@ -382,6 +382,15 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
+# The two timer functions read a key's role claim, which is only safe because
+# the platform has verified its signature first. Keep this on for both: a
+# deploy with --no-verify-jwt would let anybody in.
+[functions.send-signup-emails]
+verify_jwt = true
+
+[functions.sync-calendar]
+verify_jwt = true
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
